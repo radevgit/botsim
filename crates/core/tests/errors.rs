@@ -142,6 +142,7 @@ fn errors_appear_in_a_schema_valid_state_message() {
         &header,
         &d.progress(),
         std::slice::from_ref(&robot_error),
+        &[],
     );
 
     assert_eq!(s.errors.len(), 1);

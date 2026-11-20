@@ -1,0 +1,31 @@
+{
+    "metaInformation": {
+        "lifId": "three_nodes",
+        "creator": "radevgit",
+        "exportTimestamp": "2026-11-20T10:00:00.000Z",
+        "lifVersion": "2.0.0"
+    },
+    "origins": [{
+        "originId": "O1",
+        "layouts": [{
+            "layoutId": "L1",
+            "layoutVersion": "1",
+            "nodes": [
+                {"nodeId": "A", "mapId": "M", "nodePosition": {"x": 0.0, "y": 0.0},
+                 "mobileRobotTypeNodeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}]}]},
+                {"nodeId": "B", "mapId": "M", "nodePosition": {"x": 10.0, "y": 0.0},
+                 "mobileRobotTypeNodeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}]}]},
+                {"nodeId": "C", "mapId": "M", "nodePosition": {"x": 10.0, "y": 5.0},
+                 "mobileRobotTypeNodeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}]}]}
+            ],
+            "edges": [
+                {"edgeId": "A-B", "startNodeId": "A", "endNodeId": "B",
+                 "mobileRobotTypeEdgeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0]}]},
+                {"edgeId": "B-C", "startNodeId": "B", "endNodeId": "C",
+                 "mobileRobotTypeEdgeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0]}]},
+                {"edgeId": "C-B", "startNodeId": "C", "endNodeId": "B",
+                 "mobileRobotTypeEdgeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0]}]}
+            ]
+        }]
+    }]
+}

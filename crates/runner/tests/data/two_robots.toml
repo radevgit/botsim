@@ -1,0 +1,16 @@
+name = "two-robots"
+seed = 1
+duration = 60.0
+time_step = 0.05
+start_time = 2026-11-20T10:00:00Z
+lif = "three_nodes.lif.json"
+
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "R"
+factsheet = "diff_robot.factsheet.json"
+start_nodes = ["A", "B"]
+action_time = 2.0
+
+[robot.action_times]
+pick = 3.0

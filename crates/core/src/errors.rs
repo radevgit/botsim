@@ -160,8 +160,9 @@ fn reference(key: &str, value: impl Into<String>) -> (String, String) {
 }
 
 impl RobotError {
-    /// An error with the references the standard names for rejected orders.
-    fn for_order(
+    /// An error about a rejected order, with the references the standard names:
+    /// `orderId`, and also `orderUpdateId` for the types that carry both.
+    pub fn for_order(
         error_type: ErrorType,
         order_id: &str,
         order_update_id: u32,

@@ -59,7 +59,7 @@ fn driver(o: &Order) -> Driver {
 }
 
 fn state(d: &Driver) -> State {
-    build_state(&graph(), &header(), &d.progress(), &[])
+    build_state(&graph(), &header(), &d.progress(), &[], &[])
 }
 
 /// The message must be valid against the official VDA 5050 state schema.

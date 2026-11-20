@@ -231,6 +231,8 @@ pub struct Driver {
     base_end: NodeIdx,
     /// The order goes on beyond the base: wait at its end for an update.
     has_horizon: bool,
+    /// The order was cancelled (`cancelOrder`); no updates are accepted.
+    canceled: bool,
     /// Index of the segment being driven, or turned towards.
     current: usize,
     phase: Phase,
@@ -323,6 +325,7 @@ impl Driver {
             plan: None,
             base_end,
             has_horizon,
+            canceled: false,
             current: 0,
             phase: Phase::Finished,
             pose: Pose {
@@ -340,6 +343,49 @@ impl Driver {
     /// Id, type and status of every action queued so far (for the state message).
     pub fn action_states(&self) -> impl Iterator<Item = (&str, &str, ActionStatus)> {
         self.queue.states()
+    }
+
+    /// `cancelOrder`: stop as soon as possible. While driving an edge the robot
+    /// brakes to the node it is heading for (it cannot stop between nodes); at a
+    /// node (turning, acting, waiting) it stops at once. Actions that are
+    /// scheduled or running become `FAILED`; the rest of the order is dropped
+    /// (`nodeStates` and `edgeStates` end at the node where the robot stops).
+    /// `orderId` and `orderUpdateId` are kept. No update is accepted afterwards.
+    pub fn cancel(&mut self) {
+        self.canceled = true;
+        self.has_horizon = false;
+        self.queue.cancel_all();
+
+        // actions of nodes not yet reached were never triggered: FAILED
+        let pending: Vec<ActionSpec> = self
+            .arrive_actions
+            .iter_mut()
+            .skip(self.current)
+            .flat_map(std::mem::take)
+            .collect();
+        let times = self.times.clone();
+        self.queue
+            .push_failed(pending.iter().map(|a| times.plan(a)));
+
+        // keep the segment being driven (to its end node), or none if standing at a node
+        let keep = if self.phase == Phase::Driving {
+            self.current + 1
+        } else {
+            self.current
+        };
+        self.segments.truncate(keep);
+        self.arrive_actions.truncate(keep);
+        if let Some(plan) = &mut self.plan {
+            plan.nodes.truncate(keep + 1);
+            plan.edges.truncate(keep);
+        }
+        if self.phase != Phase::Driving {
+            self.at_node();
+        }
+    }
+
+    pub fn is_canceled(&self) -> bool {
+        self.canceled
     }
 
     /// An order update: `route` continues the order. Its first node must be the
@@ -437,6 +483,14 @@ impl Driver {
             omega,
             actions,
         }
+    }
+
+    /// `orderId` and `orderUpdateId` of the order being executed or last finished;
+    /// `None` if the driver was built without an order.
+    pub fn order(&self) -> Option<(&str, u32)> {
+        self.plan
+            .as_ref()
+            .map(|p| (p.order_id.as_str(), p.order_update_id))
     }
 
     pub fn pose(&self) -> Pose {

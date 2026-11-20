@@ -9,5 +9,7 @@ pub mod graph;
 pub mod motion;
 pub mod order_route;
 pub mod orientation;
+pub mod robot;
 pub mod spec;
 pub mod state_report;
+pub mod world;

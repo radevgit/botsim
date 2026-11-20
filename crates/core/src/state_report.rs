@@ -16,12 +16,12 @@
 //!
 //! Placeholders (not modelled yet): the battery is a permanently powered robot
 //! (`stateOfCharge` 100, as the standard prescribes for those), operating mode
-//! AUTOMATIC, no emergency stop, no loads, no instant actions.
+//! AUTOMATIC, no emergency stop, no loads.
 //! Not reported: map list, zone sets, paths, `newBaseRequest`, node positions.
 
 use vda5050::state::{
-    ActionState, EdgeState, EmergencyStop, NodeState, OperatingMode, PowerSupply, SafetyState,
-    State,
+    ActionState, ActionStatus, EdgeState, EmergencyStop, NodeState, OperatingMode, PowerSupply,
+    SafetyState, State,
 };
 use vda5050::state::{MobileRobotPosition, Velocity};
 
@@ -41,8 +41,22 @@ pub struct Header {
     pub serial_number: String,
 }
 
+/// An instant action as reported in `instantActionStates`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstantActionState {
+    pub action_id: String,
+    pub action_type: String,
+    pub status: ActionStatus,
+}
+
 /// Build the state message for a robot with the given progress.
-pub fn build_state(graph: &Graph, header: &Header, p: &Progress, errors: &[RobotError]) -> State {
+pub fn build_state(
+    graph: &Graph,
+    header: &Header,
+    p: &Progress,
+    errors: &[RobotError],
+    instant_actions: &[InstantActionState],
+) -> State {
     let (last_node_id, last_node_sequence_id) = match &p.last_node {
         Some(n) => (n.node_id.clone(), n.sequence_id),
         None => (String::new(), 0),
@@ -116,7 +130,16 @@ pub fn build_state(graph: &Graph, header: &Header, p: &Progress, errors: &[Robot
                 action_result: None,
             })
             .collect(),
-        instant_action_states: Vec::new(),
+        instant_action_states: instant_actions
+            .iter()
+            .map(|a| ActionState {
+                action_id: a.action_id.clone(),
+                action_type: Some(a.action_type.clone()),
+                action_descriptor: None,
+                action_status: a.status,
+                action_result: None,
+            })
+            .collect(),
         zone_action_states: None,
         power_supply: PowerSupply {
             state_of_charge: 100.0,

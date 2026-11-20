@@ -173,19 +173,38 @@ impl ActionQueue {
         }
     }
 
+    /// Cancel everything waiting or running (all actions are treated as
+    /// cancellable): they become `FAILED`, as `cancelOrder` requires.
+    pub fn cancel_all(&mut self) {
+        for it in &mut self.items {
+            if matches!(it.status, ActionStatus::Waiting | ActionStatus::Running) {
+                it.status = ActionStatus::Failed;
+            }
+        }
+    }
+
+    /// List actions that were cancelled before they were ever triggered (`FAILED`).
+    pub fn push_failed(&mut self, actions: impl IntoIterator<Item = PlannedAction>) {
+        for a in actions {
+            self.items.push(Item {
+                action: a,
+                status: ActionStatus::Failed,
+                remaining: 0.0,
+            });
+        }
+    }
+
     /// Driving is allowed unless a `SOFT` or `HARD` action is unfinished.
     pub fn driving_allowed(&self) -> bool {
         !self.items.iter().any(|i| {
-            i.status != ActionStatus::Finished
+            !is_done(i.status)
                 && matches!(i.action.blocking, BlockingType::Soft | BlockingType::Hard)
         })
     }
 
-    /// No unfinished action left.
+    /// No unfinished action left (finished and failed ones are done).
     pub fn is_idle(&self) -> bool {
-        self.items
-            .iter()
-            .all(|i| i.status == ActionStatus::Finished)
+        self.items.iter().all(|i| is_done(i.status))
     }
 
     /// Id, type and status of every action ever queued, in queue order (for the
@@ -199,6 +218,10 @@ impl ActionQueue {
             )
         })
     }
+}
+
+fn is_done(s: ActionStatus) -> bool {
+    matches!(s, ActionStatus::Finished | ActionStatus::Failed)
 }
 
 /// `SINGLE` and `HARD` allow no other action next to them.
