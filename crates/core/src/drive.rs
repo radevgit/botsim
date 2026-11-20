@@ -6,12 +6,13 @@
 //! base of an order with a horizon it waits; an order update extends the route.
 //! Speed limits per edge and passing nodes without stopping come later.
 
+use std::f64::consts::FRAC_PI_2;
 use std::fmt;
 
 use crate::actions::{ActionQueue, ActionSpec, ActionTimes};
 use crate::graph::{EdgeIdx, Graph, MapIdx, NodeIdx};
 use crate::motion::{Along, EdgeGoal, advance, angle_diff, normalize_angle, rotate};
-use crate::order_route::OrderRoute;
+use crate::order_route::{OrderRoute, PlanEdge, PlanNode};
 use crate::orientation::{OrientationError, edge_heading};
 use crate::spec::{Kinematics, Limits, RobotSpec};
 use vda5050::order::OrientationType;
@@ -125,6 +126,38 @@ impl From<EdgeIdx> for RouteEdge {
     }
 }
 
+/// The whole order the robot is executing (base and horizon), for the state message.
+/// Entry i of `nodes` is the node where segment i starts; `edges[i]` follows it.
+#[derive(Debug, Clone)]
+struct Plan {
+    order_id: String,
+    order_update_id: u32,
+    nodes: Vec<PlanNode>,
+    edges: Vec<PlanEdge>,
+}
+
+/// Snapshot of what the VDA 5050 state message reports, taken from the driver.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Progress {
+    /// Empty if the driver was built from a bare route (no order).
+    pub order_id: String,
+    pub order_update_id: u32,
+    /// The last node reached (or the node the robot stands on); `None` without an order.
+    pub last_node: Option<PlanNode>,
+    /// Nodes still to be traversed, base and horizon (the last node is not in here).
+    pub remaining_nodes: Vec<PlanNode>,
+    /// Edges not yet left, base and horizon (including the one being driven).
+    pub remaining_edges: Vec<PlanEdge>,
+    pub driving: bool,
+    pub pose: Pose,
+    /// Speed in the robot frame (negative when driving backwards), m/s.
+    pub vx: f64,
+    /// Rotation speed, rad/s (counter-clockwise positive).
+    pub omega: f64,
+    /// All actions: id, type, status (queued ones, then those still to be triggered).
+    pub actions: Vec<(String, String, ActionStatus)>,
+}
+
 /// A straight edge copied out of the graph, so the driver needs no graph reference.
 #[derive(Debug, Clone, Copy)]
 struct Segment {
@@ -136,6 +169,8 @@ struct Segment {
     /// Heading the robot must have on this edge (edge direction, or + π when
     /// driving backwards). Travel is always along the edge.
     heading: f64,
+    /// The robot drives this edge backwards (its heading points against the travel direction).
+    reversed: bool,
 }
 
 /// Copy the edges of `route`, which must run on from `start`, out of the graph.
@@ -174,6 +209,7 @@ fn build_segments(
             by: b.y,
             length: e.length,
             heading,
+            reversed: angle_diff(direction, heading).abs() > FRAC_PI_2,
         });
         at = e.end;
     }
@@ -189,6 +225,8 @@ pub struct Driver {
     arrive_actions: Vec<Vec<ActionSpec>>,
     times: ActionTimes,
     queue: ActionQueue,
+    /// The whole order, for the state message; `None` when built from a bare route.
+    plan: Option<Plan>,
     /// Node where the released base ends (the decision point).
     base_end: NodeIdx,
     /// The order goes on beyond the base: wait at its end for an update.
@@ -235,7 +273,7 @@ impl Driver {
         route: &OrderRoute,
         times: ActionTimes,
     ) -> Result<Driver, DriveError> {
-        Driver::build(
+        let mut d = Driver::build(
             graph,
             spec,
             route.start,
@@ -245,7 +283,14 @@ impl Driver {
             &route.node_actions[0],
             route.node_actions[1..].to_vec(),
             times,
-        )
+        )?;
+        d.plan = Some(Plan {
+            order_id: route.order_id.clone(),
+            order_update_id: route.order_update_id,
+            nodes: route.plan_nodes.clone(),
+            edges: route.plan_edges.clone(),
+        });
+        Ok(d)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -275,6 +320,7 @@ impl Driver {
             arrive_actions,
             times,
             queue,
+            plan: None,
             base_end,
             has_horizon,
             current: 0,
@@ -309,6 +355,16 @@ impl Driver {
         }
         let (segments, base_end) =
             build_segments(graph, self.kinematics, route.start, &route.edges)?;
+        if let Some(plan) = &mut self.plan {
+            // plan entry i is the node/edge at segment i: keep what came before the
+            // decision point (index = segments so far), the update replaces the rest
+            let at = self.segments.len();
+            plan.order_update_id = route.order_update_id;
+            plan.nodes.truncate(at);
+            plan.nodes.extend(route.plan_nodes.iter().cloned());
+            plan.edges.truncate(at);
+            plan.edges.extend(route.plan_edges.iter().cloned());
+        }
         self.segments.extend(segments);
         // entry 0 is the decision point, whose actions were queued when it was reached
         self.arrive_actions
@@ -319,6 +375,68 @@ impl Driver {
             self.at_node(); // `current` is the first new segment, or there is none
         }
         Ok(())
+    }
+
+    /// What the state message reports about the order and the robot's movement.
+    pub fn progress(&self) -> Progress {
+        let (order_id, order_update_id, last_node, nodes, edges) = match &self.plan {
+            Some(p) => (
+                p.order_id.clone(),
+                p.order_update_id,
+                p.nodes.get(self.current).cloned(),
+                p.nodes.get(self.current + 1..).unwrap_or(&[]).to_vec(),
+                p.edges.get(self.current..).unwrap_or(&[]).to_vec(),
+            ),
+            None => (String::new(), 0, None, Vec::new(), Vec::new()),
+        };
+
+        // Actions: those queued so far, then those still to be triggered (WAITING).
+        let mut actions: Vec<(String, String, ActionStatus)> = self
+            .queue
+            .states()
+            .map(|(id, t, s)| (id.to_string(), t.to_string(), s))
+            .collect();
+        for a in self.arrive_actions.iter().skip(self.current).flatten() {
+            actions.push((
+                a.action_id.clone(),
+                a.action_type.clone(),
+                ActionStatus::Waiting,
+            ));
+        }
+
+        let seg = self.segments.get(self.current);
+        let (vx, omega) = match (self.phase, seg) {
+            (Phase::Driving, Some(s)) => (
+                if s.reversed {
+                    -self.along.v
+                } else {
+                    self.along.v
+                },
+                0.0,
+            ),
+            (Phase::Rotating, Some(s)) => (
+                0.0,
+                self.limits
+                    .max_angular_speed
+                    .copysign(angle_diff(self.pose.heading, s.heading)),
+            ),
+            _ => (0.0, 0.0),
+        };
+
+        Progress {
+            order_id,
+            order_update_id,
+            last_node,
+            remaining_nodes: nodes,
+            remaining_edges: edges,
+            // standing at a node (Acting, Waiting, Finished) is not driving; turning on
+            // the spot is counted as driving (the drive wheels move)
+            driving: matches!(self.phase, Phase::Driving | Phase::Rotating),
+            pose: self.pose,
+            vx,
+            omega,
+            actions,
+        }
     }
 
     pub fn pose(&self) -> Pose {

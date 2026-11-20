@@ -37,6 +37,31 @@ pub struct OrderRoute {
     /// node of an order *update* is the decision point, whose actions were
     /// already queued earlier and are not run again: its entry is empty.
     pub node_actions: Vec<Vec<ActionSpec>>,
+    /// The `orderId` and `orderUpdateId` of the message (for the state message).
+    pub order_id: String,
+    pub order_update_id: u32,
+    /// All nodes and edges of the message, base and horizon, for the state
+    /// message (`nodeStates`, `edgeStates`). Entry i of `plan_nodes` is the node
+    /// where released edge i starts (so the base is the first `edges.len() + 1`
+    /// nodes); `plan_edges[i]` is the edge after `plan_nodes[i]`.
+    pub plan_nodes: Vec<PlanNode>,
+    pub plan_edges: Vec<PlanEdge>,
+}
+
+/// A node of the order as the state message reports it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanNode {
+    pub node_id: String,
+    pub sequence_id: u32,
+    pub released: bool,
+}
+
+/// An edge of the order as the state message reports it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanEdge {
+    pub edge_id: String,
+    pub sequence_id: u32,
+    pub released: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -226,5 +251,23 @@ pub fn route_from_order(graph: &Graph, order: &Order) -> Result<OrderRoute, Orde
         has_horizon: route.len() < edges.len(),
         edges: route,
         node_actions,
+        order_id: order.order_id.clone(),
+        order_update_id: order.order_update_id,
+        plan_nodes: nodes
+            .iter()
+            .map(|n| PlanNode {
+                node_id: n.node_id.clone(),
+                sequence_id: n.sequence_id,
+                released: n.released,
+            })
+            .collect(),
+        plan_edges: edges
+            .iter()
+            .map(|e| PlanEdge {
+                edge_id: e.edge_id.clone(),
+                sequence_id: e.sequence_id,
+                released: e.released,
+            })
+            .collect(),
     })
 }

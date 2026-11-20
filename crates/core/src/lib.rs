@@ -4,8 +4,10 @@
 
 pub mod actions;
 pub mod drive;
+pub mod errors;
 pub mod graph;
 pub mod motion;
 pub mod order_route;
 pub mod orientation;
 pub mod spec;
+pub mod state_report;
