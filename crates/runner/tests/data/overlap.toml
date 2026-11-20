@@ -1,0 +1,14 @@
+name = "overlap"
+seed = 1
+duration = 1.0
+time_step = 0.05
+start_time = 2026-11-20T10:00:00Z
+lif = "three_nodes.lif.json"
+
+# both robots start on node A, so they overlap from the first step
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "R"
+factsheet = "diff_robot.factsheet.json"
+start_nodes = ["A", "A"]
+action_time = 2.0

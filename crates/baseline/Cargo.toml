@@ -1,0 +1,15 @@
+[package]
+name = "botsim-baseline"
+description = "Bundled baseline fleet controller for the botsim simulator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+botsim-core = { path = "../core" }
+
+[dev-dependencies]
+serde_json = "1.0.154"
+vdma-lif = "0.1.0"

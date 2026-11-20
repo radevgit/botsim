@@ -1,0 +1,55 @@
+//! Shortest route between two nodes (Dijkstra on edge length).
+//!
+//! Edges are directed. Ties are broken by node index, so the same layout always
+//! gives the same route. Not yet: per-robot-type edge rules (a type may not be
+//! allowed on an edge), blocked edges, and lift edges between maps (they have
+//! length 0 for now).
+
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
+use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
+
+/// The edges to drive from `from` to `to`; empty if they are the same node;
+/// `None` if `to` cannot be reached.
+pub fn shortest_path(graph: &Graph, from: NodeIdx, to: NodeIdx) -> Option<Vec<EdgeIdx>> {
+    let n = graph.nodes.len();
+    let mut dist = vec![f64::INFINITY; n];
+    let mut via: Vec<Option<EdgeIdx>> = vec![None; n];
+    // The heap key is the distance as bits: for non-negative finite floats the
+    // bit pattern sorts like the number, and it gives a total order.
+    let mut heap = BinaryHeap::new();
+    dist[from] = 0.0;
+    heap.push(Reverse((0.0_f64.to_bits(), from)));
+
+    while let Some(Reverse((bits, node))) = heap.pop() {
+        if f64::from_bits(bits) > dist[node] {
+            continue; // an older, longer entry
+        }
+        if node == to {
+            break;
+        }
+        for &e in graph.out_edges(node) {
+            let edge = &graph.edges[e];
+            let d = dist[node] + edge.length;
+            if d < dist[edge.end] {
+                dist[edge.end] = d;
+                via[edge.end] = Some(e);
+                heap.push(Reverse((d.to_bits(), edge.end)));
+            }
+        }
+    }
+
+    if dist[to].is_infinite() {
+        return None;
+    }
+    let mut path = Vec::new();
+    let mut at = to;
+    while at != from {
+        let e = via[at].expect("a reached node has an incoming edge");
+        path.push(e);
+        at = graph.edges[e].start;
+    }
+    path.reverse();
+    Some(path)
+}

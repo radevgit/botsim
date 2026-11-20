@@ -3,3 +3,4 @@
 //! about files.
 
 pub mod scenario;
+pub mod summary;

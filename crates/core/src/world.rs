@@ -15,6 +15,7 @@
 //! Not yet: collisions, the spatial index, a controller port with queues, state
 //! publishing rules (`minimumStateInterval`), peripherals.
 
+use std::collections::HashSet;
 use std::fmt;
 
 use vda5050::instant_actions::InstantActions;
@@ -22,6 +23,7 @@ use vda5050::order::Order;
 use vda5050::state::State;
 
 use crate::actions::ActionTimes;
+use crate::collision::{Body, overlap, place};
 use crate::drive::{DriveError, Pose};
 use crate::graph::{Graph, NodeIdx};
 use crate::robot::{Reception, Robot};
@@ -94,6 +96,19 @@ pub struct World {
     /// Date of tick 0, milliseconds since 1970-01-01T00:00:00Z.
     start_unix_ms: i64,
     robots: Vec<Entry>,
+    collisions: Vec<Collision>,
+    /// Robot index pairs that overlapped after the last step.
+    touching: HashSet<(usize, usize)>,
+}
+
+/// Two robots started to overlap.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Collision {
+    /// The tick after whose movement the overlap was found.
+    pub tick: u64,
+    /// The pair, in the order the robots were added.
+    pub a: RobotId,
+    pub b: RobotId,
 }
 
 impl World {
@@ -109,6 +124,8 @@ impl World {
             tick: 0,
             start_unix_ms,
             robots: Vec::new(),
+            collisions: Vec::new(),
+            touching: HashSet::new(),
         })
     }
 
@@ -166,12 +183,50 @@ impl World {
         Ok(self.robots[self.find(id)?].robot.pose())
     }
 
-    /// Advance the whole world by one time step.
+    /// Advance the whole world by one time step: move the robots, then check
+    /// for collisions.
     pub fn step(&mut self) {
         for e in &mut self.robots {
             e.robot.step(self.dt);
         }
         self.tick += 1;
+        self.check_collisions();
+    }
+
+    /// All collisions so far, oldest first. One entry per contact: it is added
+    /// when two robots start to overlap, not again on every step they stay
+    /// overlapped (they must separate first).
+    pub fn collisions(&self) -> &[Collision] {
+        &self.collisions
+    }
+
+    /// Every pair is tested (fine for tens of robots; a spatial index comes
+    /// later). Robots on different maps never collide.
+    fn check_collisions(&mut self) {
+        let bodies: Vec<(usize, Body)> = self
+            .robots
+            .iter()
+            .map(|e| {
+                let p = e.robot.pose();
+                (p.map, place(e.robot.shape(), p.x, p.y, p.heading))
+            })
+            .collect();
+        let mut now = HashSet::new();
+        for i in 0..bodies.len() {
+            for j in i + 1..bodies.len() {
+                if bodies[i].0 == bodies[j].0 && overlap(&bodies[i].1, &bodies[j].1) {
+                    now.insert((i, j));
+                    if !self.touching.contains(&(i, j)) {
+                        self.collisions.push(Collision {
+                            tick: self.tick,
+                            a: self.robots[i].id.clone(),
+                            b: self.robots[j].id.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        self.touching = now;
     }
 
     /// Deliver an `order`; the robot is the one named in the message.

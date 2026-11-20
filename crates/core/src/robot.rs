@@ -81,6 +81,11 @@ impl Robot {
         self.driver.pose()
     }
 
+    /// The body outline, relative to the kinematic center.
+    pub fn shape(&self) -> &crate::spec::Shape {
+        &self.spec.shape
+    }
+
     pub fn errors(&self) -> &[RobotError] {
         &self.errors
     }
