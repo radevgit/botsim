@@ -1,0 +1,207 @@
+//! Actions as timed waits, with VDA 5050 blocking types (§6.2.2).
+//!
+//! When the robot reaches a point with actions (here: a node), they are queued in
+//! the order of the `actions` array. The queue is processed like this:
+//! - `NONE` / `SOFT` actions are collected and run in parallel;
+//! - a `SINGLE` / `HARD` action starts only when nothing else is running, and runs
+//!   alone; later actions wait until it is finished;
+//! - driving is not allowed while a `SOFT` or `HARD` action is unfinished.
+//!
+//! An action takes a fixed time (from [`ActionTimes`]); it has no effect on the
+//! world. Time is quantised to the step: an action that finishes in a step lets
+//! the next one start at once (no leftover time carried over).
+//!
+//! Not yet: failing actions, paused actions, instant actions, edge actions.
+
+use std::collections::HashMap;
+
+use vda5050::common::BlockingType;
+use vda5050::state::ActionStatus;
+
+/// Remaining time at or below this counts as done. Subtracting a step ten times
+/// (10 × 0.1) from 1.0 leaves about 1e-16, not 0; without a tolerance the action
+/// would finish one step late.
+const TIME_EPSILON: f64 = 1e-9;
+
+/// How long actions take, in seconds: a default and per-action-type overrides.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActionTimes {
+    pub default: f64,
+    pub by_type: HashMap<String, f64>,
+}
+
+impl ActionTimes {
+    pub fn new(default: f64) -> ActionTimes {
+        ActionTimes {
+            default,
+            by_type: HashMap::new(),
+        }
+    }
+
+    pub fn with(mut self, action_type: &str, seconds: f64) -> ActionTimes {
+        self.by_type.insert(action_type.to_string(), seconds);
+        self
+    }
+
+    pub fn duration(&self, action_type: &str) -> f64 {
+        self.by_type
+            .get(action_type)
+            .copied()
+            .unwrap_or(self.default)
+    }
+}
+
+/// An action as the order describes it, before a duration is chosen.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActionSpec {
+    pub action_id: String,
+    pub action_type: String,
+    pub blocking: BlockingType,
+}
+
+impl ActionTimes {
+    /// Decide the duration of an action.
+    pub fn plan(&self, a: &ActionSpec) -> PlannedAction {
+        PlannedAction {
+            action_id: a.action_id.clone(),
+            action_type: a.action_type.clone(),
+            blocking: a.blocking,
+            duration: self.duration(&a.action_type),
+        }
+    }
+}
+
+/// An action to be executed, with its duration already decided.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedAction {
+    pub action_id: String,
+    pub action_type: String,
+    pub blocking: BlockingType,
+    /// Seconds, ≥ 0.
+    pub duration: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Item {
+    action: PlannedAction,
+    status: ActionStatus,
+    /// Seconds left while running.
+    remaining: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ActionQueue {
+    items: Vec<Item>,
+}
+
+impl ActionQueue {
+    pub fn new() -> ActionQueue {
+        ActionQueue::default()
+    }
+
+    /// Queue actions (in the given order) and start whatever may start now.
+    pub fn push(&mut self, actions: impl IntoIterator<Item = PlannedAction>) {
+        for a in actions {
+            let remaining = a.duration.max(0.0);
+            self.items.push(Item {
+                action: a,
+                status: ActionStatus::Waiting,
+                remaining,
+            });
+        }
+        self.settle();
+    }
+
+    /// Let `dt` seconds pass.
+    pub fn step(&mut self, dt: f64) {
+        for it in &mut self.items {
+            if it.status == ActionStatus::Running {
+                it.remaining -= dt;
+            }
+        }
+        self.settle();
+    }
+
+    /// Finish what is done and start what may start, until nothing changes.
+    fn settle(&mut self) {
+        loop {
+            let mut changed = false;
+
+            for it in &mut self.items {
+                if it.status == ActionStatus::Running && it.remaining <= TIME_EPSILON {
+                    it.status = ActionStatus::Finished;
+                    changed = true;
+                }
+            }
+
+            // Start waiting actions in queue order; the first one that may not
+            // start holds back everything behind it.
+            let mut running = self
+                .items
+                .iter()
+                .filter(|i| i.status == ActionStatus::Running)
+                .count();
+            let mut exclusive_running = self
+                .items
+                .iter()
+                .any(|i| i.status == ActionStatus::Running && is_exclusive(i.action.blocking));
+            for it in &mut self.items {
+                if it.status != ActionStatus::Waiting {
+                    continue;
+                }
+                let exclusive = is_exclusive(it.action.blocking);
+                let may_start = if exclusive {
+                    running == 0
+                } else {
+                    !exclusive_running
+                };
+                if !may_start {
+                    break;
+                }
+                it.status = ActionStatus::Running;
+                running += 1;
+                exclusive_running |= exclusive;
+                changed = true;
+                if exclusive {
+                    break; // nothing may start next to it
+                }
+            }
+
+            if !changed {
+                return;
+            }
+        }
+    }
+
+    /// Driving is allowed unless a `SOFT` or `HARD` action is unfinished.
+    pub fn driving_allowed(&self) -> bool {
+        !self.items.iter().any(|i| {
+            i.status != ActionStatus::Finished
+                && matches!(i.action.blocking, BlockingType::Soft | BlockingType::Hard)
+        })
+    }
+
+    /// No unfinished action left.
+    pub fn is_idle(&self) -> bool {
+        self.items
+            .iter()
+            .all(|i| i.status == ActionStatus::Finished)
+    }
+
+    /// Id, type and status of every action ever queued, in queue order (for the
+    /// state message; finished ones stay listed).
+    pub fn states(&self) -> impl Iterator<Item = (&str, &str, ActionStatus)> {
+        self.items.iter().map(|i| {
+            (
+                i.action.action_id.as_str(),
+                i.action.action_type.as_str(),
+                i.status,
+            )
+        })
+    }
+}
+
+/// `SINGLE` and `HARD` allow no other action next to them.
+fn is_exclusive(b: BlockingType) -> bool {
+    matches!(b, BlockingType::Single | BlockingType::Hard)
+}
