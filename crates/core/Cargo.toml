@@ -1,0 +1,10 @@
+[package]
+name = "botsim-core"
+description = "Headless simulation core for mixed robot fleets executing VDA 5050 orders on a LIF layout"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
