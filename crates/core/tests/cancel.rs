@@ -119,7 +119,7 @@ fn cancel_while_driving_stops_at_the_next_node_and_drops_the_rest() {
     steps(&mut r, 60); // 3 s: on A-B, moving
     assert!(state(&r).driving);
 
-    r.receive_instant_actions(&cancel("c1"));
+    r.receive_instant_actions(&graph(), &cancel("c1"));
     let s = state(&r);
     assert_eq!(instant_status(&s, "c1"), Running, "still moving");
     assert_eq!(s.last_node_id, "A");
@@ -173,7 +173,7 @@ fn cancel_at_a_node_fails_scheduled_and_running_actions_and_stops_at_once() {
     assert_eq!(s.last_node_id, "B");
     assert_eq!(action_status(&s, "pick"), Running);
 
-    r.receive_instant_actions(&cancel("c1"));
+    r.receive_instant_actions(&graph(), &cancel("c1"));
     let s = state(&r);
     // all three FAILED, the robot is idle at once, cancelOrder is FINISHED
     assert_eq!(action_status(&s, "pick"), Failed);
@@ -192,7 +192,7 @@ fn cancel_at_a_node_fails_scheduled_and_running_actions_and_stops_at_once() {
 #[test]
 fn cancel_without_an_active_order_fails_with_no_order_to_cancel() {
     let mut r = robot(); // idle, never had an order
-    r.receive_instant_actions(&cancel("c1"));
+    r.receive_instant_actions(&graph(), &cancel("c1"));
     let s = state(&r);
     assert_eq!(instant_status(&s, "c1"), Failed);
     assert_eq!(s.errors.len(), 1);
@@ -213,10 +213,13 @@ fn cancel_with_another_order_id_fails_and_the_order_goes_on() {
     let mut r = robot();
     r.receive_order(&g, &order(0, "[]", "[]"));
     steps(&mut r, 20);
-    r.receive_instant_actions(&instant(
-        r#"[{"actionType":"cancelOrder","actionId":"c1","blockingType":"NONE",
+    r.receive_instant_actions(
+        &graph(),
+        &instant(
+            r#"[{"actionType":"cancelOrder","actionId":"c1","blockingType":"NONE",
                  "actionParameters":[{"key":"orderId","value":"other"}]}]"#,
-    ));
+        ),
+    );
     let s = state(&r);
     assert_eq!(instant_status(&s, "c1"), Failed);
     assert_eq!(s.errors[0].error_type, "NO_ORDER_TO_CANCEL");
@@ -227,10 +230,13 @@ fn cancel_with_another_order_id_fails_and_the_order_goes_on() {
     let mut r = robot();
     r.receive_order(&g, &order(0, "[]", "[]"));
     steps(&mut r, 20);
-    r.receive_instant_actions(&instant(
-        r#"[{"actionType":"cancelOrder","actionId":"c2","blockingType":"NONE",
+    r.receive_instant_actions(
+        &graph(),
+        &instant(
+            r#"[{"actionType":"cancelOrder","actionId":"c2","blockingType":"NONE",
                  "actionParameters":[{"key":"orderId","value":"o1"}]}]"#,
-    ));
+        ),
+    );
     assert_eq!(instant_status(&state(&r), "c2"), Running);
 }
 
@@ -240,7 +246,7 @@ fn an_update_after_a_cancel_is_rejected() {
     let mut r = robot();
     r.receive_order(&g, &order(0, "[]", "[]"));
     steps(&mut r, 20);
-    r.receive_instant_actions(&cancel("c1"));
+    r.receive_instant_actions(&graph(), &cancel("c1"));
     // an update (update id 1) for the cancelled order
     let update = {
         let json = r#"{"headerId":1,"timestamp":"2026-11-20T10:00:00.000Z","version":"3.0.1",
@@ -261,9 +267,10 @@ fn an_update_after_a_cancel_is_rejected() {
 #[test]
 fn unsupported_instant_actions_fail_with_invalid_instant_action() {
     let mut r = robot();
-    r.receive_instant_actions(&instant(
-        r#"[{"actionType":"startPause","actionId":"p1","blockingType":"NONE"}]"#,
-    ));
+    r.receive_instant_actions(
+        &graph(),
+        &instant(r#"[{"actionType":"startPause","actionId":"p1","blockingType":"NONE"}]"#),
+    );
     let s = state(&r);
     assert_eq!(instant_status(&s, "p1"), Failed);
     assert_eq!(s.errors[0].error_type, "INVALID_INSTANT_ACTION");

@@ -93,7 +93,9 @@ impl std::error::Error for JobError {}
 #[derive(Debug, Clone)]
 pub struct JobGenerator {
     rng: Rng,
-    nodes: Vec<NodeIdx>,
+    /// The places jobs start and end at; each is a list of nodes where it can be
+    /// reached (one node for a plain node, the interaction nodes of a station).
+    places: Vec<Vec<NodeIdx>>,
     /// Probability of a new job in one step.
     p_step: f64,
     next_id: u64,
@@ -114,6 +116,28 @@ impl JobGenerator {
                 unique.push(n);
             }
         }
+        let places: Vec<Vec<NodeIdx>> = unique.into_iter().map(|n| vec![n]).collect();
+        JobGenerator::between_places(seed, &places, rate_per_hour, dt)
+    }
+
+    /// Like [`JobGenerator::new`], but between **places**, each a list of nodes
+    /// where it can be reached (S60: a station with its interaction nodes). A job
+    /// goes from one place to another; the node of a place with several is drawn
+    /// at random (seeded) for each job. A place with one node draws nothing, so
+    /// a run between plain nodes is the same as with [`JobGenerator::new`]. At
+    /// least two different places are needed (identical lists count once).
+    pub fn between_places(
+        seed: u64,
+        places: &[Vec<NodeIdx>],
+        rate_per_hour: f64,
+        dt: f64,
+    ) -> Result<JobGenerator, JobError> {
+        let mut unique: Vec<Vec<NodeIdx>> = Vec::new();
+        for p in places {
+            if !p.is_empty() && !unique.contains(p) {
+                unique.push(p.clone());
+            }
+        }
         if unique.len() < 2 {
             return Err(JobError::TooFewNodes);
         }
@@ -126,7 +150,7 @@ impl JobGenerator {
         }
         Ok(JobGenerator {
             rng: Rng::stream(seed, "jobs"),
-            nodes: unique,
+            places: unique,
             p_step,
             next_id: 1,
         })
@@ -137,16 +161,22 @@ impl JobGenerator {
         if self.rng.next_f64() >= self.p_step {
             return None;
         }
-        let n = self.nodes.len();
+        let n = self.places.len();
         let pickup = self.rng.below(n);
         let mut drop = self.rng.below(n - 1);
         if drop >= pickup {
             drop += 1; // skip the pickup: drop is uniform over the others
         }
+        let node_of = |rng: &mut Rng, place: &[NodeIdx]| match place {
+            [only] => *only,
+            _ => place[rng.below(place.len())],
+        };
+        let pickup = node_of(&mut self.rng, &self.places[pickup]);
+        let drop = node_of(&mut self.rng, &self.places[drop]);
         let job = Job {
             id: self.next_id,
-            pickup: self.nodes[pickup],
-            drop: self.nodes[drop],
+            pickup,
+            drop,
             created_tick: tick,
         };
         self.next_id += 1;

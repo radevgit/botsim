@@ -3,7 +3,7 @@
 use botsim_core::graph::Graph;
 use serde::{Deserialize, Serialize};
 
-use crate::FORMAT_VERSION;
+use crate::{FORMAT_VERSION, GeometryError, GeometryFile, StaticShape};
 
 /// Line 1: maps, nodes and edges. Static geometry (walls etc.) will be added as
 /// a `geometry` field later.
@@ -15,6 +15,10 @@ pub struct LayoutLine {
     pub maps: Vec<String>,
     pub nodes: Vec<NodeRecord>,
     pub edges: Vec<EdgeRecord>,
+    /// Static geometry (walls, racks, ...), drawn under the track graph in
+    /// this order; empty if there is none.
+    #[serde(default)]
+    pub geometry: Vec<StaticShape>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -63,6 +67,14 @@ impl LayoutLine {
                     map_transition: e.map_transition,
                 })
                 .collect(),
+            geometry: Vec::new(),
         }
+    }
+
+    /// The same line with the static geometry of a file; fails if a shape is on
+    /// a map that the layout does not have.
+    pub fn with_geometry(mut self, file: &GeometryFile) -> Result<LayoutLine, GeometryError> {
+        self.geometry = file.resolve(&self.maps)?;
+        Ok(self)
     }
 }

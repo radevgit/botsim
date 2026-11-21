@@ -9,7 +9,7 @@ use botsim_core::graph::Graph;
 use botsim_core::observer::{Observer, Snapshot};
 use serde::Serialize;
 
-use crate::{LayoutLine, SnapshotLine};
+use crate::{GeometryFile, LayoutLine, SnapshotLine};
 
 struct Shared<W: Write> {
     out: BufWriter<W>,
@@ -38,6 +38,7 @@ impl<W: Write> Shared<W> {
 /// [`RecordHandle`] to flush and to see write errors after the run.
 pub struct Recorder<W: Write> {
     shared: Rc<RefCell<Shared<W>>>,
+    geometry: Option<GeometryFile>,
 }
 
 /// Stays with the caller while the [`Recorder`] is inside the world.
@@ -47,6 +48,18 @@ pub struct RecordHandle<W: Write> {
 
 impl<W: Write> Recorder<W> {
     pub fn new(out: W) -> (Recorder<W>, RecordHandle<W>) {
+        Recorder::build(out, None)
+    }
+
+    /// Like [`Recorder::new`], and the layout line carries the static geometry.
+    /// If a shape is on a map that the layout does not have, nothing is written
+    /// and [`RecordHandle::finish`] reports it; check beforehand with
+    /// [`LayoutLine::with_geometry`] to fail early.
+    pub fn with_geometry(out: W, geometry: GeometryFile) -> (Recorder<W>, RecordHandle<W>) {
+        Recorder::build(out, Some(geometry))
+    }
+
+    fn build(out: W, geometry: Option<GeometryFile>) -> (Recorder<W>, RecordHandle<W>) {
         let shared = Rc::new(RefCell::new(Shared {
             out: BufWriter::new(out),
             error: None,
@@ -54,6 +67,7 @@ impl<W: Write> Recorder<W> {
         (
             Recorder {
                 shared: shared.clone(),
+                geometry,
             },
             RecordHandle { shared },
         )
@@ -80,9 +94,19 @@ impl<W: Write> fmt::Debug for Recorder<W> {
 
 impl<W: Write> Observer for Recorder<W> {
     fn on_layout(&mut self, layout: &Graph) {
-        self.shared
-            .borrow_mut()
-            .write_line(&LayoutLine::from_graph(layout));
+        let line = LayoutLine::from_graph(layout);
+        let mut shared = self.shared.borrow_mut();
+        match &self.geometry {
+            None => shared.write_line(&line),
+            Some(geometry) => match line.with_geometry(geometry) {
+                Ok(line) => shared.write_line(&line),
+                Err(e) => {
+                    shared
+                        .error
+                        .get_or_insert(io::Error::new(io::ErrorKind::InvalidData, e.to_string()));
+                }
+            },
+        }
     }
 
     fn on_step(&mut self, snapshot: &Snapshot) {

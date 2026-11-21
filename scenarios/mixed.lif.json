@@ -41,6 +41,16 @@
                  "mobileRobotTypeEdgeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}, {"manufacturer": "ACME", "seriesName": "Y2"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0]}]},
                 {"edgeId": "P1-P4", "startNodeId": "P1", "endNodeId": "P4",
                  "mobileRobotTypeEdgeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0]}]}
+            ],
+            "stations": [
+                {"stationId": "Goods-In", "stationName": "Goods in", "stationType": "DOCK",
+                 "interactionNodeIds": ["P0"]},
+                {"stationId": "Rack-A", "stationName": "Rack A", "stationType": "RACK",
+                 "interactionNodeIds": ["P1", "P4"]},
+                {"stationId": "Rack-B", "stationName": "Rack B", "stationType": "RACK",
+                 "interactionNodeIds": ["P2"]},
+                {"stationId": "Goods-Out", "stationName": "Goods out", "stationType": "DOCK",
+                 "interactionNodeIds": ["P3"]}
             ]
         }]
     }]

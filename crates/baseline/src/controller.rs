@@ -123,6 +123,14 @@ struct Slot {
     header_id: u32,
     /// `headerId` of the next `responses` message to this robot.
     response_header_id: u32,
+    /// The `zoneSet` message was sent to this robot (S62).
+    zone_set_sent: bool,
+    /// The `enableZoneSet` instant action was sent to this robot (S62).
+    enable_sent: bool,
+    /// `headerId` of the next `zoneSet` message and of the next `instantActions`
+    /// message (each topic counts for itself).
+    zone_set_header_id: u32,
+    instant_header_id: u32,
 }
 
 #[derive(Debug)]
@@ -137,6 +145,9 @@ pub struct Controller {
     reservations: Reservations,
     /// Answers to RELEASE zone requests; `None` if the run has no zones.
     zone_grants: Option<ZoneGrants>,
+    /// The zone set of the site, which the controller sends to every robot and
+    /// enables (S62); `None` if the run has no zones.
+    zone_set: Option<vda5050::zone_set::ZoneSet>,
     /// Rides in the routes: who owns which lift (see [`crate::lifts`]).
     lifts: LiftDesk,
     /// Guarded edges in the routes: who owns which door (see [`crate::doors`]).
@@ -162,8 +173,9 @@ impl Controller {
         let robots: Vec<Slot> = world
             .robot_ids()
             .map(|id| {
-                let spec = world.spec(id).expect("the robot exists");
-                let key = (spec.manufacturer.clone(), spec.series_name.clone());
+                // the robot's type comes from its factsheet message (S61)
+                let f = world.factsheet(id).expect("the robot exists");
+                let key = (f.manufacturer, f.type_specification.series_name);
                 let type_idx = keys.iter().position(|k| *k == key).unwrap_or_else(|| {
                     keys.push(key);
                     keys.len() - 1
@@ -174,6 +186,10 @@ impl Controller {
                     work: None,
                     header_id: 0,
                     response_header_id: 0,
+                    zone_set_sent: false,
+                    enable_sent: false,
+                    zone_set_header_id: 0,
+                    instant_header_id: 0,
                 }
             })
             .collect();
@@ -198,6 +214,12 @@ impl Controller {
             last_tick: world.tick(),
             reservations: Reservations::new(world.graph()),
             zone_grants: world.zones().cloned().map(ZoneGrants::new),
+            zone_set: world.zones().map(|z| vda5050::zone_set::ZoneSet {
+                map_id: world.graph().maps[z.map].clone(),
+                zone_set_id: z.zone_set_id.clone(),
+                zone_set_descriptor: None,
+                zones: z.zones.clone(),
+            }),
             lifts: LiftDesk::new(world),
             doors: DoorDesk::new(world),
             node_grid: NodeGrid::new(world.graph()),
@@ -271,6 +293,7 @@ impl Controller {
                 self.reservations.reserve_node(n, i);
             }
         }
+        self.update_zone_sets(world, &states);
         self.answer_zone_requests(world, &states);
         self.dispatch(world, &states, tick);
 
@@ -447,6 +470,72 @@ impl Controller {
             .collect()
     }
 
+    /// The state of the robot's copy of the site's zone set, `None` if it has none
+    /// (S62).
+    fn zone_set_status(&self, state: &State) -> Option<vda5050::state::EnabledStatus> {
+        let id = &self.zone_set.as_ref()?.zone_set_id;
+        state
+            .zone_sets
+            .iter()
+            .flatten()
+            .find(|z| z.zone_set_id == *id)
+            .map(|z| z.zone_set_status)
+    }
+
+    /// Is the robot ready for jobs as far as zones go: the run has no zones, or
+    /// the robot reports the site's zone set as enabled? A robot without its
+    /// zones would drive into RELEASE zones without asking.
+    fn zones_ready(&self, state: &State) -> bool {
+        self.zone_set.is_none()
+            || self.zone_set_status(state) == Some(vda5050::state::EnabledStatus::Enabled)
+    }
+
+    /// Give every robot the site's zone set (S62): send the `zoneSet` message; when
+    /// the robot's state shows it (disabled), send the `enableZoneSet` instant
+    /// action. Each is sent once; the controller reads the answer from the state
+    /// (which may be old, with a message delay).
+    fn update_zone_sets(&mut self, world: &mut World, states: &[State]) {
+        let Some(zs) = self.zone_set.clone() else {
+            return;
+        };
+        for i in 0..self.robots.len() {
+            let status = self.zone_set_status(&states[i]);
+            let slot = &mut self.robots[i];
+            if status.is_none() && !slot.zone_set_sent {
+                let msg = serde_json::from_value(serde_json::json!({
+                    "headerId": slot.zone_set_header_id,
+                    "timestamp": world.timestamp(),
+                    "version": botsim_core::world::PROTOCOL_VERSION,
+                    "manufacturer": slot.id.manufacturer,
+                    "serialNumber": slot.id.serial_number,
+                    "zoneSet": zs,
+                }))
+                .expect("the message has all required fields");
+                slot.zone_set_header_id += 1;
+                slot.zone_set_sent = true;
+                world.send_zone_set(&msg).expect("the robot exists");
+            } else if status == Some(vda5050::state::EnabledStatus::Disabled) && !slot.enable_sent {
+                let msg = serde_json::from_value(serde_json::json!({
+                    "headerId": slot.instant_header_id,
+                    "timestamp": world.timestamp(),
+                    "version": botsim_core::world::PROTOCOL_VERSION,
+                    "manufacturer": slot.id.manufacturer,
+                    "serialNumber": slot.id.serial_number,
+                    "actions": [{
+                        "actionType": "enableZoneSet",
+                        "actionId": format!("enable-{}", zs.zone_set_id),
+                        "blockingType": "NONE",
+                        "actionParameters": [{"key": "zoneSetId", "value": zs.zone_set_id}],
+                    }],
+                }))
+                .expect("the message has all required fields");
+                slot.instant_header_id += 1;
+                slot.enable_sent = true;
+                world.send_instant_actions(&msg).expect("the robot exists");
+            }
+        }
+    }
+
     /// Answer the RELEASE zone requests the robots state (see [`crate::zone_grants`]).
     fn answer_zone_requests(&mut self, world: &mut World, states: &[State]) {
         let Some(grants) = self.zone_grants.as_mut() else {
@@ -492,6 +581,7 @@ impl Controller {
         // free robots with the node they stand on
         let mut free: Vec<(usize, NodeIdx)> = (0..self.robots.len())
             .filter(|&i| self.robots[i].work.is_none())
+            .filter(|&i| self.zones_ready(&states[i]))
             .filter_map(|i| Some((i, self.node_of(&states[i])?)))
             .collect();
 

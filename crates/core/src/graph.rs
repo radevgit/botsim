@@ -70,6 +70,17 @@ impl GraphEdge {
     }
 }
 
+/// A station (LIF): a logical place where a robot interacts with the
+/// environment, reached at one of its interaction nodes (S60).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphStation {
+    pub id: String,
+    pub name: Option<String>,
+    pub station_type: Option<String>,
+    /// The nodes where the interaction takes place (at least one).
+    pub interaction_nodes: Vec<NodeIdx>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphError {
     DuplicateNode(String),
@@ -77,6 +88,12 @@ pub enum GraphError {
     UnknownNode {
         edge: String,
         node: String,
+    },
+    DuplicateStation(String),
+    /// A station lists a node that is not in the layout, or no node at all.
+    BadStation {
+        station: String,
+        node: Option<String>,
     },
     /// `maximumSpeed` must be above 0 (a robot could never drive the edge).
     BadMaximumSpeed {
@@ -92,6 +109,15 @@ impl fmt::Display for GraphError {
             GraphError::UnknownNode { edge, node } => {
                 write!(f, "edge '{edge}' refers to unknown node '{node}'")
             }
+            GraphError::DuplicateStation(id) => write!(f, "duplicate stationId '{id}'"),
+            GraphError::BadStation {
+                station,
+                node: Some(n),
+            } => write!(f, "station '{station}' refers to unknown node '{n}'"),
+            GraphError::BadStation {
+                station,
+                node: None,
+            } => write!(f, "station '{station}' has no interaction node"),
             GraphError::BadMaximumSpeed { edge } => write!(
                 f,
                 "edge '{edge}': maximumSpeed must be above 0 (a robot could never drive it)"
@@ -113,6 +139,9 @@ pub struct Graph {
     edge_by_id: HashMap<String, EdgeIdx>,
     /// Outgoing edges per node, in layout order.
     out_edges: Vec<Vec<EdgeIdx>>,
+    /// The stations of all layouts, in file order (S60).
+    pub stations: Vec<GraphStation>,
+    station_by_id: HashMap<String, usize>,
 }
 
 impl Graph {
@@ -214,7 +243,46 @@ impl Graph {
             g.out_edges[start].push(idx);
         }
 
+        // stations come last: they refer to nodes of any layout
+        for s in layouts.iter().flat_map(|l| l.stations.iter().flatten()) {
+            let idx = g.stations.len();
+            if g.station_by_id.insert(s.station_id.clone(), idx).is_some() {
+                return Err(GraphError::DuplicateStation(s.station_id.clone()));
+            }
+            if s.interaction_node_ids.is_empty() {
+                return Err(GraphError::BadStation {
+                    station: s.station_id.clone(),
+                    node: None,
+                });
+            }
+            let mut interaction_nodes = Vec::new();
+            for n in &s.interaction_node_ids {
+                let node = g
+                    .node_by_id
+                    .get(n)
+                    .copied()
+                    .ok_or_else(|| GraphError::BadStation {
+                        station: s.station_id.clone(),
+                        node: Some(n.clone()),
+                    })?;
+                if !interaction_nodes.contains(&node) {
+                    interaction_nodes.push(node);
+                }
+            }
+            g.stations.push(GraphStation {
+                id: s.station_id.clone(),
+                name: s.station_name.clone(),
+                station_type: s.station_type.clone(),
+                interaction_nodes,
+            });
+        }
+
         Ok(g)
+    }
+
+    /// The index of the station with this `stationId`.
+    pub fn station_idx(&self, id: &str) -> Option<usize> {
+        self.station_by_id.get(id).copied()
     }
 
     /// May a robot of this type stand on the node?

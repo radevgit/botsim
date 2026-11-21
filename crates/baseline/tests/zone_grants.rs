@@ -211,6 +211,13 @@ impl Observer for Recorder {
 /// Three robots on the ring with the two zones, random jobs; returns the
 /// number of jobs done and the snapshots.
 fn busy_ring(zones_on: bool) -> (usize, Vec<Snapshot>) {
+    busy_ring_with(zones_on, false, 0)
+}
+
+/// Like [`busy_ring`]; with `by_message` the robots get the zone set from the
+/// controller (a `zoneSet` message and `enableZoneSet`, S62) instead of having it
+/// from the start; `delay` is the message delay in steps.
+fn busy_ring_with(zones_on: bool, by_message: bool, delay: u64) -> (usize, Vec<Snapshot>) {
     let g = ring();
     let z = zones(&g);
     let nodes: Vec<_> = (0..4)
@@ -224,9 +231,12 @@ fn busy_ring(zones_on: bool) -> (usize, Vec<Snapshot>) {
         .map(|n| g.node_idx(n).unwrap())
         .collect();
     let mut w = World::new(g, DT, 0).unwrap();
-    if zones_on {
+    if zones_on && by_message {
+        w.set_site_zones(z);
+    } else if zones_on {
         w.set_zones(z);
     }
+    w.set_message_delay(delay);
     for (i, n) in starts.into_iter().enumerate() {
         let id = RobotId::new("ACME", &format!("R-{}", i + 1));
         w.add_robot(
@@ -285,6 +295,98 @@ fn never_two_robots_inside_one_release_zone_and_the_work_gets_done() {
         waited_for_zone > 0,
         "robots had to wait for the zone at least once"
     );
+}
+
+/// The most robots inside one zone at any snapshot, and how often a zone was used.
+fn most_inside(snaps: &[Snapshot]) -> (usize, usize) {
+    let g = ring();
+    let z = zones(&g);
+    let (mut most, mut inside) = (0, 0);
+    for s in snaps {
+        for zone in &z.zones {
+            let n = s
+                .robots
+                .iter()
+                .filter(|r| r.pose.map == z.map && Zones::contains(zone, r.pose.x, r.pose.y))
+                .count();
+            most = most.max(n);
+            inside += n;
+        }
+    }
+    (most, inside)
+}
+
+#[test]
+fn zones_sent_by_message_keep_the_same_guarantee_with_and_without_a_delay() {
+    for delay in [0, 10, 40] {
+        let (done, snaps) = busy_ring_with(true, true, delay);
+        assert!(done > 10, "delay {delay}: {done} jobs done");
+        let (most, inside) = most_inside(&snaps);
+        assert_eq!(most, 1, "delay {delay}: never two robots in one zone");
+        assert!(inside > 50, "delay {delay}: the zones were used");
+    }
+}
+
+#[test]
+fn robots_get_no_jobs_before_their_zone_set_is_enabled() {
+    // the world has the site's zones, the robots have none; the controller sends
+    // and enables the set first, so the first job starts a few cycles in (more
+    // with a delay), and the robots have the set enabled by then
+    let first_assignment = |zones_by_message: bool, delay: u64| {
+        let g = ring();
+        let z = zones(&g);
+        let n0 = g.node_idx("N0").unwrap();
+        let job = Job {
+            id: 1,
+            pickup: n0,
+            drop: g.node_idx("N2").unwrap(),
+            created_tick: 0,
+        };
+        let f: Factsheet =
+            serde_json::from_str(include_str!("data/diff_robot.factsheet.json")).unwrap();
+        let mut w = World::new(g, DT, 0).unwrap();
+        if zones_by_message {
+            w.set_site_zones(z);
+        } else {
+            w.set_zones(z);
+        }
+        w.set_message_delay(delay);
+        let id = RobotId::new("ACME", "R-1");
+        w.add_robot(
+            id.clone(),
+            RobotSpec::from_factsheet(&f).unwrap(),
+            ActionTimes::new(1.0),
+            n0,
+            0.0,
+        )
+        .unwrap();
+        let mut c = Controller::new(&w);
+        let mut jobs = Some(vec![job]);
+        for _ in 0..400 {
+            c.step(&mut w, jobs.take().unwrap_or_default());
+            w.step();
+            if c.busy() == 1 {
+                // the robot's own copy of the zone set is enabled by now
+                let state = w.state(&id).unwrap();
+                let sets = state.zone_sets.unwrap_or_default();
+                return (
+                    w.tick(),
+                    sets.len(),
+                    sets.iter()
+                        .all(|s| s.zone_set_status == vda5050::state::EnabledStatus::Enabled),
+                );
+            }
+        }
+        panic!("the job was never given out");
+    };
+    let (preset, n, enabled) = first_assignment(false, 0);
+    assert_eq!((n, enabled), (1, true));
+    let (instant, n, enabled) = first_assignment(true, 0);
+    assert_eq!((n, enabled), (1, true));
+    let (late, n, enabled) = first_assignment(true, 10);
+    assert_eq!((n, enabled), (1, true));
+    assert!(instant > preset, "{instant} against {preset}");
+    assert!(late > instant + 20, "{late} against {instant}");
 }
 
 #[test]

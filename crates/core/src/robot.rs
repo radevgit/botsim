@@ -53,6 +53,18 @@ pub enum Reception {
     InTransit,
 }
 
+/// How long (ms) the state reports a zone set that was not taken over: "a
+/// reasonable amount of time for the fleet control to notice" (VDA 5050 §6.4.2);
+/// our choice, 10 s.
+pub const ZONE_SET_ERROR_MS: i64 = 10_000;
+
+/// A zone set on the robot, with its `zoneSetStatus`.
+#[derive(Debug, Clone)]
+struct StoredZoneSet {
+    zones: Zones,
+    enabled: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct Robot {
     spec: RobotSpec,
@@ -63,8 +75,16 @@ pub struct Robot {
     instant: Vec<InstantActionState>,
     /// Index in `instant` of a `cancelOrder` that is still stopping the robot.
     cancel_action: Option<usize>,
-    /// RELEASE zone requests; `None` if the run has no zones.
+    /// RELEASE zone requests; `None` while no zone set is enabled.
     zone_requests: Option<ZoneRequester>,
+    /// The zone sets the controller has sent (S62), enabled or not. At most one is
+    /// enabled (simplification: the standard allows one per map).
+    zone_sets: Vec<StoredZoneSet>,
+    /// When this robot requests RELEASE zones (S41); used when a zone set is enabled.
+    zone_timing: ZoneRequestTiming,
+    /// Errors about zone sets that were not taken over, with the time (ms since
+    /// 1970) until which the state reports them.
+    zone_set_errors: Vec<(RobotError, i64)>,
     /// The time now, milliseconds since 1970 (set by the world).
     now_ms: i64,
     /// The layout edges that are lift rides (set by the world).
@@ -95,6 +115,9 @@ impl Robot {
             instant: Vec::new(),
             cancel_action: None,
             zone_requests: None,
+            zone_sets: Vec::new(),
+            zone_timing: ZoneRequestTiming::default(),
+            zone_set_errors: Vec::new(),
             now_ms: 0,
             rides: HashSet::new(),
             closed_door_edges: HashSet::new(),
@@ -198,17 +221,121 @@ impl Robot {
         out
     }
 
-    /// Give the robot the zones of the run: it will state RELEASE zone requests
-    /// (see [`crate::zone_requests`]), by `timing`.
+    /// Give the robot a zone set that is already **enabled**, as if the controller
+    /// had sent it and enabled it (a shortcut for set-up and tests; the real way
+    /// is [`Robot::receive_zone_set`] and the `enableZoneSet` instant action). It
+    /// will state RELEASE zone requests (see [`crate::zone_requests`]), by `timing`.
     pub fn set_zones(&mut self, zones: Zones, timing: ZoneRequestTiming) {
+        self.zone_timing = timing;
+        self.zone_sets.clear();
+        self.zone_sets.push(StoredZoneSet {
+            zones: zones.clone(),
+            enabled: true,
+        });
         self.zone_requests = Some(ZoneRequester::new(zones, timing));
     }
 
-    /// Change when this robot requests zones. No effect without zones.
+    /// Change when this robot requests zones (also for a zone set enabled later).
     pub fn set_zone_request_timing(&mut self, timing: ZoneRequestTiming) {
+        self.zone_timing = timing;
         if let Some(z) = self.zone_requests.as_mut() {
             z.set_timing(timing);
         }
+    }
+
+    /// Receive a `zoneSet` message (S62). A zone set with an id the robot already
+    /// has is **not** taken over: error `DUPLICATE_ZONE_SET` (WARNING) in the
+    /// state for [`ZONE_SET_ERROR_MS`]. A zone set that does not fit the layout
+    /// (see [`Zones::new`]) is refused with `UNKNOWN_MAP_ID` or
+    /// `VALIDATION_FAILURE`. A new zone set is stored **disabled** and is used
+    /// only after the `enableZoneSet` instant action.
+    pub fn receive_zone_set(&mut self, graph: &Graph, msg: &vda5050::zone_set::ZoneSetMessage) {
+        let id = msg.zone_set.zone_set_id.clone();
+        let refuse = |t: ErrorType, text: String| RobotError {
+            error_type: t,
+            references: vec![("zoneSetId".to_string(), id.clone())],
+            description: Some(text),
+        };
+        let until = self.now_ms + ZONE_SET_ERROR_MS;
+        if self.zone_sets.iter().any(|z| z.zones.zone_set_id == id) {
+            let e = refuse(
+                ErrorType::DuplicateZoneSet,
+                "a zone set with this zoneSetId exists already".to_string(),
+            );
+            self.zone_set_errors.push((e, until));
+            return;
+        }
+        match Zones::new(graph, msg.zone_set.clone()) {
+            Ok(zones) => self.zone_sets.push(StoredZoneSet {
+                zones,
+                enabled: false,
+            }),
+            Err(e) => {
+                let t = match e {
+                    crate::zones::ZoneError::UnknownMap(_) => ErrorType::UnknownMapId,
+                    _ => ErrorType::ValidationFailure,
+                };
+                self.zone_set_errors.push((refuse(t, e.to_string()), until));
+            }
+        }
+    }
+
+    /// Enable the stored zone set `id` (instant action `enableZoneSet`): the robot
+    /// states RELEASE zone requests for its zones from now on, and every other zone
+    /// set is disabled. `false` if the robot has no such zone set.
+    fn enable_zone_set(&mut self, graph: &Graph, id: &str) -> bool {
+        let Some(i) = self
+            .zone_sets
+            .iter()
+            .position(|z| z.zones.zone_set_id == id)
+        else {
+            return false;
+        };
+        if self.zone_sets[i].enabled {
+            return true;
+        }
+        for (j, z) in self.zone_sets.iter_mut().enumerate() {
+            z.enabled = j == i;
+        }
+        let mut zr = ZoneRequester::new(self.zone_sets[i].zones.clone(), self.zone_timing);
+        // the edges of an order that is under way count for the new zones too
+        zr.learn_edges(graph, &self.driver.progress().remaining_edges);
+        self.zone_requests = Some(zr);
+        self.update_zone_requests();
+        true
+    }
+
+    /// Delete the stored zone set `id` (instant action `deleteZoneSet`). `false` if
+    /// the robot has no such zone set, or it is enabled (in use).
+    fn delete_zone_set(&mut self, id: &str) -> bool {
+        match self
+            .zone_sets
+            .iter()
+            .position(|z| z.zones.zone_set_id == id)
+        {
+            Some(i) if !self.zone_sets[i].enabled => {
+                self.zone_sets.remove(i);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The robot's `zoneSets` as it states them, none if it has none.
+    pub fn zone_set_infos(&self, graph: &Graph) -> Vec<vda5050::state::ZoneSetInfo> {
+        use vda5050::state::{EnabledStatus, ZoneSetInfo};
+        self.zone_sets
+            .iter()
+            .map(|z| ZoneSetInfo {
+                zone_set_id: z.zones.zone_set_id.clone(),
+                map_id: graph.maps[z.zones.map].clone(),
+                zone_set_status: if z.enabled {
+                    EnabledStatus::Enabled
+                } else {
+                    EnabledStatus::Disabled
+                },
+            })
+            .collect()
     }
 
     /// The robot's `zoneRequests` as it states them (empty without zones).
@@ -364,6 +491,16 @@ impl Robot {
                 .errors
                 .extend(zr.errors().iter().map(RobotError::to_state_error));
         }
+        // the zone sets stored on the robot, and errors about ones not taken over
+        if !self.zone_sets.is_empty() {
+            state.zone_sets = Some(self.zone_set_infos(graph));
+        }
+        state.errors.extend(
+            self.zone_set_errors
+                .iter()
+                .filter(|(_, until)| *until > self.now_ms)
+                .map(|(e, _)| e.to_state_error()),
+        );
         state
     }
 
@@ -500,9 +637,12 @@ impl Robot {
     /// Receive an `instantActions` message. Every action is listed in
     /// `instantActionStates`. Supported: `cancelOrder` (optional parameter
     /// `orderId`). It fails (`FAILED` + `NO_ORDER_TO_CANCEL`, reference `actionId`)
-    /// if the robot is idle or the `orderId` is not the active order. Any other
-    /// type fails with `INVALID_INSTANT_ACTION`.
-    pub fn receive_instant_actions(&mut self, msg: &InstantActions) {
+    /// if the robot is idle or the `orderId` is not the active order. Also
+    /// (S62): `enableZoneSet` and `deleteZoneSet` (parameter `zoneSetId`); they
+    /// finish at once, or fail with `INVALID_INSTANT_ACTION` if the robot has no
+    /// such zone set (or, for `deleteZoneSet`, it is enabled). Any other type fails
+    /// with `INVALID_INSTANT_ACTION`.
+    pub fn receive_instant_actions(&mut self, graph: &Graph, msg: &InstantActions) {
         for a in &msg.actions {
             self.instant.push(InstantActionState {
                 action_id: a.action_id.clone(),
@@ -510,6 +650,32 @@ impl Robot {
                 status: ActionStatus::Failed,
             });
             let idx = self.instant.len() - 1;
+
+            if a.action_type == "enableZoneSet" || a.action_type == "deleteZoneSet" {
+                let zone_set_id = a
+                    .action_parameters
+                    .iter()
+                    .flatten()
+                    .find(|p| p.key == "zoneSetId")
+                    .and_then(|p| p.value.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let done = if a.action_type == "enableZoneSet" {
+                    self.enable_zone_set(graph, &zone_set_id)
+                } else {
+                    self.delete_zone_set(&zone_set_id)
+                };
+                if done {
+                    self.instant[idx].status = ActionStatus::Finished;
+                } else {
+                    self.errors.push(action_error(
+                        ErrorType::InvalidInstantAction,
+                        &a.action_id,
+                        "the robot has no such zone set (or it is in use)",
+                    ));
+                }
+                continue;
+            }
 
             if a.action_type != "cancelOrder" {
                 self.errors.push(action_error(

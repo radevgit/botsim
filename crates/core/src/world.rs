@@ -21,6 +21,7 @@ use std::fmt;
 use aabb::prelude::AABB;
 use togo::prelude::{circle_bounding_rect, orect_bounding_rect};
 
+use vda5050::factsheet::Factsheet;
 use vda5050::instant_actions::InstantActions;
 use vda5050::order::Order;
 use vda5050::state::State;
@@ -151,6 +152,7 @@ enum Delivery {
     Order(Order),
     InstantActions(InstantActions),
     Responses(vda5050::responses::Responses),
+    ZoneSet(vda5050::zone_set::ZoneSetMessage),
 }
 
 #[derive(Debug)]
@@ -197,6 +199,9 @@ pub struct World {
     broad: AABB,
     /// The robots brake when another robot is in their protective field (S54).
     safety_stop: bool,
+    /// `zones` were given to the robots already enabled (`set_zones`), not only
+    /// set for the site (`set_site_zones`, S62).
+    zones_on_robots: bool,
 }
 
 /// A deadlock: robots waiting for each other in a cycle (see [`crate::deadlock`]).
@@ -254,6 +259,7 @@ impl World {
             safety_stop: false,
             inbox: VecDeque::new(),
             message_delay: 0,
+            zones_on_robots: false,
         })
     }
 
@@ -286,6 +292,9 @@ impl World {
                 }
                 Delivery::Responses(m) => {
                     let _ = self.deliver_responses(&m);
+                }
+                Delivery::ZoneSet(m) => {
+                    let _ = self.deliver_zone_set(&m);
                 }
             }
         }
@@ -360,6 +369,22 @@ impl World {
         iso8601(ms)
     }
 
+    /// The robot's `factsheet` message (S61): the factsheet its spec was made
+    /// from, as the robot states it: its own `manufacturer` and `serialNumber`,
+    /// the protocol version of the world, and the time now. Not delayed by a
+    /// message delay (a controller asks for it once, when it starts). The
+    /// controller learns the robot's type from it (`manufacturer`,
+    /// `typeSpecification.seriesName`).
+    pub fn factsheet(&self, id: &RobotId) -> Result<Factsheet, WorldError> {
+        let mut f = self.robots[self.find(id)?].robot.spec().factsheet.clone();
+        f.header_id = 0;
+        f.timestamp = self.timestamp();
+        f.version = PROTOCOL_VERSION.to_string();
+        f.manufacturer = id.manufacturer.clone();
+        f.serial_number = id.serial_number.clone();
+        Ok(f)
+    }
+
     /// Put a new, idle robot on `start`, facing `heading`.
     pub fn add_robot(
         &mut self,
@@ -389,7 +414,7 @@ impl World {
         robot.set_time(self.now_ms());
         robot.set_rides(self.rides.clone());
         robot.set_door_widths(self.door_widths.clone());
-        if let Some(zones) = &self.zones {
+        if let (Some(zones), true) = (&self.zones, self.zones_on_robots) {
             robot.set_zones(zones.clone(), ZoneRequestTiming::default());
         }
         if let Some((seed, variation)) = self.duration_variation {
@@ -819,16 +844,29 @@ impl World {
         Ok(&self.graph.maps[*map])
     }
 
-    /// Set the zones of the run (already checked against the layout). They are
-    /// only stored for now; no robot behaviour uses them yet.
+    /// Set the zones of the run (already checked against the layout) **and give
+    /// every robot, now and added later, that zone set already enabled**, as if
+    /// the controller had sent and enabled it (a shortcut for tests and set-up;
+    /// S62 added the real messages, see [`World::set_site_zones`]). The robots
+    /// state RELEASE zone requests (S41); `set_zone_request_timing` changes when,
+    /// per robot.
     pub fn set_zones(&mut self, zones: Zones) {
-        // every robot, now and added later, states RELEASE zone requests (S41);
-        // `set_zone_request_timing` changes when, per robot
         for e in &mut self.robots {
             e.robot
                 .set_zones(zones.clone(), ZoneRequestTiming::default());
         }
         self.zones = Some(zones);
+        self.zones_on_robots = true;
+    }
+
+    /// Set the zone set of the site (already checked against the layout) **without**
+    /// giving it to the robots (S62): the controller reads it (`zones()`), and
+    /// must send it to each robot as a `zoneSet` message and enable it with the
+    /// `enableZoneSet` instant action. Until then the robots have no zones and
+    /// state no requests.
+    pub fn set_site_zones(&mut self, zones: Zones) {
+        self.zones = Some(zones);
+        self.zones_on_robots = false;
     }
 
     /// When this robot requests a RELEASE zone (S41). Needs the zones to be set.
@@ -886,7 +924,12 @@ impl World {
                     pose: p,
                     shape: *e.robot.shape(),
                     status,
-                    speed: state.velocity.and_then(|v| v.vx).unwrap_or(0.0),
+                    // along the heading (negative backwards); an omnidirectional robot
+                    // that moves sideways: the speed over the ground
+                    speed: state.velocity.as_ref().map_or(0.0, |v| {
+                        let (x, y) = (v.vx.unwrap_or(0.0), v.vy.unwrap_or(0.0));
+                        if y == 0.0 { x } else { x.hypot(y) }
+                    }),
                     order_id: state.order_id.clone(),
                     last_node: self.graph.node_idx(&state.last_node_id),
                     released_nodes: Vec::new(),
@@ -1189,7 +1232,38 @@ impl World {
     fn deliver_instant_actions(&mut self, msg: &InstantActions) -> Result<(), WorldError> {
         let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
         let i = self.find(&id)?;
-        self.robots[i].robot.receive_instant_actions(msg);
+        self.robots[i]
+            .robot
+            .receive_instant_actions(&self.graph, msg);
+        Ok(())
+    }
+
+    /// Deliver a `zoneSet` message (S62): the robot stores the zone set, disabled
+    /// (see [`Robot::receive_zone_set`]); the controller enables it with the
+    /// `enableZoneSet` instant action. With a message delay it is on its way.
+    pub fn send_zone_set(
+        &mut self,
+        msg: &vda5050::zone_set::ZoneSetMessage,
+    ) -> Result<(), WorldError> {
+        let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
+        self.find(&id)?;
+        if self.message_delay > 0 {
+            let due = self.tick + self.message_delay;
+            self.inbox.push_back((due, Delivery::ZoneSet(msg.clone())));
+            return Ok(());
+        }
+        self.deliver_zone_set(msg)
+    }
+
+    fn deliver_zone_set(
+        &mut self,
+        msg: &vda5050::zone_set::ZoneSetMessage,
+    ) -> Result<(), WorldError> {
+        let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
+        let i = self.find(&id)?;
+        let now_ms = self.now_ms();
+        self.robots[i].robot.set_time(now_ms);
+        self.robots[i].robot.receive_zone_set(&self.graph, msg);
         Ok(())
     }
 

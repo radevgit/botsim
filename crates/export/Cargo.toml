@@ -1,0 +1,12 @@
+[package]
+name = "botsim-export"
+description = "Headless PNG frames from a botsim recording, for making videos"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+botsim-record = { path = "../record" }
+tiny-skia = "0.12.0"

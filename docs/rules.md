@@ -51,9 +51,28 @@ LIF 2.0 (layouts).
 - Not yet: a different delay per direction or per robot, random delays or lost
   messages, a delay for the lift and door commands.
 
+## 1b. The controller's messages (VDA 5050)
+
+The controller sees the robots only through these messages (S61 lists what is
+and is not a message yet):
+
+| Direction | Message | State |
+|---|---|---|
+| to the robot | `order` | done (§3) |
+| to the robot | `instantActions` | done, `cancelOrder` only (§3) |
+| to the robot | `responses` (answers to zone requests) | done (§7e) |
+| to the robot | `zoneSet` + instant actions `enableZoneSet` / `deleteZoneSet` | done (**S62**, §7c): the scenario's zone set file is the *site's* zone set; the baseline controller sends it to every robot and enables it |
+| from the robot | `state` | done (§3); delayed with a message delay (§1a) |
+| from the robot | `factsheet` | done (**S61**): `World::factsheet(id)` is the factsheet the robot's spec was made from, with the robot's own header (manufacturer, serial number, protocol version, time now, `headerId` 0); not delayed. The baseline gets each robot's type (`manufacturer`, `seriesName`) from it |
+| from the robot | `visualization` | not built (the observer port, §7b, is the read-only view for viewers) |
+
+Lift and door commands are not VDA 5050; they have their own ports (§7f, §7h).
+
 ## 2. Robot motion
 
-- Only differential-drive robots are supported so far (others are refused).
+- **Differential** and **omnidirectional** robots are supported (**S63**). A
+  **three-wheel** (car-like) robot is refused: it needs curved paths, which are
+  not modelled (edges are straight).
 - The robot's position is its kinematic center. Its body (a rectangle or a
   circle) is taken from the factsheet and turns with the heading.
 - Speed and acceleration limits come from the factsheet. If the factsheet has
@@ -64,6 +83,26 @@ LIF 2.0 (layouts).
 - Heading on an edge (**S9**, **S13**): no orientation given → always drive
   forwards. Orientation 0 → forwards, π → backwards (3.14 is accepted for π,
   tolerance 0.01 rad). Any other value is refused (`ORIENTATION_UNREACHABLE`).
+- **Omnidirectional robots (S63).** Heading and travel direction are
+  independent: the robot travels along the edge whatever it faces.
+  - With **no orientation** in the order it **keeps its heading** (the standard
+    lets the robot choose; for a differential robot S13 says "forwards"). A robot
+    that never turns is faster than a differential robot on a route with corners.
+  - With an orientation: `TANGENTIAL` is relative to the edge direction (any
+    value, not only 0 and π); `GLOBAL` is relative to the map (valid for
+    omnidirectional robots only). The robot **reaches the orientation before it
+    enters the edge** (turning on the spot at the node) and keeps it. The LIF
+    option `reachOrientationBeforeEntering = false` (turn while driving) is not
+    modelled.
+  - The state's `velocity` has `vx` and `vy` in the robot frame (x forward, y
+    left): the speed along the edge split by the angle between travel and
+    heading, so a robot facing east and driving north has `vy` = speed. The
+    observer's `speed` is the speed over the ground for a robot that moves
+    sideways (the signed speed along the heading otherwise).
+  - The protective field (§7a) looks the way the robot travels, so it also works
+    for sideways travel. Not modelled: the width of the body across the travel
+    direction for a door (§7h) is taken across the heading; accelerations are
+    the same in every direction.
 - Edges are straight lines; their length is the distance between the nodes.
 - **Robot types in the layout (S55).** The LIF lists, for every node and edge,
   the robot types (`manufacturer` + `seriesName`) that may use it
@@ -227,6 +266,36 @@ LIF 2.0 (layouts).
   are fine.
 - One zone set is for one map; several maps would need one zone set each (not
   supported yet).
+- **Zone sets are messages (S62).** The scenario's `zone_set` is the zone set of
+  the **site**: the world holds it and the controller reads it; the **robots do
+  not have it** until the controller gives it to them, as in VDA 5050 §6.4.2:
+  - the **`zoneSet` message** (to one robot): the robot checks it against the
+    layout (§7c checks) and stores it **disabled**. A zone set with a
+    `zoneSetId` the robot already has is **not taken over**: error
+    `DUPLICATE_ZONE_SET` (WARNING, reference `zoneSetId`), reported in the state
+    for **10 s** ("a reasonable amount of time", our choice). A zone set that does
+    not fit is refused: unknown map → `UNKNOWN_MAP_ID`, any other fault →
+    `VALIDATION_FAILURE` (reference `zoneSetId`), also for 10 s;
+  - the **instant action `enableZoneSet`** (parameter `zoneSetId`): the zone set is
+    enabled and every other one disabled; from then on the robot states RELEASE
+    zone requests (§7e) for its zones, also for an order that is under way.
+    `deleteZoneSet` removes a stored zone set that is not enabled. Both finish at
+    once; they fail (`INVALID_INSTANT_ACTION`, reference `actionId`) if the robot
+    has no such zone set (or it is enabled);
+  - the robot's **state** has `zoneSets` (`zoneSetId`, `mapId`, `zoneSetStatus`
+    ENABLED/DISABLED) while it stores any, and no `zoneRequests` until a zone set
+    is enabled.
+  - **Simplifications:** at most **one zone set is enabled at a time**, whatever
+    the map (the standard: one per map); no `downloadZoneSet`; the content of a zone
+    set with an id is never compared.
+  - `World::set_zones` still gives a zone set to all robots already enabled (a
+    shortcut for tests); the scenario uses `World::set_site_zones`.
+  - **Baseline:** for each robot it sends the `zoneSet` message once; when the
+    state shows the set (disabled) it sends `enableZoneSet` once; it gives a robot
+    **no job until the state shows the zone set enabled** (a robot without its
+    zones would drive into RELEASE zones without asking). With a message delay
+    that takes a few round trips (§1a). The first jobs therefore start a few
+    cycles later than before S62.
 
 ## 7e. RELEASE zone requests (robot side) and the baseline's answers
 
@@ -450,6 +519,22 @@ how the controller uses them. Not enforced by the simulator yet.)
   The seed in the scenario fixes the sequence; the job random stream is
   separate from any future random feature.
 - At most one job per step is created.
+- **Stations (S60).** The LIF can list stations: logical places where a robot
+  interacts with the environment (`stationId`, optional name and type, and the
+  `interactionNodeIds` where the interaction takes place). They are read into
+  the layout (all layouts of the file; ids must be unique, every interaction
+  node must exist, at least one). A job can go **between stations**: the
+  scenario's `[jobs]` has `nodes = [...]` or `stations = [...]` (not both); with
+  neither, jobs go between **all the stations of the layout**. A job goes from
+  one station to a different one, and its pickup and drop are interaction nodes.
+  - A station with **several interaction nodes**: the LIF leaves the choice to
+    fleet control. Here the node is **drawn at random (seeded) for each job**,
+    not chosen by distance (a simplification; stations with one node draw
+    nothing, so a run between plain nodes gives the same jobs as before).
+  - The station's name, type and height are not forwarded in the order (the
+    LIF says they may be), and stations are not in the observer's snapshots or
+    the result. Not yet: stations that are busy or hold loads, a choice of the
+    interaction node by the controller, edges' load restrictions.
 
 ## 9. Baseline controller
 
@@ -464,7 +549,7 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 - **Route**: shortest route by edge length (edges are one-way as in the
   layout), **per robot type** (**S55**): only over edges the robot's type may use
   (§2). The nearest free robot is chosen by the route length of its own type.
-  The robot type comes from the robot's factsheet (`World::spec`). An edge's
+  The robot type comes from the robot's factsheet message (§1b). An edge's
   speed limit is not part of the route cost (length only).
 - **Release window** (**S29**, changed to 2 by the user): the robot's node
   and the next **2** nodes are released; each time the robot reaches a node the
@@ -618,8 +703,18 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 - One TOML file: name, seed, duration, `time_step`, `start_time`, the layout
   (`lif`), robot groups (`[[robot]]`) and optional `[jobs]`. Paths are
   relative to the scenario file; unknown keys are errors.
+- `zone_set` names the site's zone set file (§7c: the controller sends it to the
+  robots).
 - Optional `deadlock_timeout` (seconds, default 30), `safety_stop` (default
   true, §7a) and `message_delay` (seconds, default 0, §1a).
+- **Debug option `stop_at_first_deadlock`** (**S59**, default `false`): the run
+  ends in the step in which the first deadlock is reported (that is after the
+  deadlock timeout, §10), so the situation can be looked at (who is in the
+  cycle, where the robots stand). The result has `stopped_at_first_deadlock:
+  true`, `ticks` is the number of steps actually run (it is the scenario's full
+  number otherwise), the jobs and metrics are those of the shortened run, and the
+  deadlock is listed as still lasting (`ended_time` null). Without a deadlock the
+  run goes on to its end.
 - Result: a JSON summary on standard output (scenario, seed, ticks, jobs,
   deadlocks,
   metrics, collisions, and for each robot its type (`manufacturer`,
@@ -631,14 +726,15 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 
 ## 12. Known simplifications (not modelled yet)
 
-Stops at every node; differential drive only; straight edges only; per-robot-type
+Stops at every node; differential and omnidirectional drive only (no three-wheel,
+no curved paths); straight edges only; per-robot-type
 edge properties of the LIF (paths, speeds, corridors); rotation restrictions at
 nodes; node orientation and deviation; edge actions; other instant actions;
 operating modes; state message timing (the state is sent when the controller asks,
 not every 0.5 s, and a delay is the same for all messages, §1a); horizon actions;
 breakdowns; walls and people as obstacles of the safety stop (§7a); deadlock
 resolution beyond the baseline's re-routing (§9);
-a debug stop at the first deadlock; stations in the layout; the other per-type LIF edge properties (§2); the viewer (the
+station properties beyond the interaction nodes (§8); the other per-type LIF edge properties (§2); the viewer (the
 Rerun recording was dropped, U5). Lifts hold one robot and doors are tied to
 edges (§7g, §7h).
 

@@ -52,10 +52,41 @@ fn horizon_order(serial: &str) -> Order {
     .unwrap()
 }
 
+/// What the controller does at the start (S62): send the site's zone set to the
+/// robot and enable it.
+fn give_the_zone_set(w: &mut botsim_core::world::World, serial: &str) {
+    let z = w.zones().expect("the scenario has a zone set");
+    let set = serde_json::json!({
+        "mapId": w.graph().maps[z.map],
+        "zoneSetId": z.zone_set_id,
+        "zones": z.zones,
+    });
+    let header = |extra: serde_json::Value| {
+        let mut m = serde_json::json!({
+            "headerId": 0, "timestamp": "2026-11-20T10:00:00.000Z", "version": "3.0.1",
+            "manufacturer": "ACME", "serialNumber": serial,
+        });
+        m.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        m
+    };
+    let id = z.zone_set_id.clone();
+    let zone_set = header(serde_json::json!({ "zoneSet": set }));
+    w.send_zone_set(&serde_json::from_value(zone_set).unwrap())
+        .unwrap();
+    let enable = header(serde_json::json!({ "actions": [{
+        "actionType": "enableZoneSet", "actionId": "enable", "blockingType": "NONE",
+        "actionParameters": [{"key": "zoneSetId", "value": id}] }] }));
+    w.send_instant_actions(&serde_json::from_value(enable).unwrap())
+        .unwrap();
+}
+
 fn requests_after_horizon_order(text: &str) -> (usize, usize) {
     let s = Scenario::from_toml(text).unwrap();
     let mut w = s.build_world(&data()).unwrap();
     for serial in ["A-001", "B-001"] {
+        give_the_zone_set(&mut w, serial);
         w.send_order(&horizon_order(serial)).unwrap();
     }
     let count = |n: &str| w.zone_requests(&RobotId::new("ACME", n)).unwrap().len();

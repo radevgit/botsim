@@ -138,6 +138,54 @@ fn the_reader_rejects_bad_files() {
     assert!(read_text(LAYOUT).unwrap().snapshots.is_empty());
 }
 
+#[test]
+fn the_geometry_is_in_the_layout_line_of_the_file() {
+    let geometry = botsim_record::GeometryFile::from_json_str(&common::read(
+        "corridor_deadlock.geometry.json",
+    ))
+    .unwrap();
+    let path = tmp("geometry.jsonl");
+    let mut w = common::corridor_world();
+    let (recorder, handle) =
+        Recorder::with_geometry(File::create(&path).unwrap(), geometry.clone());
+    w.set_observer_at(Box::new(recorder), 0.5).unwrap();
+    for _ in 0..100 {
+        w.step();
+    }
+    handle.finish().unwrap();
+
+    let rec = read_recording(BufReader::new(File::open(&path).unwrap())).unwrap();
+    assert_eq!(
+        rec.layout.geometry,
+        geometry.resolve(&rec.layout.maps).unwrap()
+    );
+    assert_eq!(rec.layout.geometry.len(), 9);
+    assert_eq!(rec.snapshots.len(), 10);
+}
+
+#[test]
+fn geometry_on_an_unknown_map_writes_nothing_and_finish_reports_it() {
+    let geometry = botsim_record::GeometryFile::from_json_str(
+        r#"{"version":1,"shapes":[{"id":"w","mapId":"Nope","kind":"wall","shape":"polyline",
+            "vertices":[{"x":0,"y":0},{"x":1,"y":0}]}]}"#,
+    )
+    .unwrap();
+    let path = tmp("bad_geometry.jsonl");
+    let mut w = common::corridor_world();
+    let (recorder, handle) = Recorder::with_geometry(File::create(&path).unwrap(), geometry);
+    w.set_observer(Box::new(recorder));
+    for _ in 0..10 {
+        w.step();
+    }
+    let err = handle.finish().unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(
+        err.to_string(),
+        "geometry 'w': the layout has no map 'Nope'"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"", "nothing written");
+}
+
 /// A writer that fails, to see the error come out of `finish`.
 struct Failing;
 

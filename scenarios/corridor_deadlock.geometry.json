@@ -1,0 +1,23 @@
+{
+    "version": 1,
+    "shapes": [
+        {"id": "wall-north", "mapId": "M", "kind": "wall", "shape": "polyline",
+         "vertices": [{"x": -3.0, "y": 1.5}, {"x": 23.0, "y": 1.5}]},
+        {"id": "wall-south", "mapId": "M", "kind": "wall", "shape": "polyline",
+         "vertices": [{"x": -3.0, "y": -1.5}, {"x": 23.0, "y": -1.5}]},
+        {"id": "wall-west", "mapId": "M", "kind": "wall", "shape": "polyline",
+         "vertices": [{"x": -3.0, "y": -1.5}, {"x": -3.0, "y": 1.5}]},
+        {"id": "wall-east", "mapId": "M", "kind": "wall", "shape": "polyline",
+         "vertices": [{"x": 23.0, "y": -1.5}, {"x": 23.0, "y": 1.5}]},
+        {"id": "station-a", "mapId": "M", "kind": "station", "shape": "polygon",
+         "vertices": [{"x": -1.0, "y": -1.0}, {"x": 1.0, "y": -1.0}, {"x": 1.0, "y": 1.0}, {"x": -1.0, "y": 1.0}]},
+        {"id": "station-c", "mapId": "M", "kind": "station", "shape": "polygon",
+         "vertices": [{"x": 19.0, "y": -1.0}, {"x": 21.0, "y": -1.0}, {"x": 21.0, "y": 1.0}, {"x": 19.0, "y": 1.0}]},
+        {"id": "rack-1", "mapId": "M", "kind": "rack", "shape": "polygon",
+         "vertices": [{"x": 2.0, "y": 2.5}, {"x": 8.0, "y": 2.5}, {"x": 8.0, "y": 4.5}, {"x": 2.0, "y": 4.5}]},
+        {"id": "rack-2", "mapId": "M", "kind": "rack", "shape": "polygon",
+         "vertices": [{"x": 12.0, "y": 2.5}, {"x": 18.0, "y": 2.5}, {"x": 18.0, "y": 4.5}, {"x": 12.0, "y": 4.5}]},
+        {"id": "shelf-1", "mapId": "M", "kind": "shelf", "shape": "polygon",
+         "vertices": [{"x": 2.0, "y": -4.5}, {"x": 18.0, "y": -4.5}, {"x": 18.0, "y": -2.5}, {"x": 2.0, "y": -2.5}]}
+    ]
+}

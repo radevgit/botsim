@@ -35,6 +35,7 @@ action_time = 1.0
 pick = 8.0                     # a forklift needs longer
 drop = 8.0
 
+# Jobs go between the stations of the layout (Goods-In, Rack-A, Rack-B, Goods-Out);
+# Rack-A can be reached at two nodes (P1 and P4), one of them is drawn for each job.
 [jobs]
 rate_per_hour = 60.0
-nodes = ["P0", "P1", "P2", "P3", "P4", "P5"]

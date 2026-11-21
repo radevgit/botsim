@@ -177,6 +177,9 @@ pub struct Progress {
     pub pose: Pose,
     /// Speed in the robot frame (negative when driving backwards), m/s.
     pub vx: f64,
+    /// Sideways speed in the robot frame (positive to the left), m/s; 0 unless the
+    /// robot is omnidirectional and travels across its heading.
+    pub vy: f64,
     /// Rotation speed, rad/s (counter-clockwise positive).
     pub omega: f64,
     /// All actions: id, type, status (queued ones, then those still to be triggered).
@@ -192,8 +195,12 @@ struct Segment {
     by: f64,
     length: f64,
     /// Heading the robot must have on this edge (edge direction, or + π when
-    /// driving backwards). Travel is always along the edge.
-    heading: f64,
+    /// driving backwards; for an omnidirectional robot any orientation the order
+    /// names). Travel is always along the edge. `None`: the robot keeps the
+    /// heading it has (an omnidirectional robot, order without orientation, S63).
+    heading: Option<f64>,
+    /// The direction of the edge (start to end), radians.
+    direction: f64,
     /// The robot drives this edge backwards (its heading points against the travel direction).
     reversed: bool,
     /// A lift ride: no driving, the robot appears here when the ride is over.
@@ -240,7 +247,8 @@ fn build_segments(
                 bx: a.x,
                 by: a.y,
                 length: 0.0,
-                heading: 0.0, // not used: the robot keeps its heading on a ride
+                heading: None, // the robot keeps its heading on a ride
+                direction: 0.0,
                 reversed: false,
                 max_speed: None,
                 ride: Some(RideEnd {
@@ -264,14 +272,19 @@ fn build_segments(
                 edge: e.id.clone(),
                 error,
             })?;
+        // An omnidirectional robot given no orientation needs none: the standard
+        // lets it choose, and it keeps its heading (S63). Differential robots
+        // always drive forwards then (S13).
+        let keeps_heading = kinematics == Kinematics::Omnidirectional && re.orientation.is_none();
         segments.push(Segment {
             ax: a.x,
             ay: a.y,
             bx: b.x,
             by: b.y,
             length: e.length,
-            heading,
-            reversed: angle_diff(direction, heading).abs() > FRAC_PI_2,
+            heading: (!keeps_heading).then_some(heading),
+            direction,
+            reversed: !keeps_heading && angle_diff(direction, heading).abs() > FRAC_PI_2,
             ride: None,
             max_speed: graph.edge_max_speed(re.edge, &spec.manufacturer, &spec.series_name),
         });
@@ -399,7 +412,9 @@ impl Driver {
         mut times: ActionTimes,
         rides: HashSet<EdgeIdx>,
     ) -> Result<Driver, DriveError> {
-        if spec.kinematics != Kinematics::Differential {
+        // differential and omnidirectional robots are modelled (S63); a car-like
+        // (three-wheel) robot needs curved paths, which are not
+        if spec.kinematics == Kinematics::ThreeWheel {
             return Err(DriveError::UnsupportedKinematics(spec.kinematics));
         }
         let (segments, base_end) = build_segments(graph, spec, start, route, &rides)?;
@@ -692,8 +707,14 @@ impl Driver {
         let held = self.is_held() || self.is_obstructed();
         let stopping = self.is_stopping();
         let stopped = stopping && (self.phase == Phase::Rotating || self.along.v <= 1e-9);
-        let (vx, omega) = match (self.phase, seg) {
-            (Phase::Rotating, _) if stopping => (0.0, 0.0),
+        let (vx, vy, omega) = match (self.phase, seg) {
+            (Phase::Rotating, _) if stopping => (0.0, 0.0, 0.0),
+            // an omnidirectional robot moves sideways as well: the speed along the
+            // edge, in the robot's frame (x forward, y left)
+            (Phase::Driving, Some(s)) if self.spec.kinematics == Kinematics::Omnidirectional => {
+                let rel = s.direction - self.pose.heading;
+                (self.along.v * rel.cos(), self.along.v * rel.sin(), 0.0)
+            }
             (Phase::Driving, Some(s)) => (
                 if s.reversed {
                     -self.along.v
@@ -701,14 +722,17 @@ impl Driver {
                     self.along.v
                 },
                 0.0,
+                0.0,
             ),
             (Phase::Rotating, Some(s)) => (
                 0.0,
-                self.limits
-                    .max_angular_speed
-                    .copysign(angle_diff(self.pose.heading, s.heading)),
+                0.0,
+                self.limits.max_angular_speed.copysign(angle_diff(
+                    self.pose.heading,
+                    s.heading.unwrap_or(self.pose.heading),
+                )),
             ),
-            _ => (0.0, 0.0),
+            _ => (0.0, 0.0, 0.0),
         };
 
         Progress {
@@ -723,6 +747,7 @@ impl Driver {
             held,
             pose: self.pose,
             vx,
+            vy,
             omega,
             actions,
         }
@@ -765,7 +790,12 @@ impl Driver {
         } else {
             match self.segments.get(self.current) {
                 Some(seg) if seg.ride.is_some() => Phase::WaitingForLift,
-                Some(seg) if angle_diff(self.pose.heading, seg.heading).abs() < 1e-9 => {
+                // no heading wanted, or already the heading wanted: drive
+                Some(seg)
+                    if seg
+                        .heading
+                        .is_none_or(|h| angle_diff(self.pose.heading, h).abs() < 1e-9) =>
+                {
                     Phase::Driving
                 }
                 Some(_) => Phase::Rotating,
@@ -801,12 +831,9 @@ impl Driver {
             Phase::Rotating if held => {} // stopped while turning
             Phase::Rotating => {
                 let seg = self.segments[self.current];
-                let (h, done) = rotate(
-                    self.pose.heading,
-                    seg.heading,
-                    self.limits.max_angular_speed,
-                    dt,
-                );
+                let target = seg.heading.expect("a robot turns only towards a heading");
+                let (h, done) =
+                    rotate(self.pose.heading, target, self.limits.max_angular_speed, dt);
                 self.pose.heading = h;
                 if done {
                     self.phase = Phase::Driving;

@@ -5,11 +5,16 @@
 //! `botsim-core` (core knows no file format). Maps, nodes and edges are numbered
 //! by their position in the lists, as in the observer port.
 
+mod geometry;
 mod layout;
 mod reader;
 mod snapshot;
 mod writer;
 
+pub use geometry::{
+    GEOMETRY_VERSION, GeometryError, GeometryFile, GeometryKind, GeometryShape, Outline,
+    StaticShape, Vertex,
+};
 pub use layout::{EdgeRecord, LayoutLine, NodeRecord};
 pub use reader::{ReadError, Reader, Recording, read_recording};
 pub use snapshot::{

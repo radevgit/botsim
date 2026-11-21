@@ -52,7 +52,9 @@
 //! ```toml
 //! [jobs]                         # optional: without it no jobs and no controller
 //! rate_per_hour = 60.0           # average new jobs per simulated hour
-//! nodes = ["A", "C"]             # where jobs start and end (>= 2 different)
+//! nodes = ["A", "C"]             # where jobs start and end (>= 2 different), or
+//! # stations = ["S1", "S2"]       # LIF stations instead (not both); with neither:
+//! #                               # between all the stations of the layout
 //! ```
 //!
 //! ```toml
@@ -256,15 +258,22 @@ fn one_door() -> Vec<String> {
     vec!["front".to_string()]
 }
 
-/// The `[jobs]` section: random transport jobs between the listed nodes,
-/// handled by the baseline controller.
+/// The `[jobs]` section: random transport jobs between the listed nodes or
+/// stations, handled by the baseline controller.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JobsConfig {
     /// Average number of new jobs per simulated hour.
     pub rate_per_hour: f64,
     /// Node ids where jobs start and end (at least two different ones).
+    #[serde(default)]
     pub nodes: Vec<String>,
+    /// Station ids (LIF `stationId`) where jobs start and end (S60): a job goes
+    /// from one station to another, to one of their interaction nodes. Use
+    /// `nodes` **or** `stations`. With neither, jobs go between all the stations
+    /// of the layout.
+    #[serde(default)]
+    pub stations: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -373,7 +382,10 @@ impl Scenario {
         self.start_unix_ms()?;
         if let Some(j) = &self.jobs {
             non_negative("[jobs] rate_per_hour", j.rate_per_hour)?;
-            if j.nodes.len() < 2 {
+            if !j.nodes.is_empty() && !j.stations.is_empty() {
+                return invalid("[jobs] use nodes or stations, not both".into());
+            }
+            if !j.nodes.is_empty() && j.nodes.len() < 2 {
                 return invalid("[jobs] nodes needs at least two nodes".into());
             }
         }
@@ -402,6 +414,43 @@ impl Scenario {
         let Some(j) = &self.jobs else {
             return Ok(None);
         };
+        let too_few =
+            |e: botsim_core::jobs::JobError| ScenarioError::Invalid(format!("[jobs] {e}"));
+        if j.nodes.is_empty() {
+            // between stations: the listed ones, or all of the layout
+            let stations: Vec<usize> = if j.stations.is_empty() {
+                (0..graph.stations.len()).collect()
+            } else {
+                j.stations
+                    .iter()
+                    .map(|id| {
+                        graph.station_idx(id).ok_or_else(|| {
+                            ScenarioError::Invalid(format!(
+                                "[jobs] station \"{id}\" is not in the layout"
+                            ))
+                        })
+                    })
+                    .collect::<Result<_, _>>()?
+            };
+            if stations.len() < 2 {
+                return invalid(
+                    "[jobs] needs `nodes`, or at least two stations (listed or in the layout)"
+                        .into(),
+                );
+            }
+            let places: Vec<Vec<_>> = stations
+                .iter()
+                .map(|&s| graph.stations[s].interaction_nodes.clone())
+                .collect();
+            return JobGenerator::between_places(
+                self.seed,
+                &places,
+                j.rate_per_hour,
+                self.time_step,
+            )
+            .map(Some)
+            .map_err(too_few);
+        }
         let mut nodes = Vec::new();
         for id in &j.nodes {
             match graph.node_idx(id) {
@@ -411,7 +460,7 @@ impl Scenario {
         }
         JobGenerator::new(self.seed, &nodes, j.rate_per_hour, self.time_step)
             .map(Some)
-            .map_err(|e| ScenarioError::Invalid(format!("[jobs] {e}")))
+            .map_err(too_few)
     }
 
     /// `start_time` as milliseconds since the Unix epoch. It must be a full UTC
@@ -459,7 +508,8 @@ impl Scenario {
         let mut world = World::new(graph, self.time_step, self.start_unix_ms()?)
             .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
         if let Some(z) = zones {
-            world.set_zones(z);
+            // the controller sends the zone set to the robots and enables it (S62)
+            world.set_site_zones(z);
         }
         world.set_safety_stop(self.safety_stop);
         if let Some(d) = self.message_delay {

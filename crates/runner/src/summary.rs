@@ -23,7 +23,12 @@ pub struct Summary {
     pub seed: u64,
     pub duration: f64,
     pub time_step: f64,
+    /// The number of steps run: the scenario's duration, or fewer if the run was
+    /// stopped at the first deadlock.
     pub ticks: u64,
+    /// The run ended early because the scenario said `stop_at_first_deadlock` and
+    /// a deadlock was reported (S59).
+    pub stopped_at_first_deadlock: bool,
     /// The collision metric; it must be 0 for a good controller.
     pub collision_count: usize,
     pub collisions: Vec<CollisionSummary>,
@@ -240,6 +245,7 @@ pub fn run_with(
     let mut controller = generator.as_ref().map(|_| Controller::new(&world));
     let mut created = 0;
     let mut clock = StepClock::default();
+    let mut stopped_at_first_deadlock = false;
 
     while world.tick() < ticks {
         // one cycle: new jobs → controller → the world moves
@@ -249,6 +255,10 @@ pub fn run_with(
             clock.time(measure_time, || c.step(&mut world, new));
         }
         world.step();
+        if scenario.stop_at_first_deadlock && !world.deadlocks().is_empty() {
+            stopped_at_first_deadlock = true;
+            break;
+        }
     }
     if let Some(c) = controller.as_mut() {
         // see jobs that finished in the last step
@@ -393,7 +403,8 @@ pub fn run_with(
         seed: scenario.seed,
         duration: scenario.duration,
         time_step: scenario.time_step,
-        ticks,
+        ticks: world.tick(),
+        stopped_at_first_deadlock,
         robots,
     })
 }

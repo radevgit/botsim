@@ -109,7 +109,7 @@ pub fn build_state(
         }),
         velocity: Some(Velocity {
             vx: Some(p.vx),
-            vy: Some(0.0),
+            vy: Some(p.vy),
             omega: Some(p.omega),
         }),
         loads: None,

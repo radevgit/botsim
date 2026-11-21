@@ -32,6 +32,42 @@ fn a_corridor_scenario_deadlocks_and_the_summary_says_who_and_for_how_long() {
     assert_eq!(r.collision_count, 0);
 }
 
+fn with_stop(text: &str) -> String {
+    text.replacen(
+        "deadlock_timeout = 20.0",
+        "deadlock_timeout = 20.0\nstop_at_first_deadlock = true",
+        1,
+    )
+}
+
+#[test]
+fn the_run_can_stop_at_the_first_deadlock_for_debugging() {
+    let full = run_text(&base());
+    assert!(!full.stopped_at_first_deadlock);
+    assert_eq!(full.ticks, 24000, "1200 s at 0.05 s");
+
+    let stopped = run_text(&with_stop(&base()));
+    assert!(stopped.stopped_at_first_deadlock);
+    assert_eq!(stopped.deadlock_count, 1);
+    assert!(stopped.ticks < full.ticks, "{} steps", stopped.ticks);
+    // it ends in the step in which the deadlock was reported, and the deadlock is
+    // the first of the full run
+    let d = &stopped.deadlocks[0];
+    assert!((stopped.ticks as f64 * stopped.time_step - d.detected_time).abs() < 1e-6);
+    assert_eq!(d.robots, full.deadlocks[0].robots);
+    assert_eq!(d.first_seen_time, full.deadlocks[0].first_seen_time);
+    assert_eq!(d.ended_time, None, "it still lasts when the run ends");
+}
+
+#[test]
+fn without_a_deadlock_the_run_goes_on_to_its_end() {
+    let base = base();
+    let text = with_stop(base.split("[jobs]").next().unwrap());
+    let r = run_text(&text);
+    assert!(!r.stopped_at_first_deadlock);
+    assert_eq!(r.ticks, 24000);
+}
+
 #[test]
 fn without_jobs_there_is_no_deadlock() {
     // no [jobs] section: the robots stand still

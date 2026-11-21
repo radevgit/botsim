@@ -59,6 +59,9 @@ pub struct RobotSpec {
     /// Reported in the run summary.
     pub angular_speed_is_default: bool,
     pub shape: Shape,
+    /// The factsheet this spec was made from; the robot sends it as its
+    /// `factsheet` message ([`crate::world::World::factsheet`], S61).
+    pub factsheet: Factsheet,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -174,6 +177,7 @@ impl RobotSpec {
             limits,
             angular_speed_is_default,
             shape: body_shape(f)?,
+            factsheet: f.clone(),
         })
     }
 }

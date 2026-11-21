@@ -115,12 +115,14 @@ fn rejects_unconnected_route_and_unsupported_kinematics() {
     .unwrap_err();
     assert_eq!(err, DriveError::NotConnected { edge: "B-C".into() });
 
+    // a car-like robot needs curved paths, which are not modelled (S63: the
+    // omnidirectional robot is, see omnidirectional.rs)
     let mut s = spec();
-    s.kinematics = Kinematics::Omnidirectional;
+    s.kinematics = Kinematics::ThreeWheel;
     let err = Driver::new(&g, &s, start, 0.0, &route(&g)).unwrap_err();
     assert_eq!(
         err,
-        DriveError::UnsupportedKinematics(Kinematics::Omnidirectional)
+        DriveError::UnsupportedKinematics(Kinematics::ThreeWheel)
     );
 }
 
