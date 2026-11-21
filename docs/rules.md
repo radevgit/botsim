@@ -121,8 +121,9 @@ LIF 2.0 (layouts).
   snapshots. Without an observer no snapshot is built.
 - The baseline controller publishes its reservations to the observer; any
   controller can do the same.
-- Not in it yet (not built yet): stations, zones, RELEASE zone requests, lifts
-  and doors. A recording file or a viewer will be an adapter later.
+- Lifts and doors are in the snapshot (state, queue, edges). Not in it yet:
+  stations, zones (they are not part of the layout the observer gets), RELEASE
+  zone requests. A recording file or a viewer will be an adapter later.
 
 ## 7c. Zones (VDA 5050 zone set)
 
@@ -515,8 +516,62 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 
 ## 12. Known simplifications (not modelled yet)
 
-Stops at every node; differential drive only; straight edges only; one map
-identified by `mapId` only; rotation restrictions at nodes; node orientation
-and deviation; edge actions; other instant actions; operating modes; state
-message timing; horizon actions; lifts and doors; disturbances; deadlock
-resolution (controller side); the Rerun recording.
+Stops at every node; differential drive only; straight edges only; per-robot-type
+edge properties of the LIF (paths, speeds, corridors); rotation restrictions at
+nodes; node orientation and deviation; edge actions; other instant actions;
+operating modes; state message timing and message delay; horizon actions;
+breakdowns; the onboard safety stop (robots never stop for each other, so
+controller mistakes show as collisions); deadlock resolution (controller side);
+a debug stop at the first deadlock; stations in the layout; the viewer (the
+Rerun recording was dropped, U5). Lifts hold one robot and doors are tied to
+edges (§7g, §7h).
+
+## 13. Speed and scale (**S52**)
+
+The brief's target is about 1,000 robots. Measured with
+`cargo run --release -p botsim-runner --example scale -- <robots> <side> <seconds> <jobs per robot per hour>`
+(a one-way Manhattan grid with 6 m between nodes, 0.05 s steps, one thread):
+
+| Robots | Grid | Before | After |
+|---|---|---|---|
+| 1000, idle | 50 × 50 | 65 ms per step | 3 ms |
+| 1000, busy | 50 × 50 | 102 ms per step (0.5 × real time) | 5–17 ms (3 – 10 × real time) |
+| 1000, busy | 100 × 100 | not measured | 11 ms (4.5 × real time) |
+| 100 | 30 × 30 | 1.4 ms | 0.3 ms |
+
+What was slow, and what was done:
+- **Collisions:** every pair of robots was tested (500,000 pairs at 1,000 robots,
+  18 ms). Now a **broad phase** with the `aabb` index (a bounding box per robot,
+  rebuilt every step; robots in a lift cabin are left out; one tree for all
+  floors, the floor is compared in the exact test) hands only robots with
+  meeting boxes to the exact test. The boxes are padded by 1 µm so that touching
+  robots are never missed. The result and its order are the same as before
+  (tested against all pairs).
+- **Which node a robot stands on** (controller, several times per cycle) scanned
+  every node. Now a grid of 1 m cells (`NodeGrid`); same answer (tested).
+- **Dispatch:** a path search per free robot per job. Now **one search backwards
+  from the pickup** gives the route length from every node; only the chosen robot
+  gets a plan. The nearest robot is chosen as before (equal distance, to a
+  nanometre: the robot added first). A job whose drop cannot be reached from its
+  pickup is recognised once and waits (before, it was retried against every free
+  robot in every cycle). Note: the distance used to choose the robot is the plain
+  shortest route; a detour through a lift waiting node (§9) is not counted.
+- **Deadlock check:** "who stands on my next node" looked at every robot; now a
+  grid of the robots' positions.
+
+What is still the biggest cost at 1,000 robots (about 6 + 5 ms per step): the
+VDA 5050 state message is built for every robot twice per step (once by the
+controller, once by the deadlock check).
+
+**Observer cost** (the `aabb` change does not touch the observer; measured
+separately, 1,000 robots on 100 × 100, an observer that only counts): no
+observer 5.4 ms per step; a snapshot every step (0.05 s) 7.1 ms (+1.7 ms);
+every 0.5 s 5.7 ms; every 2 s about 5.7–6.3 ms (within the noise of the
+measurement, ±0.5 ms). So a viewer should not take a snapshot every step at this
+size; the snapshot interval (§7b) exists for that.
+
+**Result worth knowing:** with 1,000 robots on 2,500 nodes (40 % of the nodes)
+the baseline gridlocks: in 100 s of simulated time 6 of 1,659 jobs were done and
+9 deadlocks were reported, with 0 collisions. The baseline reserves nodes first
+come first served and cannot resolve a deadlock. At 1,000 robots on 10,000 nodes
+no deadlock was reported in 120 s.

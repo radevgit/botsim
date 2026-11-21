@@ -5,6 +5,7 @@
 pub mod controller;
 pub mod doors;
 pub mod lifts;
+pub mod node_grid;
 pub mod order_builder;
 pub mod reservations;
 pub mod route;

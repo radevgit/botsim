@@ -18,6 +18,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use aabb::prelude::AABB;
+use togo::prelude::{circle_bounding_rect, orect_bounding_rect};
+
 use vda5050::instant_actions::InstantActions;
 use vda5050::order::Order;
 use vda5050::state::State;
@@ -175,6 +178,8 @@ pub struct World {
     door_of_edge: HashMap<EdgeIdx, usize>,
     /// Passage width of the doors by edge id (for robots added later).
     door_widths: HashMap<String, f64>,
+    /// Broad phase of the collision check (S52): rebuilt every step.
+    broad: AABB,
 }
 
 /// A deadlock: robots waiting for each other in a cycle (see [`crate::deadlock`]).
@@ -228,6 +233,7 @@ impl World {
             doors: Vec::new(),
             door_of_edge: HashMap::new(),
             door_widths: HashMap::new(),
+            broad: AABB::new(),
         })
     }
 
@@ -880,6 +886,16 @@ impl World {
                 p
             })
             .collect();
+        // Robots by 1 m grid cell (S52), so that "who stands on this node" looks at
+        // a few cells and not at every robot. START_NODE_TOLERANCE is under 1 m.
+        let cell = |v: f64| (v / 1.0).floor() as i64;
+        let mut by_cell: HashMap<(usize, i64, i64), Vec<usize>> = HashMap::new();
+        for (j, p) in poses.iter().enumerate() {
+            by_cell
+                .entry((p.map, cell(p.x), cell(p.y)))
+                .or_default()
+                .push(j);
+        }
         let waits_for: Vec<Option<usize>> = self
             .robots
             .iter()
@@ -891,11 +907,23 @@ impl World {
                     return None;
                 }
                 let node = &self.graph.nodes[self.graph.node_idx(&next.node_id)?];
-                (0..poses.len()).find(|&j| {
-                    j != i
-                        && poses[j].map == node.map
-                        && (poses[j].x - node.x).hypot(poses[j].y - node.y) <= START_NODE_TOLERANCE
-                })
+                // the robot with the lowest index on the node (within the tolerance)
+                let (cx, cy) = (cell(node.x), cell(node.y));
+                (-1..=1)
+                    .flat_map(|dx| (-1..=1).map(move |dy| (dx, dy)))
+                    .flat_map(|(dx, dy)| {
+                        by_cell
+                            .get(&(node.map, cx + dx, cy + dy))
+                            .into_iter()
+                            .flatten()
+                    })
+                    .copied()
+                    .filter(|&j| {
+                        j != i
+                            && (poses[j].x - node.x).hypot(poses[j].y - node.y)
+                                <= START_NODE_TOLERANCE
+                    })
+                    .min()
             })
             .collect();
         self.deadlocks.observe(self.tick, &waits_for);
@@ -921,10 +949,51 @@ impl World {
                 (!e.robot.is_riding()).then(|| (p.map, place(e.robot.shape(), p.x, p.y, p.heading)))
             })
             .collect();
+        // Broad phase (S52): an `aabb` index of the bounding boxes, rebuilt every
+        // step; only robots whose boxes meet go to the narrow phase. The boxes are
+        // padded a little so that touching bodies (an overlap) are never missed.
+        const PAD: f64 = 1e-6;
+        self.broad.clear();
+        let mut robot_of: Vec<usize> = Vec::new(); // tree id → robot index
+        let mut boxes: Vec<(f64, f64, f64, f64)> = Vec::new(); // by robot index
+        for (i, b) in bodies.iter().enumerate() {
+            let (x0, y0, x1, y1) = match b {
+                Some((_, Body::Rect(r))) => {
+                    let b = orect_bounding_rect(r);
+                    (b.p1.x, b.p1.y, b.p2.x, b.p2.y)
+                }
+                Some((_, Body::Circle(c))) => {
+                    let b = circle_bounding_rect(c);
+                    (b.p1.x, b.p1.y, b.p2.x, b.p2.y)
+                }
+                None => {
+                    boxes.push((0.0, 0.0, 0.0, 0.0));
+                    continue;
+                }
+            };
+            let bx = (x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD);
+            boxes.push(bx);
+            self.broad.add(bx.0, bx.1, bx.2, bx.3);
+            robot_of.push(i);
+        }
+        self.broad.build();
+
         let mut now = HashSet::new();
-        for i in 0..bodies.len() {
-            for j in i + 1..bodies.len() {
-                let (Some(a), Some(b)) = (&bodies[i], &bodies[j]) else {
+        let mut hits = Vec::new();
+        let mut partners: Vec<usize> = Vec::new();
+        for &i in &robot_of {
+            let (Some(a), bx) = (&bodies[i], boxes[i]) else {
+                continue;
+            };
+            self.broad
+                .query_intersecting(bx.0, bx.1, bx.2, bx.3, &mut hits);
+            // only later robots, in order: the same pairs in the same order as
+            // checking every pair
+            partners.clear();
+            partners.extend(hits.iter().map(|&h| robot_of[h]).filter(|&j| j > i));
+            partners.sort_unstable();
+            for &j in &partners {
+                let Some(b) = &bodies[j] else {
                     continue;
                 };
                 if a.0 == b.0 && overlap(&a.1, &b.1) {

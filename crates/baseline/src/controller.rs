@@ -38,7 +38,7 @@
 use std::collections::VecDeque;
 
 use botsim_core::errors::ErrorType;
-use botsim_core::graph::{Graph, NodeIdx};
+use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_core::jobs::Job;
 use botsim_core::metrics::{Metrics, is_waiting, summarize};
 use botsim_core::robot::Reception;
@@ -47,8 +47,10 @@ use vda5050::state::{ActionStatus, State};
 
 use crate::doors::DoorDesk;
 use crate::lifts::{LiftDesk, LiftRobot};
+use crate::node_grid::NodeGrid;
 use crate::order_builder::{OrderHeader, Plan, RELEASE_WINDOW, build_order};
 use crate::reservations::Reservations;
+use crate::route::{distances_to, in_edges};
 use crate::zone_grants::{RobotView, ZoneGrants};
 use vda5050::responses::Responses;
 
@@ -111,6 +113,12 @@ pub struct Controller {
     lifts: LiftDesk,
     /// Guarded edges in the routes: who owns which door (see [`crate::doors`]).
     doors: DoorDesk,
+    /// Which node a position is on (S52).
+    node_grid: NodeGrid,
+    /// The edges into each node, for the route lengths to a pickup (S52).
+    in_edges: Vec<Vec<EdgeIdx>>,
+    /// Jobs whose drop cannot be reached from their pickup (they wait for ever).
+    unserviceable: std::collections::HashSet<u64>,
 }
 
 impl Controller {
@@ -135,6 +143,9 @@ impl Controller {
             zone_grants: world.zones().cloned().map(ZoneGrants::new),
             lifts: LiftDesk::new(world),
             doors: DoorDesk::new(world),
+            node_grid: NodeGrid::new(world.graph()),
+            in_edges: in_edges(world.graph()),
+            unserviceable: std::collections::HashSet::new(),
         }
     }
 
@@ -357,20 +368,42 @@ impl Controller {
 
         let mut waiting = VecDeque::new();
         while let Some(job) = self.pending.pop_front() {
-            // the nearest free robot that can do the job
-            let best = free
+            if free.is_empty() {
+                waiting.push_back(job); // nobody to give it to: no search needed
+                continue;
+            }
+            // A job whose drop cannot be reached from its pickup cannot be done by
+            // any robot; the layout does not change, so ask only once (S52: it was
+            // retried against every free robot in every cycle).
+            if self.unserviceable.contains(&job.id) {
+                waiting.push_back(job);
+                continue;
+            }
+            if self.lifts.route(job.pickup, job.drop).is_none() {
+                self.unserviceable.insert(job.id);
+                waiting.push_back(job);
+                continue;
+            }
+            // The nearest free robot that can do the job. One search backwards
+            // from the pickup gives the route length from every node (S52), so
+            // a job costs one search, not one per free robot.
+            let dist = distances_to(&self.graph, &self.in_edges, job.pickup);
+            // smallest distance (to a nanometre); equal distance → the robot added first
+            let mut order: Vec<(i64, usize, usize)> = free
                 .iter()
                 .enumerate()
-                .filter_map(|(k, &(i, node))| {
-                    let plan =
-                        Plan::for_job_with(&self.graph, node, &job, |a, b| self.lifts.route(a, b))?;
-                    let to_pickup = self.lifts.route(node, job.pickup)?;
-                    let d: f64 = to_pickup.iter().map(|&e| self.graph.edges[e].length).sum();
-                    Some((d, i, k, plan))
-                })
-                // smallest distance; equal distance → the robot added first
-                .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-            let Some((_, i, k, plan)) = best else {
+                .filter(|&(_, &(_, node))| dist[node].is_finite())
+                .map(|(k, &(i, node))| ((dist[node] * 1e9).round() as i64, i, k))
+                .collect();
+            order.sort_unstable();
+            // the first robot in that order that has a plan for the job
+            let chosen = order.iter().find_map(|&(_, i, k)| {
+                let (_, node) = free[k];
+                let plan =
+                    Plan::for_job_with(&self.graph, node, &job, |a, b| self.lifts.route(a, b))?;
+                Some((i, k, plan))
+            });
+            let Some((i, k, plan)) = chosen else {
                 waiting.push_back(job);
                 continue;
             };
@@ -433,15 +466,7 @@ impl Controller {
     fn node_of(&self, state: &State) -> Option<NodeIdx> {
         let p = state.mobile_robot_position.as_ref()?;
         let map = self.graph.map_idx(&p.map_id)?;
-        self.graph
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| n.map == map)
-            .map(|(k, n)| (k, (n.x - p.x).hypot(n.y - p.y)))
-            .filter(|&(_, d)| d <= NODE_TOLERANCE)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(k, _)| k)
+        self.node_grid.node_near(map, p.x, p.y, NODE_TOLERANCE)
     }
 }
 
