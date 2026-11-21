@@ -26,7 +26,7 @@ fn ticks_cover_the_duration() {
 fn the_summary_describes_where_the_robots_are() {
     let s = Scenario::load(&data().join("two_robots.toml")).unwrap();
     let world = s.build_world(&data()).unwrap();
-    let r = summary::run(&s, world);
+    let r = summary::run(&s, world).unwrap();
     assert_eq!(
         (r.scenario.as_str(), r.seed, r.ticks),
         ("two-robots", 1, 1200)

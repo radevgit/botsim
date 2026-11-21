@@ -1,0 +1,24 @@
+# A one-way ring of four nodes (20 m sides), two robots, random transport jobs.
+# Run it from the repository root:
+#   cargo run --release -p botsim-runner -- scenarios/ring_jobs.toml
+name = "ring-jobs"
+seed = 7                      # same seed = same jobs = same result
+duration = 1800.0             # simulated seconds
+time_step = 0.05              # seconds per step
+start_time = 2026-11-20T10:00:00Z
+lif = "ring.lif.json"         # paths are relative to this file
+
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "R"           # serial numbers R-001, R-002
+factsheet = "diff_robot.factsheet.json"
+start_nodes = ["N0", "N2"]    # one robot per entry
+action_time = 1.0             # seconds for any action ...
+
+[robot.action_times]          # ... except these
+pick = 5.0
+drop = 5.0
+
+[jobs]
+rate_per_hour = 60.0          # average new jobs per hour
+nodes = ["N0", "N1", "N2", "N3"]

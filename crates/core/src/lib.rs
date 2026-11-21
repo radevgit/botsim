@@ -4,10 +4,12 @@
 
 pub mod actions;
 pub mod collision;
+pub mod deadlock;
 pub mod drive;
 pub mod errors;
 pub mod graph;
 pub mod jobs;
+pub mod metrics;
 pub mod motion;
 pub mod order_route;
 pub mod orientation;

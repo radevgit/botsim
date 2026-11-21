@@ -31,6 +31,6 @@ fn run(path: &Path) -> Result<String, String> {
     // layout and factsheet paths are relative to the scenario file
     let base = path.parent().unwrap_or(Path::new("."));
     let world = scenario.build_world(base).map_err(|e| e.to_string())?;
-    let result = summary::run(&scenario, world);
+    let result = summary::run(&scenario, world).map_err(|e| e.to_string())?;
     serde_json::to_string_pretty(&result).map_err(|e| e.to_string())
 }

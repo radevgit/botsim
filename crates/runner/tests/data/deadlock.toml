@@ -1,0 +1,20 @@
+name = "corridor-deadlock"
+seed = 1
+duration = 1200.0
+time_step = 0.05
+start_time = 2026-11-20T10:00:00Z
+lif = "corridor.lif.json"
+deadlock_timeout = 20.0
+
+# A two-way corridor with one robot at each end: when two jobs run in opposite
+# directions the robots meet in the middle and block each other.
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "R"
+factsheet = "diff_robot.factsheet.json"
+start_nodes = ["A", "C"]
+action_time = 1.0
+
+[jobs]
+rate_per_hour = 120.0
+nodes = ["A", "C"]

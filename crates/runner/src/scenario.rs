@@ -8,6 +8,7 @@
 //! time_step = 0.05               # seconds; there is deliberately no default
 //! start_time = 2026-11-20T10:00:00Z   # tick 0 in message timestamps (UTC)
 //! lif = "layout.lif.json"        # paths are relative to this file
+//! deadlock_timeout = 30.0        # optional; seconds, default 30
 //!
 //! [[robot]]                      # a group of robots of one type
 //! manufacturer = "ACME"
@@ -20,7 +21,16 @@
 //! pick = 3.0
 //! ```
 //!
-//! Not yet: zone sets, jobs, disturbances, the controller to use.
+//! ```toml
+//! [jobs]                         # optional: without it no jobs and no controller
+//! rate_per_hour = 60.0           # average new jobs per simulated hour
+//! nodes = ["A", "C"]             # where jobs start and end (>= 2 different)
+//! ```
+//!
+//! With `[jobs]` the bundled baseline controller runs: the seed (above) fixes
+//! the random jobs, so a run is repeatable.
+//!
+//! Not yet: zone sets, disturbances, a choice of controller.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -28,11 +38,16 @@ use std::path::{Path, PathBuf};
 
 use botsim_core::actions::ActionTimes;
 use botsim_core::graph::Graph;
+use botsim_core::jobs::JobGenerator;
 use botsim_core::spec::RobotSpec;
 use botsim_core::world::{RobotId, World, unix_ms_from_utc};
 use serde::Deserialize;
 use vda5050::factsheet::Factsheet;
 use vdma_lif::Lif;
+
+/// How long `pick` and `drop` take if `[robot.action_times]` does not list them
+/// (user decision S30).
+pub const DEFAULT_PICK_DROP_SECONDS: f64 = 5.0;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,6 +61,24 @@ pub struct Scenario {
     pub lif: PathBuf,
     #[serde(rename = "robot")]
     pub robots: Vec<RobotGroup>,
+    /// Without this section no jobs are created and no controller runs.
+    #[serde(default)]
+    pub jobs: Option<JobsConfig>,
+    /// Seconds a cycle of robots waiting for each other must last to count as a
+    /// deadlock; default 30 (S35).
+    #[serde(default)]
+    pub deadlock_timeout: Option<f64>,
+}
+
+/// The `[jobs]` section: random transport jobs between the listed nodes,
+/// handled by the baseline controller.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JobsConfig {
+    /// Average number of new jobs per simulated hour.
+    pub rate_per_hour: f64,
+    /// Node ids where jobs start and end (at least two different ones).
+    pub nodes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -126,7 +159,16 @@ impl Scenario {
     fn check(&self) -> Result<(), ScenarioError> {
         positive("duration", self.duration)?;
         positive("time_step", self.time_step)?;
+        if let Some(t) = self.deadlock_timeout {
+            positive("deadlock_timeout", t)?;
+        }
         self.start_unix_ms()?;
+        if let Some(j) = &self.jobs {
+            non_negative("[jobs] rate_per_hour", j.rate_per_hour)?;
+            if j.nodes.len() < 2 {
+                return invalid("[jobs] nodes needs at least two nodes".into());
+            }
+        }
         if self.robots.is_empty() {
             return invalid("at least one [[robot]] group is needed".into());
         }
@@ -144,6 +186,24 @@ impl Scenario {
             }
         }
         Ok(())
+    }
+
+    /// The job generator for this scenario's `[jobs]` section (seeded with the
+    /// scenario seed), or `None` without that section.
+    pub fn job_generator(&self, graph: &Graph) -> Result<Option<JobGenerator>, ScenarioError> {
+        let Some(j) = &self.jobs else {
+            return Ok(None);
+        };
+        let mut nodes = Vec::new();
+        for id in &j.nodes {
+            match graph.node_idx(id) {
+                Some(n) => nodes.push(n),
+                None => return invalid(format!("[jobs] node \"{id}\" is not in the layout")),
+            }
+        }
+        JobGenerator::new(self.seed, &nodes, j.rate_per_hour, self.time_step)
+            .map(Some)
+            .map_err(|e| ScenarioError::Invalid(format!("[jobs] {e}")))
     }
 
     /// `start_time` as milliseconds since the Unix epoch. It must be a full UTC
@@ -178,6 +238,9 @@ impl Scenario {
 
         let mut world = World::new(graph, self.time_step, self.start_unix_ms()?)
             .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
+        if let Some(t) = self.deadlock_timeout {
+            world.set_deadlock_timeout(t);
+        }
 
         for (gi, g) in self.robots.iter().enumerate() {
             let path = base_dir.join(&g.factsheet);
@@ -186,7 +249,10 @@ impl Scenario {
                 path: path.clone(),
                 message: e.to_string(),
             })?;
-            let mut times = ActionTimes::new(g.action_time);
+            // transport jobs use `pick` and `drop`: 5 s unless the scenario says otherwise
+            let mut times = ActionTimes::new(g.action_time)
+                .with("pick", DEFAULT_PICK_DROP_SECONDS)
+                .with("drop", DEFAULT_PICK_DROP_SECONDS);
             for (t, v) in &g.action_times {
                 times = times.with(t, *v);
             }

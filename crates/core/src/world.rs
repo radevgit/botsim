@@ -24,9 +24,11 @@ use vda5050::state::State;
 
 use crate::actions::ActionTimes;
 use crate::collision::{Body, overlap, place};
+use crate::deadlock::{DEFAULT_TIMEOUT_SECONDS, DeadlockDetector};
 use crate::drive::{DriveError, Pose};
 use crate::graph::{Graph, NodeIdx};
-use crate::robot::{Reception, Robot};
+use crate::metrics::is_waiting;
+use crate::robot::{Reception, Robot, START_NODE_TOLERANCE};
 use crate::spec::RobotSpec;
 use crate::state_report::Header;
 
@@ -99,6 +101,19 @@ pub struct World {
     collisions: Vec<Collision>,
     /// Robot index pairs that overlapped after the last step.
     touching: HashSet<(usize, usize)>,
+    deadlocks: DeadlockDetector,
+}
+
+/// A deadlock: robots waiting for each other in a cycle (see [`crate::deadlock`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Deadlock {
+    /// The robots in the cycle, in the order they were added.
+    pub robots: Vec<RobotId>,
+    pub first_seen_tick: u64,
+    /// When it had lasted for the timeout and was reported.
+    pub detected_tick: u64,
+    /// `None` if it still lasts.
+    pub ended_tick: Option<u64>,
 }
 
 /// Two robots started to overlap.
@@ -126,7 +141,32 @@ impl World {
             robots: Vec::new(),
             collisions: Vec::new(),
             touching: HashSet::new(),
+            deadlocks: DeadlockDetector::new(DEFAULT_TIMEOUT_SECONDS, dt),
         })
+    }
+
+    /// How long a cycle of waiting robots must last to be a deadlock (default
+    /// 30 s). Call it before the run; it forgets deadlocks seen so far.
+    pub fn set_deadlock_timeout(&mut self, seconds: f64) {
+        self.deadlocks = DeadlockDetector::new(seconds, self.dt);
+    }
+
+    /// All deadlocks reported so far, oldest first.
+    pub fn deadlocks(&self) -> Vec<Deadlock> {
+        self.deadlocks
+            .records()
+            .iter()
+            .map(|r| Deadlock {
+                robots: r
+                    .robots
+                    .iter()
+                    .map(|&i| self.robots[i].id.clone())
+                    .collect(),
+                first_seen_tick: r.first_seen_tick,
+                detected_tick: r.detected_tick,
+                ended_tick: r.ended_tick,
+            })
+            .collect()
     }
 
     pub fn graph(&self) -> &Graph {
@@ -191,6 +231,39 @@ impl World {
         }
         self.tick += 1;
         self.check_collisions();
+        self.check_deadlocks();
+    }
+
+    /// Who waits for whom, from the robots' state messages (the rule is in
+    /// [`crate::deadlock`]).
+    fn check_deadlocks(&mut self) {
+        let header = Header {
+            header_id: 0,
+            timestamp: String::new(),
+            version: PROTOCOL_VERSION.to_string(),
+            manufacturer: String::new(),
+            serial_number: String::new(),
+        };
+        let poses: Vec<Pose> = self.robots.iter().map(|e| e.robot.pose()).collect();
+        let waits_for: Vec<Option<usize>> = self
+            .robots
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let state = e.robot.state(&self.graph, &header);
+                let next = state.node_states.first()?;
+                if !is_waiting(&state) {
+                    return None;
+                }
+                let node = &self.graph.nodes[self.graph.node_idx(&next.node_id)?];
+                (0..poses.len()).find(|&j| {
+                    j != i
+                        && poses[j].map == node.map
+                        && (poses[j].x - node.x).hypot(poses[j].y - node.y) <= START_NODE_TOLERANCE
+                })
+            })
+            .collect();
+        self.deadlocks.observe(self.tick, &waits_for);
     }
 
     /// All collisions so far, oldest first. One entry per contact: it is added

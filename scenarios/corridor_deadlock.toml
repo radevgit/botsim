@@ -1,0 +1,21 @@
+# A two-way corridor A - B - C with one robot at each end. When two jobs run in
+# opposite directions the robots meet and block each other: a deadlock.
+#   cargo run --release -p botsim-runner -- scenarios/corridor_deadlock.toml
+name = "corridor-deadlock"
+seed = 1
+duration = 1200.0
+time_step = 0.05
+start_time = 2026-11-20T10:00:00Z
+lif = "corridor.lif.json"
+deadlock_timeout = 20.0       # seconds a waiting cycle must last (default 30)
+
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "R"
+factsheet = "diff_robot.factsheet.json"
+start_nodes = ["A", "C"]
+action_time = 1.0
+
+[jobs]
+rate_per_hour = 120.0
+nodes = ["A", "C"]

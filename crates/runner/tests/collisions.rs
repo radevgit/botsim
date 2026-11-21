@@ -11,7 +11,7 @@ fn data() -> PathBuf {
 #[test]
 fn a_run_without_collisions_reports_zero() {
     let s = Scenario::load(&data().join("two_robots.toml")).unwrap();
-    let r = summary::run(&s, s.build_world(&data()).unwrap());
+    let r = summary::run(&s, s.build_world(&data()).unwrap()).unwrap();
     assert_eq!(r.collision_count, 0);
     assert!(r.collisions.is_empty());
 }
@@ -19,7 +19,7 @@ fn a_run_without_collisions_reports_zero() {
 #[test]
 fn collisions_are_counted_and_listed() {
     let s = Scenario::load(&data().join("overlap.toml")).unwrap();
-    let r = summary::run(&s, s.build_world(&data()).unwrap());
+    let r = summary::run(&s, s.build_world(&data()).unwrap()).unwrap();
     assert_eq!(r.collision_count, 1, "one contact, not one per step");
     let c = &r.collisions[0];
     assert_eq!(c.tick, 1);

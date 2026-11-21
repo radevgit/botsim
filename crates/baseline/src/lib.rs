@@ -2,4 +2,7 @@
 //! served, node-by-node release (see the brief). It talks to the simulator only
 //! through VDA 5050 messages, like any other controller.
 
+pub mod controller;
+pub mod order_builder;
+pub mod reservations;
 pub mod route;

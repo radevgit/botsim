@@ -1,0 +1,17 @@
+name = "ring-jobs"
+seed = 7
+duration = 2400.0
+time_step = 0.05
+start_time = 2026-11-20T10:00:00Z
+lif = "ring.lif.json"
+
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "R"
+factsheet = "diff_robot.factsheet.json"
+start_nodes = ["N0", "N2"]
+action_time = 1.0
+
+[jobs]
+rate_per_hour = 120.0
+nodes = ["N0", "N1", "N2", "N3"]
