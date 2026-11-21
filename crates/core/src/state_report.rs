@@ -154,7 +154,8 @@ pub fn build_state(
         information: None,
         safety_state: SafetyState {
             active_emergency_stop: EmergencyStop::None,
-            field_violation: false,
+            // a robot held by an obstacle or a disturbance reports a field violation
+            field_violation: p.held,
         },
     }
 }

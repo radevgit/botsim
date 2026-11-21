@@ -42,6 +42,8 @@ use vda5050::state::{ActionStatus, State};
 use crate::order_builder::{OrderHeader, Plan, RELEASE_WINDOW, build_order};
 use crate::reservations::Reservations;
 use crate::route::shortest_path;
+use crate::zone_grants::{RobotView, ZoneGrants};
+use vda5050::responses::Responses;
 
 /// How close (metres) a robot must be to a node to count as standing on it.
 pub const NODE_TOLERANCE: f64 = 0.1;
@@ -82,6 +84,8 @@ struct Slot {
     id: RobotId,
     work: Option<Work>,
     header_id: u32,
+    /// `headerId` of the next `responses` message to this robot.
+    response_header_id: u32,
 }
 
 #[derive(Debug)]
@@ -94,6 +98,8 @@ pub struct Controller {
     /// The tick of the previous control cycle.
     last_tick: u64,
     reservations: Reservations,
+    /// Answers to RELEASE zone requests; `None` if the run has no zones.
+    zone_grants: Option<ZoneGrants>,
 }
 
 impl Controller {
@@ -108,12 +114,14 @@ impl Controller {
                     id: id.clone(),
                     work: None,
                     header_id: 0,
+                    response_header_id: 0,
                 })
                 .collect(),
             completed: Vec::new(),
             rejected: Vec::new(),
             last_tick: world.tick(),
             reservations: Reservations::new(world.graph()),
+            zone_grants: world.zones().cloned().map(ZoneGrants::new),
         }
     }
 
@@ -174,7 +182,13 @@ impl Controller {
                 self.reservations.reserve_node(n, i);
             }
         }
+        self.answer_zone_requests(world, &states);
         self.dispatch(world, &states, tick);
+
+        // tell the observer what is reserved (only if someone watches)
+        if world.observing() {
+            world.publish_reservations(self.reservations.to_observer());
+        }
     }
 
     /// Release more of the route, or finish the job, for robot `i`.
@@ -239,6 +253,46 @@ impl Controller {
                 Ok(Reception::Accepted) => work.released_through = rt,
                 other => panic!("the robot refused an order update: {other:?}"),
             }
+        }
+    }
+
+    /// Answer the RELEASE zone requests the robots state (see [`crate::zone_grants`]).
+    fn answer_zone_requests(&mut self, world: &mut World, states: &[State]) {
+        let Some(grants) = self.zone_grants.as_mut() else {
+            return;
+        };
+        let views: Vec<RobotView> = states
+            .iter()
+            .map(|s| RobotView {
+                requests: s.zone_requests.clone().unwrap_or_default(),
+                position: s
+                    .mobile_robot_position
+                    .as_ref()
+                    .and_then(|p| self.graph.map_idx(&p.map_id).map(|m| (m, p.x, p.y))),
+            })
+            .collect();
+        let answers = grants.decide(&views);
+        // one `responses` message per robot
+        for (i, slot) in self.robots.iter_mut().enumerate() {
+            let mine: Vec<_> = answers
+                .iter()
+                .filter(|a| a.robot == i)
+                .map(|a| serde_json::json!({"requestId": a.request_id, "grantType": a.grant}))
+                .collect();
+            if mine.is_empty() {
+                continue;
+            }
+            let msg: Responses = serde_json::from_value(serde_json::json!({
+                "headerId": slot.response_header_id,
+                "timestamp": world.timestamp(),
+                "version": botsim_core::world::PROTOCOL_VERSION,
+                "manufacturer": slot.id.manufacturer,
+                "serialNumber": slot.id.serial_number,
+                "responses": mine,
+            }))
+            .expect("the message has all required fields");
+            slot.response_header_id += 1;
+            world.send_responses(&msg).expect("the robot exists");
         }
     }
 

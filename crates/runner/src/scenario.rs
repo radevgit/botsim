@@ -9,6 +9,20 @@
 //! start_time = 2026-11-20T10:00:00Z   # tick 0 in message timestamps (UTC)
 //! lif = "layout.lif.json"        # paths are relative to this file
 //! deadlock_timeout = 30.0        # optional; seconds, default 30
+//! zone_set = "zones.json"        # optional VDA 5050 zone set; loaded and checked only
+//!
+//! [[lift]]                       # optional, any number: a lift between maps
+//! id = "L1"
+//! floors = ["Map_Z-Level_1", "Map_Z-Level_2"]   # mapIds, lowest first, >= 2
+//! doors = ["front", "rear"]      # optional, default: ["front"]; one open at a time
+//! start_floor = "Map_Z-Level_1"  # optional, default: the first floor
+//! travel_seconds_per_floor = 5.0
+//! door_open_seconds = 3.0
+//! door_close_seconds = 3.0
+//! door_hold_seconds = 20.0       # optional: the door closes by itself after this
+//! ```
+//!
+//! ```toml
 //!
 //! [[robot]]                      # a group of robots of one type
 //! manufacturer = "ACME"
@@ -17,6 +31,8 @@
 //! start_nodes = ["A", "B"]       # one per robot, so this also sets the count
 //! start_heading = 0.0            # optional, radians, default 0
 //! action_time = 2.0              # seconds an action takes, unless listed below
+//! zone_requests = "on_release"   # optional: when to request a RELEASE zone:
+//!                                # "on_release" (default) or "on_horizon"
 //! [robot.action_times]           # optional, per action type
 //! pick = 3.0
 //! ```
@@ -27,22 +43,38 @@
 //! nodes = ["A", "C"]             # where jobs start and end (>= 2 different)
 //! ```
 //!
+//! ```toml
+//! [disturbances]                 # optional: without it nothing is disturbed
+//! enabled = true                 # switch; false turns the values off
+//! speed_variation = 0.05         # each robot's top speed is lowered by 0 to 5 %
+//! action_variation = 0.2         # every action takes up to 20 % longer (0 = none)
+//! stops_per_hour = 2.0           # random short stops per hour of driving (0 = none)
+//! stop_seconds_min = 5.0         # a stop lasts between these (defaults 5 and 15)
+//! stop_seconds_max = 15.0
+//! ```
+//!
 //! With `[jobs]` the bundled baseline controller runs: the seed (above) fixes
 //! the random jobs, so a run is repeatable.
 //!
-//! Not yet: zone sets, disturbances, a choice of controller.
+//! Not yet: a choice of controller; robots riding a lift (the lift only exists
+//! as a peripheral that the controller can call).
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use botsim_core::actions::ActionTimes;
+use botsim_core::disturbances::{Disturbances, StopSpec, check_duration_variation};
 use botsim_core::graph::Graph;
 use botsim_core::jobs::JobGenerator;
+use botsim_core::lift::LiftSpec;
 use botsim_core::spec::RobotSpec;
 use botsim_core::world::{RobotId, World, unix_ms_from_utc};
+use botsim_core::zone_requests::ZoneRequestTiming;
+use botsim_core::zones::Zones;
 use serde::Deserialize;
 use vda5050::factsheet::Factsheet;
+use vda5050::zone_set::ZoneSet;
 use vdma_lif::Lif;
 
 /// How long `pick` and `drop` take if `[robot.action_times]` does not list them
@@ -59,6 +91,11 @@ pub struct Scenario {
     pub time_step: f64,
     pub start_time: toml::value::Datetime,
     pub lif: PathBuf,
+    /// Optional VDA 5050 zone set (a JSON file with the `zoneSet` object, or a
+    /// whole `zoneSet` message). It is loaded and checked; no behaviour uses the
+    /// zones yet.
+    #[serde(default)]
+    pub zone_set: Option<PathBuf>,
     #[serde(rename = "robot")]
     pub robots: Vec<RobotGroup>,
     /// Without this section no jobs are created and no controller runs.
@@ -68,6 +105,78 @@ pub struct Scenario {
     /// deadlock; default 30 (S35).
     #[serde(default)]
     pub deadlock_timeout: Option<f64>,
+    /// Without this section nothing is disturbed.
+    #[serde(default)]
+    pub disturbances: Option<DisturbancesConfig>,
+    /// Lifts (peripherals with their own command port); see [`LiftConfig`].
+    #[serde(default, rename = "lift")]
+    pub lifts: Vec<LiftConfig>,
+}
+
+/// A `[[lift]]` section: a lift between maps (floors). The lift model is in
+/// `botsim_core::lift`; no robot rides it yet.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiftConfig {
+    pub id: String,
+    /// The maps (`mapId`) the lift stops at, lowest floor first; at least two.
+    pub floors: Vec<String>,
+    /// The names of the cabin's doors (S45), e.g. `["front", "rear"]` for a
+    /// through-cabin. Default: one door, `front`. Only one door is open at a time.
+    #[serde(default = "one_door")]
+    pub doors: Vec<String>,
+    /// The map the cabin starts at (default: the first floor).
+    #[serde(default)]
+    pub start_floor: Option<String>,
+    /// Seconds for the cabin to pass one floor.
+    pub travel_seconds_per_floor: f64,
+    pub door_open_seconds: f64,
+    pub door_close_seconds: f64,
+    /// The door closes by itself after being open this long; without it the
+    /// door stays open until the controller releases it.
+    #[serde(default)]
+    pub door_hold_seconds: Option<f64>,
+}
+
+/// The `[disturbances]` section (S36). Seeded by the scenario seed.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DisturbancesConfig {
+    /// Switch: `false` keeps the values below in the file but turns them off.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Each robot's top speed is lowered by a random share of at most this
+    /// (0.05 = up to 5 %); from 0 up to, not including, 1.
+    #[serde(default)]
+    pub speed_variation: f64,
+    /// Every action (`pick`, `drop`, …) takes up to this much longer, drawn at
+    /// random per action (S38): 0.2 = up to 20 %; 0 = none.
+    #[serde(default)]
+    pub action_variation: f64,
+    /// Random short stops (S37): average number per hour of driving; 0 = none.
+    #[serde(default)]
+    pub stops_per_hour: f64,
+    /// Length of a stop, drawn between these (seconds).
+    #[serde(default = "default_stop_min")]
+    pub stop_seconds_min: f64,
+    #[serde(default = "default_stop_max")]
+    pub stop_seconds_max: f64,
+}
+
+fn default_stop_min() -> f64 {
+    5.0
+}
+
+fn default_stop_max() -> f64 {
+    15.0
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn one_door() -> Vec<String> {
+    vec!["front".to_string()]
 }
 
 /// The `[jobs]` section: random transport jobs between the listed nodes,
@@ -93,6 +202,20 @@ pub struct RobotGroup {
     pub action_time: f64,
     #[serde(default)]
     pub action_times: BTreeMap<String, f64>,
+    /// When these robots request a RELEASE zone (S41): `"on_release"` (default,
+    /// when the edge that enters the zone is released) or `"on_horizon"` (as soon
+    /// as it is in the order). A real fleet may contain both kinds.
+    #[serde(default)]
+    pub zone_requests: ZoneRequestsWhen,
+}
+
+/// The two values of `zone_requests` in a `[[robot]]` group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneRequestsWhen {
+    #[default]
+    OnRelease,
+    OnHorizon,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -162,6 +285,7 @@ impl Scenario {
         if let Some(t) = self.deadlock_timeout {
             positive("deadlock_timeout", t)?;
         }
+        self.disturbances()?; // checks the values
         self.start_unix_ms()?;
         if let Some(j) = &self.jobs {
             non_negative("[jobs] rate_per_hour", j.rate_per_hour)?;
@@ -236,10 +360,80 @@ impl Scenario {
             message: e.to_string(),
         })?;
 
+        let zones = match &self.zone_set {
+            Some(file) => {
+                let path = base_dir.join(file);
+                let set = load_zone_set(&path)?;
+                Some(Zones::new(&graph, set).map_err(|e| ScenarioError::Input {
+                    path: path.clone(),
+                    message: e.to_string(),
+                })?)
+            }
+            None => None,
+        };
+
         let mut world = World::new(graph, self.time_step, self.start_unix_ms()?)
             .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
+        if let Some(z) = zones {
+            world.set_zones(z);
+        }
         if let Some(t) = self.deadlock_timeout {
             world.set_deadlock_timeout(t);
+        }
+        for l in &self.lifts {
+            let map = |name: &str| {
+                world.graph().map_idx(name).ok_or_else(|| {
+                    ScenarioError::Invalid(format!(
+                        "lift \"{}\": the layout has no map \"{name}\"",
+                        l.id
+                    ))
+                })
+            };
+            let floors = l
+                .floors
+                .iter()
+                .map(|f| map(f))
+                .collect::<Result<Vec<_>, _>>()?;
+            let start_floor = match &l.start_floor {
+                None => 0,
+                Some(s) => {
+                    let m = map(s)?;
+                    floors.iter().position(|f| *f == m).ok_or_else(|| {
+                        ScenarioError::Invalid(format!(
+                            "lift \"{}\": start_floor \"{s}\" is not one of its floors",
+                            l.id
+                        ))
+                    })?
+                }
+            };
+            let spec = LiftSpec {
+                id: l.id.clone(),
+                floors,
+                doors: l.doors.clone(),
+                start_floor,
+                travel_seconds_per_floor: l.travel_seconds_per_floor,
+                door_open_seconds: l.door_open_seconds,
+                door_close_seconds: l.door_close_seconds,
+                door_hold_seconds: l.door_hold_seconds,
+            };
+            world
+                .add_lift(spec)
+                .map_err(|e| ScenarioError::Invalid(format!("lift \"{}\": {e}", l.id)))?;
+        }
+        let mut disturbances = self.disturbances()?;
+        if let Some(d) = &self.disturbances
+            && d.enabled
+            && d.action_variation > 0.0
+        {
+            world
+                .enable_duration_variation(self.seed, d.action_variation)
+                .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
+        }
+        if let Some(spec) = self.stop_spec() {
+            // robots added below get their stops too
+            world
+                .enable_random_stops(self.seed, spec)
+                .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
         }
 
         for (gi, g) in self.robots.iter().enumerate() {
@@ -267,13 +461,79 @@ impl Scenario {
                     &g.manufacturer,
                     &format!("{}-{:03}", g.serial_prefix, i + 1),
                 );
+                // S36: this robot's top speed is lowered by a random share
+                let spec = match disturbances.as_mut() {
+                    Some(d) => spec.with_speed_factor(d.next_speed_factor()),
+                    None => spec.clone(),
+                };
                 world
-                    .add_robot(id, spec.clone(), times.clone(), start, g.start_heading)
+                    .add_robot(id.clone(), spec, times.clone(), start, g.start_heading)
+                    .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
+                // S41: when this robot type requests RELEASE zones
+                let timing = match g.zone_requests {
+                    ZoneRequestsWhen::OnRelease => ZoneRequestTiming::OnRelease,
+                    ZoneRequestsWhen::OnHorizon => ZoneRequestTiming::OnHorizon,
+                };
+                world
+                    .set_zone_request_timing(&id, timing)
                     .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
             }
         }
         Ok(world)
     }
+
+    /// The disturbances to apply: `None` without a `[disturbances]` section or
+    /// with `enabled = false`.
+    fn disturbances(&self) -> Result<Option<Disturbances>, ScenarioError> {
+        let Some(d) = &self.disturbances else {
+            return Ok(None);
+        };
+        let made = Disturbances::new(self.seed, d.speed_variation)
+            .map_err(|e| ScenarioError::Invalid(format!("[disturbances] {e}")))?;
+        self.stop_spec_checked()?;
+        check_duration_variation(d.action_variation)
+            .map_err(|e| ScenarioError::Invalid(format!("[disturbances] {e}")))?;
+        Ok(d.enabled.then_some(made))
+    }
+
+    /// The random stops to apply: `None` without a `[disturbances]` section,
+    /// with `enabled = false` or with `stops_per_hour = 0`.
+    pub fn stop_spec(&self) -> Option<StopSpec> {
+        let d = self.disturbances.as_ref()?;
+        (d.enabled && d.stops_per_hour > 0.0).then_some(StopSpec {
+            per_hour: d.stops_per_hour,
+            min_seconds: d.stop_seconds_min,
+            max_seconds: d.stop_seconds_max,
+        })
+    }
+
+    /// Check the stop settings (also when switched off or 0).
+    fn stop_spec_checked(&self) -> Result<(), ScenarioError> {
+        let Some(d) = &self.disturbances else {
+            return Ok(());
+        };
+        StopSpec {
+            per_hour: d.stops_per_hour,
+            min_seconds: d.stop_seconds_min,
+            max_seconds: d.stop_seconds_max,
+        }
+        .check(self.time_step)
+        .map_err(|e| ScenarioError::Invalid(format!("[disturbances] {e}")))
+    }
+}
+
+/// A zone set file: the `zoneSet` object, or a whole `zoneSet` message (the
+/// header is ignored; it names one robot, the zones are for the whole run).
+fn load_zone_set(path: &Path) -> Result<ZoneSet, ScenarioError> {
+    let value: serde_json::Value = parse_json(path)?;
+    let object = match value.get("zoneSet") {
+        Some(inner) => inner.clone(),
+        None => value,
+    };
+    serde_json::from_value(object).map_err(|e| ScenarioError::Input {
+        path: path.to_path_buf(),
+        message: e.to_string(),
+    })
 }
 
 fn read(path: &Path) -> Result<String, ScenarioError> {

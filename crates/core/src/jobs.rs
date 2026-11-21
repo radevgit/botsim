@@ -14,7 +14,7 @@ use std::fmt;
 use crate::graph::NodeIdx;
 
 /// SplitMix64: tiny, fast, good enough for scenario randomness.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rng(u64);
 
 impl Rng {

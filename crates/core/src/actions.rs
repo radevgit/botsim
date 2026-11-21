@@ -18,16 +18,28 @@ use std::collections::HashMap;
 use vda5050::common::BlockingType;
 use vda5050::state::ActionStatus;
 
+use crate::jobs::Rng;
+
 /// Remaining time at or below this counts as done. Subtracting a step ten times
 /// (10 × 0.1) from 1.0 leaves about 1e-16, not 0; without a tolerance the action
 /// would finish one step late.
-const TIME_EPSILON: f64 = 1e-9;
+pub const TIME_EPSILON: f64 = 1e-9;
 
 /// How long actions take, in seconds: a default and per-action-type overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActionTimes {
     pub default: f64,
     pub by_type: HashMap<String, f64>,
+    /// Random extra time per action (S38), if disturbances are on.
+    pub noise: Option<DurationNoise>,
+}
+
+/// Each action takes its base time times `1 + u × variation`, with `u` drawn
+/// uniformly from [0, 1): a variation of 0.2 adds up to 20 %.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DurationNoise {
+    pub rng: Rng,
+    pub variation: f64,
 }
 
 impl ActionTimes {
@@ -35,7 +47,25 @@ impl ActionTimes {
         ActionTimes {
             default,
             by_type: HashMap::new(),
+            noise: None,
         }
+    }
+
+    /// Turn on random extra time; `rng` is the robot's own stream.
+    pub fn with_noise(mut self, rng: Rng, variation: f64) -> ActionTimes {
+        self.noise = Some(DurationNoise { rng, variation });
+        self
+    }
+
+    /// The times for the next order of a robot. Without noise this is a plain
+    /// copy. With noise every order gets its own random stream, taken from this
+    /// one, so the durations of an order do not depend on what earlier orders did.
+    pub fn for_next_order(&mut self) -> ActionTimes {
+        let mut t = self.clone();
+        if let (Some(master), Some(order)) = (self.noise.as_mut(), t.noise.as_mut()) {
+            order.rng = Rng::new(master.rng.next_u64());
+        }
+        t
     }
 
     pub fn with(mut self, action_type: &str, seconds: f64) -> ActionTimes {
@@ -60,13 +90,19 @@ pub struct ActionSpec {
 }
 
 impl ActionTimes {
-    /// Decide the duration of an action.
-    pub fn plan(&self, a: &ActionSpec) -> PlannedAction {
+    /// Decide the duration of an action (with random extra time if noise is on;
+    /// each call draws one number).
+    pub fn plan(&mut self, a: &ActionSpec) -> PlannedAction {
+        let base = self.duration(&a.action_type);
+        let duration = match self.noise.as_mut() {
+            Some(n) => base * (1.0 + n.rng.next_f64() * n.variation),
+            None => base,
+        };
         PlannedAction {
             action_id: a.action_id.clone(),
             action_type: a.action_type.clone(),
             blocking: a.blocking,
-            duration: self.duration(&a.action_type),
+            duration,
         }
     }
 }

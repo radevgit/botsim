@@ -25,12 +25,19 @@ use vda5050::state::State;
 use crate::actions::ActionTimes;
 use crate::collision::{Body, overlap, place};
 use crate::deadlock::{DEFAULT_TIMEOUT_SECONDS, DeadlockDetector};
+use crate::disturbances::{DisturbanceError, StopGenerator, StopSpec, check_duration_variation};
+use crate::drive::Phase;
 use crate::drive::{DriveError, Pose};
 use crate::graph::{Graph, NodeIdx};
+use crate::jobs::Rng;
+use crate::lift::{Lift, LiftError, LiftSpec, LiftStatus};
 use crate::metrics::is_waiting;
+use crate::observer::{Blocking, Observer, Reservation, RobotSnapshot, RobotStatus, Snapshot};
 use crate::robot::{Reception, Robot, START_NODE_TOLERANCE};
 use crate::spec::RobotSpec;
 use crate::state_report::Header;
+use crate::zone_requests::ZoneRequestTiming;
+use crate::zones::Zones;
 
 /// VDA 5050 version written in the headers.
 pub const PROTOCOL_VERSION: &str = "3.0.1";
@@ -59,6 +66,18 @@ pub enum WorldError {
     Start(DriveError),
     /// The time step must be a positive, finite number of seconds.
     BadTimeStep,
+    /// Wrong disturbance settings.
+    Disturbance(DisturbanceError),
+    /// The observer interval must be a positive, finite number of seconds.
+    BadObserverInterval(f64),
+    /// A lift is wrong, or a call to it.
+    Lift(LiftError),
+    DuplicateLift(String),
+    UnknownLift(String),
+    /// A door name the lift does not have.
+    UnknownDoor(String),
+    /// A map id that the layout does not have (a lift floor, a lift call).
+    UnknownMap(String),
 }
 
 impl fmt::Display for WorldError {
@@ -76,6 +95,18 @@ impl fmt::Display for WorldError {
             }
             WorldError::Start(e) => write!(f, "cannot place the robot: {e:?}"),
             WorldError::BadTimeStep => write!(f, "the time step must be positive and finite"),
+            WorldError::Disturbance(e) => write!(f, "{e}"),
+            WorldError::Lift(e) => write!(f, "lift: {e}"),
+            WorldError::DuplicateLift(id) => write!(f, "lift \"{id}\" exists already"),
+            WorldError::UnknownLift(id) => write!(f, "no lift \"{id}\""),
+            WorldError::UnknownDoor(id) => write!(f, "the lift has no door \"{id}\""),
+            WorldError::UnknownMap(id) => write!(f, "the layout has no map \"{id}\""),
+            WorldError::BadObserverInterval(v) => {
+                write!(
+                    f,
+                    "the observer interval must be positive and finite, got {v}"
+                )
+            }
         }
     }
 }
@@ -88,10 +119,18 @@ struct Entry {
     robot: Robot,
     /// `headerId` of the next state message.
     next_header_id: u32,
+    /// Random stops of this robot, if disturbances are on.
+    stops: Option<StopGenerator>,
 }
 
 #[derive(Debug)]
 pub struct World {
+    /// Seed and spec of the random stops; robots added later get them too.
+    stops: Option<(u64, StopSpec)>,
+    /// How many random stops started so far.
+    stops_started: usize,
+    /// Seed and variation of the random action durations; robots added later get them too.
+    duration_variation: Option<(u64, f64)>,
     graph: Graph,
     dt: f64,
     tick: u64,
@@ -102,6 +141,16 @@ pub struct World {
     /// Robot index pairs that overlapped after the last step.
     touching: HashSet<(usize, usize)>,
     deadlocks: DeadlockDetector,
+    /// Who waited for whom after the last step.
+    waits_for: Vec<Option<usize>>,
+    /// What the controller has published for the observer.
+    reservations: Vec<Reservation>,
+    observer: Option<Box<dyn Observer>>,
+    /// The observer gets a snapshot every this many steps.
+    observer_every: u64,
+    zones: Option<Zones>,
+    /// Lifts: peripherals with their own command port.
+    lifts: Vec<Lift>,
 }
 
 /// A deadlock: robots waiting for each other in a cycle (see [`crate::deadlock`]).
@@ -142,6 +191,15 @@ impl World {
             collisions: Vec::new(),
             touching: HashSet::new(),
             deadlocks: DeadlockDetector::new(DEFAULT_TIMEOUT_SECONDS, dt),
+            stops: None,
+            stops_started: 0,
+            duration_variation: None,
+            waits_for: Vec::new(),
+            reservations: Vec::new(),
+            observer: None,
+            observer_every: 1,
+            zones: None,
+            lifts: Vec::new(),
         })
     }
 
@@ -186,6 +244,11 @@ impl World {
         self.tick as f64 * self.dt
     }
 
+    /// The current simulated time in milliseconds since 1970.
+    pub fn now_ms(&self) -> i64 {
+        self.start_unix_ms + (self.time() * 1000.0).round() as i64
+    }
+
     /// The current simulated time as an ISO 8601 UTC string with milliseconds.
     pub fn timestamp(&self) -> String {
         let ms = self.start_unix_ms + (self.time() * 1000.0).round() as i64;
@@ -204,19 +267,75 @@ impl World {
         if self.index(&id).is_some() {
             return Err(WorldError::DuplicateRobot(id));
         }
-        let robot =
+        let mut robot =
             Robot::new(&self.graph, spec, times, start, heading).map_err(WorldError::Start)?;
+        robot.set_time(self.now_ms());
+        if let Some(zones) = &self.zones {
+            robot.set_zones(zones.clone(), ZoneRequestTiming::default());
+        }
+        if let Some((seed, variation)) = self.duration_variation {
+            robot.set_duration_noise(
+                Rng::stream(seed, &format!("durations-{}", self.robots.len())),
+                variation,
+            );
+        }
+        let stops = match self.stops {
+            Some((seed, spec)) => Some(
+                StopGenerator::new(seed, self.robots.len(), spec, self.dt)
+                    .expect("checked when the stops were enabled"),
+            ),
+            None => None,
+        };
         self.robots.push(Entry {
             id,
             robot,
             next_header_id: 0,
+            stops,
         });
         Ok(())
+    }
+
+    /// Turn on random stops (S37) for all robots, now and added later; the
+    /// seed makes them repeatable. Call it before the run.
+    pub fn enable_random_stops(&mut self, seed: u64, spec: StopSpec) -> Result<(), WorldError> {
+        spec.check(self.dt).map_err(WorldError::Disturbance)?;
+        self.stops = Some((seed, spec));
+        for (i, e) in self.robots.iter_mut().enumerate() {
+            e.stops = Some(StopGenerator::new(seed, i, spec, self.dt).expect("checked just above"));
+        }
+        Ok(())
+    }
+
+    /// Turn on random extra time for every action (S38): each action takes up to
+    /// `variation` longer (0.2 = 20 %). For all robots, now and added later; each
+    /// robot has its own random stream. Call it before the run.
+    pub fn enable_duration_variation(
+        &mut self,
+        seed: u64,
+        variation: f64,
+    ) -> Result<(), WorldError> {
+        check_duration_variation(variation).map_err(WorldError::Disturbance)?;
+        self.duration_variation = Some((seed, variation));
+        for (i, e) in self.robots.iter_mut().enumerate() {
+            e.robot
+                .set_duration_noise(Rng::stream(seed, &format!("durations-{i}")), variation);
+        }
+        Ok(())
+    }
+
+    /// How many random stops have started so far.
+    pub fn random_stops(&self) -> usize {
+        self.stops_started
     }
 
     /// The robots in the order they were added.
     pub fn robot_ids(&self) -> impl Iterator<Item = &RobotId> {
         self.robots.iter().map(|e| &e.id)
+    }
+
+    /// The robot's spec as it is in the run (with any disturbance applied).
+    pub fn spec(&self, id: &RobotId) -> Result<&RobotSpec, WorldError> {
+        Ok(self.robots[self.find(id)?].robot.spec())
     }
 
     pub fn pose(&self, id: &RobotId) -> Result<Pose, WorldError> {
@@ -226,24 +345,293 @@ impl World {
     /// Advance the whole world by one time step: move the robots, then check
     /// for collisions.
     pub fn step(&mut self) {
+        let now_ms = self.now_ms();
         for e in &mut self.robots {
+            e.robot.set_time(now_ms);
+            // a robot that is moving, and not stopped already, may be stopped (S37)
+            if let Some(g) = e.stops.as_mut()
+                && e.robot.is_moving()
+                && !e.robot.is_held()
+                && let Some(seconds) = g.step()
+            {
+                e.robot.hold(seconds);
+                self.stops_started += 1;
+            }
             e.robot.step(self.dt);
+        }
+        for l in &mut self.lifts {
+            l.step(self.dt);
         }
         self.tick += 1;
         self.check_collisions();
         self.check_deadlocks();
+        self.notify_observer();
+    }
+
+    /// Attach an observer (brief U5): it gets the layout now and a snapshot after
+    /// **every** step. Observing is read-only and changes nothing in the run. A
+    /// second call replaces the first observer. For big runs use
+    /// [`World::set_observer_at`].
+    pub fn set_observer(&mut self, observer: Box<dyn Observer>) {
+        self.set_observer_at(observer, self.dt)
+            .expect("the time step is a valid interval");
+    }
+
+    /// Like [`World::set_observer`], but the observer gets a snapshot only every
+    /// `interval_seconds` of simulated time, like the frame rate of a game: 0.5
+    /// is two snapshots per simulated second. The interval is rounded to whole
+    /// steps and is at least one step. The first snapshot comes after the first
+    /// interval. What happens between two snapshots (a short overlap, a short
+    /// stop) is not seen by the observer; the world still counts it.
+    pub fn set_observer_at(
+        &mut self,
+        mut observer: Box<dyn Observer>,
+        interval_seconds: f64,
+    ) -> Result<(), WorldError> {
+        if !(interval_seconds.is_finite() && interval_seconds > 0.0) {
+            return Err(WorldError::BadObserverInterval(interval_seconds));
+        }
+        observer.on_layout(&self.graph);
+        self.observer = Some(observer);
+        self.observer_every = ((interval_seconds / self.dt).round() as u64).max(1);
+        Ok(())
+    }
+
+    /// Is an observer attached? (A controller can skip preparing data for it.)
+    pub fn observing(&self) -> bool {
+        self.observer.is_some()
+    }
+
+    /// Add a lift (a peripheral, see [`crate::lift`]). Its floors are map indices
+    /// of the layout; the id must be new.
+    pub fn add_lift(&mut self, spec: LiftSpec) -> Result<(), WorldError> {
+        if self.lifts.iter().any(|l| l.spec().id == spec.id) {
+            return Err(WorldError::DuplicateLift(spec.id));
+        }
+        if let Some(&bad) = spec.floors.iter().find(|&&m| m >= self.graph.maps.len()) {
+            return Err(WorldError::UnknownMap(format!("#{bad}")));
+        }
+        self.lifts.push(Lift::new(spec).map_err(WorldError::Lift)?);
+        Ok(())
+    }
+
+    fn lift_index(&self, id: &str) -> Result<usize, WorldError> {
+        self.lifts
+            .iter()
+            .position(|l| l.spec().id == id)
+            .ok_or_else(|| WorldError::UnknownLift(id.to_string()))
+    }
+
+    /// Lift command port: bring the cabin of lift `lift_id` to the floor of map
+    /// `map_id` and open the door (see [`Lift::call`]).
+    pub fn call_lift(&mut self, lift_id: &str, map_id: &str) -> Result<(), WorldError> {
+        self.call_lift_door_index(lift_id, map_id, 0)
+    }
+
+    /// Like [`World::call_lift`], but opens the door named `door_id` (S45; for a
+    /// lift with more than one door).
+    pub fn call_lift_door(
+        &mut self,
+        lift_id: &str,
+        map_id: &str,
+        door_id: &str,
+    ) -> Result<(), WorldError> {
+        let door = self.lifts[self.lift_index(lift_id)?]
+            .spec()
+            .doors
+            .iter()
+            .position(|d| d == door_id)
+            .ok_or_else(|| WorldError::UnknownDoor(door_id.to_string()))?;
+        self.call_lift_door_index(lift_id, map_id, door)
+    }
+
+    fn call_lift_door_index(
+        &mut self,
+        lift_id: &str,
+        map_id: &str,
+        door: usize,
+    ) -> Result<(), WorldError> {
+        let i = self.lift_index(lift_id)?;
+        let map = self
+            .graph
+            .map_idx(map_id)
+            .ok_or_else(|| WorldError::UnknownMap(map_id.to_string()))?;
+        let floor = self.lifts[i]
+            .spec()
+            .floors
+            .iter()
+            .position(|&m| m == map)
+            .ok_or_else(|| WorldError::UnknownMap(map_id.to_string()))?;
+        self.lifts[i]
+            .call_door(floor, door)
+            .map_err(WorldError::Lift)
+    }
+
+    /// Lift command port: the controller is done with the open door; close it.
+    pub fn release_lift(&mut self, lift_id: &str) -> Result<(), WorldError> {
+        let i = self.lift_index(lift_id)?;
+        self.lifts[i].release();
+        Ok(())
+    }
+
+    /// What lift `lift_id` looks like now.
+    pub fn lift_status(&self, lift_id: &str) -> Result<LiftStatus, WorldError> {
+        Ok(self.lifts[self.lift_index(lift_id)?].status())
+    }
+
+    /// All lifts, in the order they were added.
+    pub fn lifts(&self) -> Vec<LiftStatus> {
+        self.lifts.iter().map(Lift::status).collect()
+    }
+
+    /// The map a floor of a lift stands for, for printing.
+    pub fn lift_floor_map(&self, lift_id: &str, floor: usize) -> Result<&str, WorldError> {
+        let l = &self.lifts[self.lift_index(lift_id)?];
+        let map = l
+            .spec()
+            .floors
+            .get(floor)
+            .ok_or(WorldError::Lift(LiftError::UnknownFloor(floor)))?;
+        Ok(&self.graph.maps[*map])
+    }
+
+    /// Set the zones of the run (already checked against the layout). They are
+    /// only stored for now; no robot behaviour uses them yet.
+    pub fn set_zones(&mut self, zones: Zones) {
+        // every robot, now and added later, states RELEASE zone requests (S41);
+        // `set_zone_request_timing` changes when, per robot
+        for e in &mut self.robots {
+            e.robot
+                .set_zones(zones.clone(), ZoneRequestTiming::default());
+        }
+        self.zones = Some(zones);
+    }
+
+    /// When this robot requests a RELEASE zone (S41). Needs the zones to be set.
+    pub fn set_zone_request_timing(
+        &mut self,
+        id: &RobotId,
+        timing: ZoneRequestTiming,
+    ) -> Result<(), WorldError> {
+        let i = self.find(id)?;
+        self.robots[i].robot.set_zone_request_timing(timing);
+        Ok(())
+    }
+
+    /// The robot's zone requests as it states them now.
+    pub fn zone_requests(
+        &self,
+        id: &RobotId,
+    ) -> Result<Vec<vda5050::state::ZoneRequest>, WorldError> {
+        Ok(self.robots[self.find(id)?].robot.zone_requests())
+    }
+
+    pub fn zones(&self) -> Option<&Zones> {
+        self.zones.as_ref()
+    }
+
+    /// The controller tells the observer what it has reserved; the next
+    /// snapshots carry it until it is published again. Core does not use it.
+    pub fn publish_reservations(&mut self, reservations: Vec<Reservation>) {
+        self.reservations = reservations;
+    }
+
+    /// The world as it is now.
+    pub fn snapshot(&self) -> Snapshot {
+        let header = plain_header();
+        let robots = self
+            .robots
+            .iter()
+            .map(|e| {
+                let state = e.robot.state(&self.graph, &header);
+                let p = e.robot.pose();
+                let status = match (e.robot.is_held(), e.robot.phase()) {
+                    (true, _) => RobotStatus::Held,
+                    (_, Phase::Rotating) => RobotStatus::Turning,
+                    (_, Phase::Driving) => RobotStatus::Driving,
+                    (_, Phase::Acting) => RobotStatus::Acting,
+                    (_, Phase::Waiting) => RobotStatus::WaitingForRelease,
+                    (_, Phase::WaitingForClearance) => RobotStatus::WaitingForZone,
+                    (_, Phase::Finished) => RobotStatus::Idle,
+                };
+                let mut snap = RobotSnapshot {
+                    id: e.id.clone(),
+                    pose: p,
+                    shape: *e.robot.shape(),
+                    status,
+                    speed: state.velocity.and_then(|v| v.vx).unwrap_or(0.0),
+                    order_id: state.order_id.clone(),
+                    last_node: self.graph.node_idx(&state.last_node_id),
+                    released_nodes: Vec::new(),
+                    released_edges: Vec::new(),
+                    planned_nodes: Vec::new(),
+                    planned_edges: Vec::new(),
+                };
+                for n in &state.node_states {
+                    if let Some(i) = self.graph.node_idx(&n.node_id) {
+                        if n.released {
+                            snap.released_nodes.push(i);
+                        } else {
+                            snap.planned_nodes.push(i);
+                        }
+                    }
+                }
+                for ed in &state.edge_states {
+                    if let Some(i) = self.graph.edge_idx(&ed.edge_id) {
+                        if ed.released {
+                            snap.released_edges.push(i);
+                        } else {
+                            snap.planned_edges.push(i);
+                        }
+                    }
+                }
+                snap
+            })
+            .collect();
+
+        let mut overlapping: Vec<(usize, usize)> = self.touching.iter().copied().collect();
+        overlapping.sort_unstable();
+        let blocking = self
+            .waits_for
+            .iter()
+            .enumerate()
+            .filter_map(|(waiter, b)| b.map(|blocker| Blocking { waiter, blocker }))
+            .collect();
+        let deadlocks = self
+            .deadlocks
+            .records()
+            .iter()
+            .filter(|r| r.ended_tick.is_none())
+            .map(|r| r.robots.clone())
+            .collect();
+
+        Snapshot {
+            tick: self.tick,
+            time: self.time(),
+            robots,
+            reservations: self.reservations.clone(),
+            blocking,
+            overlapping,
+            deadlocks,
+            lifts: self.lifts.iter().map(Lift::status).collect(),
+        }
+    }
+
+    /// Give the observer a snapshot if it is due (the snapshot is only built then).
+    fn notify_observer(&mut self) {
+        if !self.tick.is_multiple_of(self.observer_every) {
+            return;
+        }
+        if let Some(mut o) = self.observer.take() {
+            o.on_step(&self.snapshot());
+            self.observer = Some(o);
+        }
     }
 
     /// Who waits for whom, from the robots' state messages (the rule is in
     /// [`crate::deadlock`]).
     fn check_deadlocks(&mut self) {
-        let header = Header {
-            header_id: 0,
-            timestamp: String::new(),
-            version: PROTOCOL_VERSION.to_string(),
-            manufacturer: String::new(),
-            serial_number: String::new(),
-        };
+        let header = plain_header();
         let poses: Vec<Pose> = self.robots.iter().map(|e| e.robot.pose()).collect();
         let waits_for: Vec<Option<usize>> = self
             .robots
@@ -264,6 +652,7 @@ impl World {
             })
             .collect();
         self.deadlocks.observe(self.tick, &waits_for);
+        self.waits_for = waits_for;
     }
 
     /// All collisions so far, oldest first. One entry per contact: it is added
@@ -307,6 +696,19 @@ impl World {
         let id = RobotId::new(&order.manufacturer, &order.serial_number);
         let i = self.find(&id)?;
         Ok(self.robots[i].robot.receive_order(&self.graph, order))
+    }
+
+    /// Deliver a `responses` message (answers to the robot's zone requests).
+    pub fn send_responses(
+        &mut self,
+        msg: &vda5050::responses::Responses,
+    ) -> Result<(), WorldError> {
+        let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
+        let i = self.find(&id)?;
+        let now_ms = self.now_ms();
+        self.robots[i].robot.set_time(now_ms);
+        self.robots[i].robot.receive_responses(msg);
+        Ok(())
     }
 
     /// Deliver an `instantActions` message.
@@ -353,6 +755,62 @@ pub fn unix_ms_from_utc(year: i64, month: i64, day: i64, hour: i64, min: i64, se
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146_097 + doe - 719_468;
     ((days * 24 + hour) * 60 + min) * 60_000 + sec * 1000
+}
+
+/// Milliseconds since the Unix epoch from an ISO 8601 UTC timestamp such as
+/// `2026-11-20T10:00:00.250Z` (the milliseconds are optional). `None` if the text
+/// is not of that form or a field is out of range.
+pub fn unix_ms_from_iso8601(s: &str) -> Option<i64> {
+    let s = s.strip_suffix('Z')?;
+    let (date, time) = s.split_once('T')?;
+    let mut d = date.split('-');
+    let (year, month, day) = (
+        d.next()?.parse::<i64>().ok()?,
+        d.next()?.parse::<i64>().ok()?,
+        d.next()?.parse::<i64>().ok()?,
+    );
+    if d.next().is_some() {
+        return None;
+    }
+    let (hms, frac) = match time.split_once('.') {
+        Some((a, b)) => (a, Some(b)),
+        None => (time, None),
+    };
+    let mut t = hms.split(':');
+    let (h, m, sec) = (
+        t.next()?.parse::<i64>().ok()?,
+        t.next()?.parse::<i64>().ok()?,
+        t.next()?.parse::<i64>().ok()?,
+    );
+    if t.next().is_some() {
+        return None;
+    }
+    let ms = match frac {
+        None => 0,
+        Some(f) if !f.is_empty() && f.len() <= 9 && f.bytes().all(|c| c.is_ascii_digit()) => {
+            // the first three digits are the milliseconds
+            let padded = format!("{f:0<3}");
+            padded[..3].parse::<i64>().ok()?
+        }
+        Some(_) => return None,
+    };
+    let valid = (1..=12).contains(&month)
+        && (1..=31).contains(&day)
+        && (0..=23).contains(&h)
+        && (0..=59).contains(&m)
+        && (0..=60).contains(&sec);
+    valid.then(|| unix_ms_from_utc(year, month, day, h, m, sec) + ms)
+}
+
+/// A header for state messages that are only read inside the simulator.
+fn plain_header() -> Header {
+    Header {
+        header_id: 0,
+        timestamp: String::new(),
+        version: PROTOCOL_VERSION.to_string(),
+        manufacturer: String::new(),
+        serial_number: String::new(),
+    }
 }
 
 /// `2026-11-20T10:00:00.250Z` from milliseconds since the Unix epoch.

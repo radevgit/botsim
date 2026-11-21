@@ -11,6 +11,7 @@
 
 use botsim_baseline::controller::Controller;
 use botsim_core::jobs::Job;
+use botsim_core::lift::DoorState;
 use botsim_core::world::World;
 use serde::Serialize;
 
@@ -28,9 +29,61 @@ pub struct Summary {
     pub collisions: Vec<CollisionSummary>,
     pub deadlock_count: usize,
     pub deadlocks: Vec<DeadlockSummary>,
+    /// Random stops that started (0 without disturbances).
+    pub random_stops: usize,
+    /// The loaded zone set; left out without `zone_set` in the scenario.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zone_set: Option<ZoneSetSummary>,
+    /// The lifts as they stand at the end of the run; left out without lifts.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lifts: Vec<LiftSummary>,
     pub jobs: JobsSummary,
     pub metrics: MetricsSummary,
     pub robots: Vec<RobotSummary>,
+    /// Wall-clock time of the controller; only with `--timing` (S39), because it
+    /// differs from run to run and so breaks identical output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timing: Option<TimingSummary>,
+}
+
+/// How long the controller took per step (real time, not simulated time).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TimingSummary {
+    /// How many times the controller ran (0 without a `[jobs]` section).
+    pub controller_steps: u64,
+    pub controller_total_ms: f64,
+    /// `null` if the controller did not run.
+    pub controller_mean_us: Option<f64>,
+    pub controller_max_us: Option<f64>,
+}
+
+/// A lift at the end of the run.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LiftSummary {
+    pub id: String,
+    /// The map the cabin is at (or left, if it is moving).
+    pub floor_map_id: String,
+    /// `closed`, `opening`, `open` or `closing`.
+    pub door: String,
+    /// The door that is open or was used last (`front` for a lift with one door).
+    pub door_id: String,
+    /// Calls still waiting.
+    pub queued_calls: usize,
+}
+
+/// The zones that were loaded (they are not used by any behaviour yet).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ZoneSetSummary {
+    pub zone_set_id: String,
+    pub map_id: String,
+    pub zones: Vec<ZoneEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ZoneEntry {
+    pub zone_id: String,
+    /// `RELEASE`, `BLOCKED`, `SPEED_LIMIT`, …
+    pub zone_type: String,
 }
 
 /// A cycle of robots waiting for each other for longer than the timeout.
@@ -88,8 +141,44 @@ pub struct RobotSummary {
     pub x: f64,
     pub y: f64,
     pub heading: f64,
+    /// The robot's top speed in this run (m/s), after any disturbance.
+    pub max_speed: f64,
     /// Empty if the robot never had an order (VDA 5050 `lastNodeId` rule).
     pub last_node_id: String,
+}
+
+/// Adds up the real time of the controller steps.
+#[derive(Default)]
+struct StepClock {
+    steps: u64,
+    total: std::time::Duration,
+    max: std::time::Duration,
+}
+
+impl StepClock {
+    /// Run `f`; if `measure`, count its real time.
+    fn time(&mut self, measure: bool, f: impl FnOnce()) {
+        if !measure {
+            return f();
+        }
+        let start = std::time::Instant::now();
+        f();
+        let took = start.elapsed();
+        self.steps += 1;
+        self.total += took;
+        self.max = self.max.max(took);
+    }
+
+    fn report(&self) -> TimingSummary {
+        let us = |d: std::time::Duration| d.as_secs_f64() * 1e6;
+        TimingSummary {
+            controller_steps: self.steps,
+            controller_total_ms: round_micro(self.total.as_secs_f64() * 1e3),
+            controller_mean_us: (self.steps > 0)
+                .then(|| round_micro(us(self.total) / self.steps as f64)),
+            controller_max_us: (self.steps > 0).then(|| round_micro(us(self.max))),
+        }
+    }
 }
 
 /// Round to a microsecond, so that sums like 0.05 × 1531 print as 76.55 and not
@@ -109,23 +198,35 @@ pub fn ticks_for(duration: f64, time_step: f64) -> u64 {
 }
 
 /// Step `world` for the scenario's duration and describe the robots.
-pub fn run(scenario: &Scenario, mut world: World) -> Result<Summary, ScenarioError> {
+pub fn run(scenario: &Scenario, world: World) -> Result<Summary, ScenarioError> {
+    run_with(scenario, world, false)
+}
+
+/// Like [`run`]; with `measure_time` the real time of every controller step is
+/// measured and reported in `timing` (S39).
+pub fn run_with(
+    scenario: &Scenario,
+    mut world: World,
+    measure_time: bool,
+) -> Result<Summary, ScenarioError> {
     let ticks = ticks_for(scenario.duration, scenario.time_step);
     let mut generator = scenario.job_generator(world.graph())?;
     let mut controller = generator.as_ref().map(|_| Controller::new(&world));
     let mut created = 0;
+    let mut clock = StepClock::default();
 
     while world.tick() < ticks {
         // one cycle: new jobs → controller → the world moves
         if let (Some(g), Some(c)) = (generator.as_mut(), controller.as_mut()) {
             let new: Vec<Job> = g.step(world.tick()).into_iter().collect();
             created += new.len();
-            c.step(&mut world, new);
+            clock.time(measure_time, || c.step(&mut world, new));
         }
         world.step();
     }
     if let Some(c) = controller.as_mut() {
-        c.step(&mut world, []); // see jobs that finished in the last step
+        // see jobs that finished in the last step
+        clock.time(measure_time, || c.step(&mut world, []));
     }
     let (jobs, metrics) = match &controller {
         Some(c) => {
@@ -174,6 +275,13 @@ pub fn run(scenario: &Scenario, mut world: World) -> Result<Summary, ScenarioErr
                 x: p.x,
                 y: p.y,
                 heading: p.heading,
+                max_speed: round_micro(
+                    world
+                        .spec(id)
+                        .expect("the id comes from the world")
+                        .limits
+                        .max_speed,
+                ),
                 last_node_id: state.last_node_id,
             }
         })
@@ -202,9 +310,46 @@ pub fn run(scenario: &Scenario, mut world: World) -> Result<Summary, ScenarioErr
         })
         .collect();
     Ok(Summary {
+        timing: measure_time.then(|| clock.report()),
         scenario: scenario.name.clone(),
         deadlock_count: deadlocks.len(),
         deadlocks,
+        random_stops: world.random_stops(),
+        lifts: world
+            .lifts()
+            .iter()
+            .map(|l| LiftSummary {
+                id: l.id.clone(),
+                floor_map_id: world
+                    .lift_floor_map(&l.id, l.floor)
+                    .unwrap_or_default()
+                    .to_string(),
+                door: match l.door {
+                    DoorState::Closed => "closed",
+                    DoorState::Opening => "opening",
+                    DoorState::Open => "open",
+                    DoorState::Closing => "closing",
+                }
+                .to_string(),
+                door_id: l.door_id.clone(),
+                queued_calls: l.queue.len(),
+            })
+            .collect(),
+        zone_set: world.zones().map(|z| ZoneSetSummary {
+            zone_set_id: z.zone_set_id.clone(),
+            map_id: world.graph().maps[z.map].clone(),
+            zones: z
+                .zones
+                .iter()
+                .map(|zone| ZoneEntry {
+                    zone_id: zone.zone_id.clone(),
+                    zone_type: serde_json::to_value(&zone.kind)
+                        .ok()
+                        .and_then(|v| v["zoneType"].as_str().map(str::to_string))
+                        .unwrap_or_default(),
+                })
+                .collect(),
+        }),
         collision_count: collisions.len(),
         collisions,
         jobs,

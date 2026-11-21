@@ -4,7 +4,10 @@
 //! controller reserves them when it releases them to a robot and gives them back
 //! when the robot has driven on. Nothing here knows about routes or messages.
 
+use std::collections::BTreeMap;
+
 use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_core::observer::Reservation;
 
 #[derive(Debug, Clone)]
 pub struct Reservations {
@@ -70,6 +73,28 @@ impl Reservations {
         if self.edges[e] == Some(robot) {
             self.edges[e] = None;
         }
+    }
+
+    /// Everything held, per robot (robots that hold nothing are left out), for
+    /// the observer port.
+    pub fn to_observer(&self) -> Vec<Reservation> {
+        let mut by_robot: BTreeMap<usize, Reservation> = BTreeMap::new();
+        let new = |robot: usize| Reservation {
+            robot,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        for (n, holder) in self.nodes.iter().enumerate() {
+            if let Some(r) = holder {
+                by_robot.entry(*r).or_insert_with(|| new(*r)).nodes.push(n);
+            }
+        }
+        for (e, holder) in self.edges.iter().enumerate() {
+            if let Some(r) = holder {
+                by_robot.entry(*r).or_insert_with(|| new(*r)).edges.push(e);
+            }
+        }
+        by_robot.into_values().collect()
     }
 
     /// How many nodes and edges `robot` holds.

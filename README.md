@@ -15,6 +15,8 @@ cargo run --release -p botsim-runner -- scenarios/ring_jobs.toml
 It runs the scenario to its end and prints a JSON summary (jobs, throughput,
 waiting, collisions, where each robot ended). The same file always gives the
 same output. Edit `scenarios/ring_jobs.toml` to change robots, jobs and seed.
+Add `--timing` (before or after the file name) to also get the real time the
+controller needed per step; that is the only thing that differs between runs.
 
 ## Workspace
 

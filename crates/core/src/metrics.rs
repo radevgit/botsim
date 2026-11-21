@@ -16,7 +16,10 @@ use vda5050::state::{ActionStatus, State};
 /// not driving and not turning on the spot (`driving` covers both); any running
 /// action makes it busy. Whether the robot has a job is for the caller to know.
 pub fn is_waiting(state: &State) -> bool {
+    // a robot stopped by an obstacle or a disturbance (protective field
+    // violation) is not waiting for the controller
     !state.driving
+        && !state.safety_state.field_violation
         && !state
             .action_states
             .iter()

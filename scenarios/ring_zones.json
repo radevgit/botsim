@@ -1,0 +1,29 @@
+{
+    "mapId": "M",
+    "zoneSetId": "ring-zones",
+    "zoneSetDescriptor": "A release zone around N1 and a speed limit near N3",
+    "zones": [
+        {
+            "zoneId": "crossing",
+            "zoneType": "RELEASE",
+            "releaseLossBehavior": "STOP",
+            "vertices": [
+                {"x": 15.0, "y": -5.0},
+                {"x": 25.0, "y": -5.0},
+                {"x": 25.0, "y": 5.0},
+                {"x": 15.0, "y": 5.0}
+            ]
+        },
+        {
+            "zoneId": "slow-corner",
+            "zoneType": "SPEED_LIMIT",
+            "maximumSpeed": 0.5,
+            "vertices": [
+                {"x": -5.0, "y": 15.0},
+                {"x": 5.0, "y": 15.0},
+                {"x": 5.0, "y": 25.0},
+                {"x": -5.0, "y": 25.0}
+            ]
+        }
+    ]
+}

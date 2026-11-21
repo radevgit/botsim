@@ -33,6 +33,8 @@ use crate::graph::{Graph, NodeIdx};
 use crate::order_route::route_from_order;
 use crate::spec::RobotSpec;
 use crate::state_report::{Header, InstantActionState, build_state};
+use crate::zone_requests::{ZoneRequestTiming, ZoneRequester};
+use crate::zones::Zones;
 
 /// How close (metres) the robot must be to the first node of a new order.
 pub const START_NODE_TOLERANCE: f64 = 0.1;
@@ -55,6 +57,10 @@ pub struct Robot {
     instant: Vec<InstantActionState>,
     /// Index in `instant` of a `cancelOrder` that is still stopping the robot.
     cancel_action: Option<usize>,
+    /// RELEASE zone requests; `None` if the run has no zones.
+    zone_requests: Option<ZoneRequester>,
+    /// The time now, milliseconds since 1970 (set by the world).
+    now_ms: i64,
 }
 
 impl Robot {
@@ -74,11 +80,105 @@ impl Robot {
             errors: Vec::new(),
             instant: Vec::new(),
             cancel_action: None,
+            zone_requests: None,
+            now_ms: 0,
         })
+    }
+
+    /// Give the robot the zones of the run: it will state RELEASE zone requests
+    /// (see [`crate::zone_requests`]), by `timing`.
+    pub fn set_zones(&mut self, zones: Zones, timing: ZoneRequestTiming) {
+        self.zone_requests = Some(ZoneRequester::new(zones, timing));
+    }
+
+    /// Change when this robot requests zones. No effect without zones.
+    pub fn set_zone_request_timing(&mut self, timing: ZoneRequestTiming) {
+        if let Some(z) = self.zone_requests.as_mut() {
+            z.set_timing(timing);
+        }
+    }
+
+    /// The robot's `zoneRequests` as it states them (empty without zones).
+    pub fn zone_requests(&self) -> Vec<vda5050::state::ZoneRequest> {
+        self.zone_requests
+            .as_ref()
+            .map(ZoneRequester::to_state)
+            .unwrap_or_default()
+    }
+
+    /// Bring the zone requests up to date with where the robot is and what is ahead.
+    fn update_zone_requests(&mut self) {
+        let Some(zr) = self.zone_requests.as_mut() else {
+            return;
+        };
+        let p = self.driver.progress();
+        zr.update(
+            &p.remaining_edges,
+            p.pose.map,
+            p.pose.x,
+            p.pose.y,
+            self.now_ms,
+        );
+        // do not start an edge that enters a zone that is not granted
+        self.driver
+            .set_blocked_edges(zr.blocked_edges(&p.remaining_edges));
+        // after losing the release of a zone it is in: STOP means stand still
+        self.driver.set_halted(zr.halt());
+    }
+
+    /// The robot's clock: milliseconds since 1970, set by the world before every
+    /// step. Used for lease expiry of zone grants.
+    pub fn set_time(&mut self, now_ms: i64) {
+        self.now_ms = now_ms;
+    }
+
+    /// Receive a `responses` message: the controller's answers to zone requests.
+    /// Answers to requests the robot does not have are ignored.
+    pub fn receive_responses(&mut self, msg: &vda5050::responses::Responses) {
+        if let Some(zr) = self.zone_requests.as_mut() {
+            for r in &msg.responses {
+                // a lease that cannot be read is treated as no lease
+                let lease = r
+                    .lease_expiry
+                    .as_deref()
+                    .and_then(crate::world::unix_ms_from_iso8601);
+                zr.respond(&r.request_id, r.grant_type, lease);
+            }
+        }
+        self.update_zone_requests();
     }
 
     pub fn pose(&self) -> Pose {
         self.driver.pose()
+    }
+
+    pub fn phase(&self) -> Phase {
+        self.driver.phase()
+    }
+
+    /// Driving or turning (not standing at a node).
+    pub fn is_moving(&self) -> bool {
+        self.driver.is_moving()
+    }
+
+    /// Give every action a random extra time of up to `variation` (0.2 = 20 %),
+    /// drawn from `rng` (S38). Applies to the orders received from now on.
+    pub fn set_duration_noise(&mut self, rng: crate::jobs::Rng, variation: f64) {
+        self.times.noise = Some(crate::actions::DurationNoise { rng, variation });
+    }
+
+    /// Is a hold stopping the robot right now?
+    pub fn is_held(&self) -> bool {
+        self.driver.is_held()
+    }
+
+    /// Stop for `seconds`, see [`Driver::hold`].
+    pub fn hold(&mut self, seconds: f64) {
+        self.driver.hold(seconds);
+    }
+
+    pub fn spec(&self) -> &RobotSpec {
+        &self.spec
     }
 
     /// The body outline, relative to the kinematic center.
@@ -94,17 +194,26 @@ impl Robot {
     pub fn step(&mut self, dt: f64) {
         self.driver.step(dt);
         self.update_cancel();
+        self.update_zone_requests();
     }
 
     /// The state message.
     pub fn state(&self, graph: &Graph, header: &Header) -> State {
-        build_state(
+        let mut state = build_state(
             graph,
             header,
             &self.driver.progress(),
             &self.errors,
             &self.instant,
-        )
+        );
+        // an empty array if there are zones but no request (as the standard says)
+        if let Some(zr) = &self.zone_requests {
+            state.zone_requests = Some(self.zone_requests());
+            state
+                .errors
+                .extend(zr.errors().iter().map(RobotError::to_state_error));
+        }
+        state
     }
 
     fn reject(&mut self, error: RobotError) -> Reception {
@@ -166,11 +275,16 @@ impl Robot {
                 &self.spec,
                 p.heading,
                 &route,
-                self.times.clone(),
+                self.times.for_next_order(),
             ) {
                 Ok(d) => {
                     self.driver = d;
                     self.errors.clear();
+                    if let Some(zr) = self.zone_requests.as_mut() {
+                        zr.forget_edges();
+                        zr.learn_edges(graph, &route.plan_edges);
+                    }
+                    self.update_zone_requests();
                     Reception::Accepted
                 }
                 Err(e) => {
@@ -207,6 +321,10 @@ impl Robot {
         match self.driver.extend(graph, &route) {
             Ok(()) => {
                 self.errors.clear();
+                if let Some(zr) = self.zone_requests.as_mut() {
+                    zr.learn_edges(graph, &route.plan_edges);
+                }
+                self.update_zone_requests();
                 Reception::Accepted
             }
             Err(e) => {

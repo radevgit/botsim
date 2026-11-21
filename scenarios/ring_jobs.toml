@@ -7,6 +7,7 @@ duration = 1800.0             # simulated seconds
 time_step = 0.05              # seconds per step
 start_time = 2026-11-20T10:00:00Z
 lif = "ring.lif.json"         # paths are relative to this file
+zone_set = "ring_zones.json"  # optional VDA 5050 zones; only loaded and checked so far
 
 [[robot]]
 manufacturer = "ACME"
@@ -22,3 +23,12 @@ drop = 5.0
 [jobs]
 rate_per_hour = 60.0          # average new jobs per hour
 nodes = ["N0", "N1", "N2", "N3"]
+
+[disturbances]                # optional; the seed above fixes the random values
+enabled = true                # set to false to switch them off
+speed_variation = 0.05        # each robot's top speed is lowered by 0 to 5 %
+action_variation = 0.2        # every pick/drop takes up to 20 % longer
+stops_per_hour = 12.0        # random short stops per hour of driving (2 is more
+                              # realistic, but gives no stop in a 30 minute run)
+stop_seconds_min = 5.0        # each stop lasts between 5 and 15 seconds
+stop_seconds_max = 15.0
