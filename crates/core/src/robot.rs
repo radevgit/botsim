@@ -275,6 +275,31 @@ impl Robot {
         self.driver.hold(seconds);
     }
 
+    /// The protective field is blocked (S54): brake and stand still.
+    pub fn set_obstructed(&mut self, obstructed: bool) {
+        self.driver.set_obstructed(obstructed);
+    }
+
+    /// Is the protective field stopping the robot right now?
+    pub fn is_obstructed(&self) -> bool {
+        self.driver.is_obstructed()
+    }
+
+    /// The robot's protective field (see [`crate::safety`]), if it is driving an
+    /// edge; `dt` is the length of a time step.
+    pub fn protective_field(&self, dt: f64) -> Option<togo::prelude::OrientedRect> {
+        let dir = self.driver.travel_direction()?;
+        let p = self.driver.pose();
+        Some(crate::safety::protective_field(
+            &self.spec.shape,
+            (p.x, p.y, p.heading),
+            dir,
+            self.driver.speed(),
+            self.spec.limits.max_deceleration,
+            dt,
+        ))
+    }
+
     pub fn spec(&self) -> &RobotSpec {
         &self.spec
     }

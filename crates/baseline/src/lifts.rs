@@ -224,6 +224,18 @@ impl LiftDesk {
         wanted
     }
 
+    /// Is this layout edge a lift ride?
+    pub fn is_ride(&self, edge: EdgeIdx) -> bool {
+        self.rides.contains_key(&edge)
+    }
+
+    /// Does the robot own a lift now?
+    pub fn owns(&self, robot: usize) -> bool {
+        self.owners
+            .iter()
+            .any(|o| o.as_ref().is_some_and(|o| o.robot == robot))
+    }
+
     /// The robot's order was refused: it gives back any lift it was given.
     pub fn forget(&mut self, robot: usize) {
         for o in &mut self.owners {

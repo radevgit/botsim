@@ -18,6 +18,7 @@ pub mod observer;
 pub mod order_route;
 pub mod orientation;
 pub mod robot;
+pub mod safety;
 pub mod spec;
 pub mod state_report;
 pub mod world;

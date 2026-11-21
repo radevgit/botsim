@@ -180,6 +180,8 @@ pub struct World {
     door_widths: HashMap<String, f64>,
     /// Broad phase of the collision check (S52): rebuilt every step.
     broad: AABB,
+    /// The robots brake when another robot is in their protective field (S54).
+    safety_stop: bool,
 }
 
 /// A deadlock: robots waiting for each other in a cycle (see [`crate::deadlock`]).
@@ -234,7 +236,25 @@ impl World {
             door_of_edge: HashMap::new(),
             door_widths: HashMap::new(),
             broad: AABB::new(),
+            safety_stop: false,
         })
+    }
+
+    /// Is the onboard safety stop on?
+    pub fn safety_stop(&self) -> bool {
+        self.safety_stop
+    }
+
+    /// Switch the onboard safety stop (S54, see [`crate::safety`]) on or off for
+    /// all robots. It is **off** by default in the world (the collision tests
+    /// need robots that drive into each other); the scenario switches it on.
+    pub fn set_safety_stop(&mut self, on: bool) {
+        self.safety_stop = on;
+        if !on {
+            for e in &mut self.robots {
+                e.robot.set_obstructed(false);
+            }
+        }
     }
 
     /// How long a cycle of waiting robots must last to be a deadlock (default
@@ -786,6 +806,7 @@ impl World {
                 let p = e.robot.pose();
                 let status = match (e.robot.is_held(), e.robot.phase()) {
                     (true, _) => RobotStatus::Held,
+                    _ if e.robot.is_obstructed() => RobotStatus::Obstructed,
                     (_, Phase::Rotating) => RobotStatus::Turning,
                     (_, Phase::Driving) => RobotStatus::Driving,
                     (_, Phase::Acting) => RobotStatus::Acting,
@@ -903,7 +924,9 @@ impl World {
             .map(|(i, e)| {
                 let state = e.robot.state(&self.graph, &header);
                 let next = state.node_states.first()?;
-                if !is_waiting(&state) {
+                // a robot stopped by its protective field because of another robot
+                // waits for that robot (S54), though its state says field violation
+                if !(is_waiting(&state) || e.robot.is_obstructed()) {
                     return None;
                 }
                 let node = &self.graph.nodes[self.graph.node_idx(&next.node_id)?];
@@ -1009,6 +1032,35 @@ impl World {
             }
         }
         self.touching = now;
+
+        // Protective fields (S54), with the same index and bodies: a robot whose
+        // field meets another robot's body brakes in the next step.
+        if self.safety_stop {
+            for i in 0..self.robots.len() {
+                let field = self.robots[i].robot.protective_field(self.dt);
+                let blocked = match (field, &bodies[i]) {
+                    (Some(f), Some((map, _))) => {
+                        let r = orect_bounding_rect(&f);
+                        self.broad.query_intersecting(
+                            r.p1.x - PAD,
+                            r.p1.y - PAD,
+                            r.p2.x + PAD,
+                            r.p2.y + PAD,
+                            &mut hits,
+                        );
+                        let field = Body::Rect(f);
+                        hits.iter().map(|&h| robot_of[h]).any(|j| {
+                            j != i
+                                && bodies[j]
+                                    .as_ref()
+                                    .is_some_and(|(m, b)| m == map && overlap(&field, b))
+                        })
+                    }
+                    _ => false,
+                };
+                self.robots[i].robot.set_obstructed(blocked);
+            }
+        }
     }
 
     /// Deliver an `order`; the robot is the one named in the message.

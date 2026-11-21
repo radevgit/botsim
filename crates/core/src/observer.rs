@@ -56,6 +56,8 @@ pub enum RobotStatus {
     RidingLift,
     /// Stopped by a disturbance (random stop).
     Held,
+    /// Stopped by its protective field: another robot is ahead (S54).
+    Obstructed,
 }
 
 /// The whole world after one step.

@@ -10,6 +10,59 @@ use std::collections::BinaryHeap;
 
 use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
 
+/// Like [`shortest_path`], but the route may not enter a node in `blocked` (the
+/// start node may be in it) and may not use an edge for which `forbidden` is
+/// true. `None` if there is no such route, or `to` itself is blocked.
+pub fn shortest_path_avoiding(
+    graph: &Graph,
+    from: NodeIdx,
+    to: NodeIdx,
+    blocked: &std::collections::HashSet<NodeIdx>,
+    forbidden: impl Fn(EdgeIdx) -> bool,
+) -> Option<Vec<EdgeIdx>> {
+    if from != to && blocked.contains(&to) {
+        return None;
+    }
+    let n = graph.nodes.len();
+    let mut dist = vec![f64::INFINITY; n];
+    let mut via: Vec<Option<EdgeIdx>> = vec![None; n];
+    let mut heap = BinaryHeap::new();
+    dist[from] = 0.0;
+    heap.push(Reverse((0.0_f64.to_bits(), from)));
+    while let Some(Reverse((bits, node))) = heap.pop() {
+        if f64::from_bits(bits) > dist[node] {
+            continue;
+        }
+        if node == to {
+            break;
+        }
+        for &e in graph.out_edges(node) {
+            let edge = &graph.edges[e];
+            if blocked.contains(&edge.end) || forbidden(e) {
+                continue;
+            }
+            let d = dist[node] + edge.length;
+            if d < dist[edge.end] {
+                dist[edge.end] = d;
+                via[edge.end] = Some(e);
+                heap.push(Reverse((d.to_bits(), edge.end)));
+            }
+        }
+    }
+    if dist[to].is_infinite() {
+        return None;
+    }
+    let mut path = Vec::new();
+    let mut at = to;
+    while at != from {
+        let e = via[at].expect("a reached node has an incoming edge");
+        path.push(e);
+        at = graph.edges[e].start;
+    }
+    path.reverse();
+    Some(path)
+}
+
 /// For every node, the edges that lead into it (for [`distances_to`]).
 pub fn in_edges(graph: &Graph) -> Vec<Vec<EdgeIdx>> {
     let mut into = vec![Vec::new(); graph.nodes.len()];

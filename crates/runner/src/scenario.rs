@@ -9,6 +9,7 @@
 //! start_time = 2026-11-20T10:00:00Z   # tick 0 in message timestamps (UTC)
 //! lif = "layout.lif.json"        # paths are relative to this file
 //! deadlock_timeout = 30.0        # optional; seconds, default 30
+//! safety_stop = true             # optional, default true: robots brake for robots ahead
 //! zone_set = "zones.json"        # optional VDA 5050 zone set; loaded and checked only
 //!
 //! [[door]]                       # optional, any number: a door on layout edges
@@ -115,6 +116,11 @@ pub struct Scenario {
     /// deadlock; default 30 (S35).
     #[serde(default)]
     pub deadlock_timeout: Option<f64>,
+    /// The robots' onboard safety stop (S54): a robot brakes when another robot
+    /// is in its protective field. Default `true`; `false` lets robots drive
+    /// into each other (to test collision detection).
+    #[serde(default = "yes")]
+    pub safety_stop: bool,
     /// Without this section nothing is disturbed.
     #[serde(default)]
     pub disturbances: Option<DisturbancesConfig>,
@@ -434,6 +440,7 @@ impl Scenario {
         if let Some(z) = zones {
             world.set_zones(z);
         }
+        world.set_safety_stop(self.safety_stop);
         if let Some(t) = self.deadlock_timeout {
             world.set_deadlock_timeout(t);
         }

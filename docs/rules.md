@@ -98,8 +98,43 @@ LIF 2.0 (layouts).
   (rectangle or circle, filled; **touching counts as overlap**).
 - A collision is recorded when two robots *start* to overlap, once per
   contact; they must separate before a new contact counts again.
-- Robots do not react to collisions (no onboard safety stop yet). The count
-  must be 0 for a good controller.
+- Robots do not react to a collision itself; they brake *before* one with the
+  onboard safety stop (section 7a). The count must be 0 for a good controller.
+
+## 7a. Onboard safety stop (**S54**)
+
+- Every robot has a **protective field** ahead of it, in the direction of
+  **travel** (the direction of the edge, not the heading: a robot driving
+  backwards looks backwards). If the body of **another robot** is in the field,
+  the robot **brakes with its maximum deceleration and stands still** until the
+  field is clear; then it goes on with its order. A robot that is turning or
+  standing at a node has no field.
+- **Field:** a rectangle that starts at the front of the robot's body and is as
+  wide as the body plus **0.1 m** on each side. Its length is the braking
+  distance at the present speed (`v² / (2 d)`) plus the distance covered in one
+  time step plus a margin of **0.3 m**. The margins are our choice, not from a
+  standard.
+- The robot reports a **protective field violation** in its state while it is
+  stopped by the field. Like a random stop (S37), this **does not count as
+  waiting** in the waiting metric (the controller sees only the state). The
+  world's own deadlock check does count it: a robot stopped by another robot
+  waits for that robot, so two robots stopped head-on are a deadlock.
+- The check uses the same broad phase as the collision check (§13) and the
+  positions after each step, so a robot reacts one step (0.05 s) later; the
+  length of one step is part of the field for that reason.
+- **Switch:** scenario key `safety_stop` (default `true`); `false` lets robots
+  drive into each other, which is what the collision tests need. In the core
+  library the world has it off until `set_safety_stop(true)`.
+- Only robots are obstacles (no walls or people yet). Observer status
+  `Obstructed`.
+- **Meaning for the collision count:** with the stop on, a controller that
+  releases a robot onto a node another robot stands on makes the robot stop
+  (waiting, perhaps a deadlock) instead of colliding; collisions then only show
+  modelling gaps, as the brief says (edges that cross without a node, a robot
+  placed on another, nodes closer than a robot is long).
+- Not yet: the field depending on the load, people, walls, a speed reduction
+  before stopping (the robot brakes at full deceleration when the field is
+  blocked, and only when the other robot is already inside it).
 
 ## 7b. Observer port (for viewers and recorders)
 
@@ -439,7 +474,30 @@ The bundled controller talks to the robots only with VDA 5050 messages.
     robot waits on the node the other needs (tested; no collision, no
     resolution), like a lift without a lay-by.
   - Not yet: robots sharing an open door, routes around a door that is too narrow.
-- Not yet: look-ahead beyond the window, timeouts and re-routing, robot types
+- **Timeout re-routing** (**S53**; the brief's "timeout re-routing"). A robot that
+  stands at the end of its released route, is waiting (not doing an action) and
+  wants to go on, but cannot because another robot holds the next node or edge,
+  is counted as *held up*. After **10 s** (`REROUTE_AFTER_SECONDS`, my choice,
+  well before the 30 s of a reported deadlock) the controller looks for a new
+  route for the rest of the job:
+  - same places (the pickup and the drop, each with its action) and same actions,
+    but **no node that another robot holds** (its node, or released to it);
+  - sent as an **order update** from the robot's node that releases nothing new and
+    replaces the unreleased part of the route; node and edge numbering and the
+    action ids follow the new route (`pick-3`, `drop-4`);
+  - not used for a job with a lift ride or a door edge, nor for a robot that owns a
+    lift or a door (their rules and claims depend on the route), and the new route
+    uses no lift ride or door edge;
+  - if there is no way round (or the pickup or drop itself is held), nothing
+    changes and the controller tries again after another 10 s.
+  - **What it does and does not solve:** a robot held by an idle robot, or by a
+    robot that stays long, goes round. In a dense one-way layout it often finds no
+    way round, because the nodes around are held too. Measured (one-way grid,
+    40 × 40, 600 s): 300 robots 137 → 212 jobs done, deadlocks 11 → 6; 500 robots
+    64 → 121 jobs done, deadlocks 15 → 15. A one-way edge cannot be driven back,
+    so a robot cannot "back off"; resolving the rest needs more (e.g. reserving
+    more of the route ahead, or fewer robots per street).
+- Not yet: look-ahead beyond the window, robot types
   and per-type edge rules.
 
 ## 10. Metrics
@@ -520,8 +578,8 @@ Stops at every node; differential drive only; straight edges only; per-robot-typ
 edge properties of the LIF (paths, speeds, corridors); rotation restrictions at
 nodes; node orientation and deviation; edge actions; other instant actions;
 operating modes; state message timing and message delay; horizon actions;
-breakdowns; the onboard safety stop (robots never stop for each other, so
-controller mistakes show as collisions); deadlock resolution (controller side);
+breakdowns; walls and people as obstacles of the safety stop (§7a); deadlock
+resolution beyond the baseline's re-routing (§9);
 a debug stop at the first deadlock; stations in the layout; the viewer (the
 Rerun recording was dropped, U5). Lifts hold one robot and doors are tied to
 edges (§7g, §7h).

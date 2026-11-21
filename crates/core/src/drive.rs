@@ -298,6 +298,8 @@ pub struct Driver {
     blocked: HashSet<u32>,
     /// Standing still after losing a zone release (see [`Driver::set_halted`]).
     halted: bool,
+    /// The protective field is blocked (see [`Driver::set_obstructed`]).
+    obstructed: bool,
     /// The edges that are lift rides (they change the map).
     rides: HashSet<EdgeIdx>,
 }
@@ -416,6 +418,7 @@ impl Driver {
             hold: 0.0,
             blocked: HashSet::new(),
             halted: false,
+            obstructed: false,
             rides,
         };
         d.at_node();
@@ -504,10 +507,40 @@ impl Driver {
         self.halted = halted;
     }
 
-    /// Is the robot being stopped, by a hold or by `set_halted`? (It only counts
-    /// while it is driving or turning.)
+    /// The robot's protective field is not clear (another robot is in it): brake
+    /// and stand still until the world says it is clear again (S54). Unlike a
+    /// hold it comes from the situation, not from a disturbance, so it lasts as
+    /// long as the field is blocked.
+    pub fn set_obstructed(&mut self, obstructed: bool) {
+        self.obstructed = obstructed;
+    }
+
+    /// Is the robot being stopped by its protective field right now? (Only while
+    /// it is driving or turning.)
+    pub fn is_obstructed(&self) -> bool {
+        self.is_moving() && self.obstructed
+    }
+
+    /// The direction the robot travels in (unit vector in map coordinates), the
+    /// direction of the edge it is driving on; `None` unless it is driving a
+    /// real edge. Backwards driving travels along the edge too, against the
+    /// heading.
+    pub fn travel_direction(&self) -> Option<(f64, f64)> {
+        if self.phase != Phase::Driving {
+            return None;
+        }
+        let s = self.segments.get(self.current)?;
+        if s.ride.is_some() {
+            return None;
+        }
+        Some(((s.bx - s.ax) / s.length, (s.by - s.ay) / s.length))
+    }
+
+    /// Is the robot being stopped, by a hold, by `set_halted` or by its
+    /// protective field? (It only counts while it is driving or turning.)
     fn is_stopping(&self) -> bool {
-        self.is_moving() && (self.hold > TIME_EPSILON || self.halted || self.must_not_go_on())
+        self.is_moving()
+            && (self.hold > TIME_EPSILON || self.halted || self.obstructed || self.must_not_go_on())
     }
 
     /// The robot is part-way along an edge that it must not be on (its zone grant
@@ -647,8 +680,9 @@ impl Driver {
         }
 
         let seg = self.segments.get(self.current);
-        // a held robot that has come to a halt is not driving
-        let held = self.is_held();
+        // a held robot that has come to a halt is not driving; held or obstructed,
+        // the robot reports a protective field violation
+        let held = self.is_held() || self.is_obstructed();
         let stopping = self.is_stopping();
         let stopped = stopping && (self.phase == Phase::Rotating || self.along.v <= 1e-9);
         let (vx, omega) = match (self.phase, seg) {

@@ -31,9 +31,14 @@
 //! - **Done**: the robot stands on the last node, nothing is driving, and all
 //!   actions are finished.
 //!
-//! Not yet: deadlock resolution (two robots can wait for each other for ever),
-//! look-ahead beyond the window, timeouts and re-routing, robot types and edge
-//! rules, robots that fail.
+//! - **Re-routing** (S53): a robot that has stood at the end of its released
+//!   route for [`REROUTE_AFTER_SECONDS`] because another robot holds the way gets
+//!   a new route around the nodes others hold (an order update that changes the
+//!   unreleased part).
+//!
+//! Not yet: deadlock resolution beyond that (robots can still wait for each other
+//! for ever when there is no way round), look-ahead beyond the window, robot types
+//! and edge rules, robots that fail.
 
 use std::collections::VecDeque;
 
@@ -50,9 +55,14 @@ use crate::lifts::{LiftDesk, LiftRobot};
 use crate::node_grid::NodeGrid;
 use crate::order_builder::{OrderHeader, Plan, RELEASE_WINDOW, build_order};
 use crate::reservations::Reservations;
-use crate::route::{distances_to, in_edges};
+use crate::route::{distances_to, in_edges, shortest_path_avoiding};
 use crate::zone_grants::{RobotView, ZoneGrants};
 use vda5050::responses::Responses;
+
+/// A robot that has been held at the end of its released route this long by
+/// other robots gets a new route around them (S53, my choice: well before the
+/// 30 s a deadlock needs to be reported).
+pub const REROUTE_AFTER_SECONDS: f64 = 10.0;
 
 /// How close (metres) a robot must be to a node to count as standing on it.
 pub const NODE_TOLERANCE: f64 = 0.1;
@@ -86,6 +96,9 @@ struct Work {
     released_through: usize,
     assigned_tick: u64,
     waiting_seconds: f64,
+    /// How long the robot has stood at the end of its released route because
+    /// the next node or edge is held by another robot (S53).
+    blocked_seconds: f64,
 }
 
 #[derive(Debug)]
@@ -119,6 +132,8 @@ pub struct Controller {
     in_edges: Vec<Vec<EdgeIdx>>,
     /// Jobs whose drop cannot be reached from their pickup (they wait for ever).
     unserviceable: std::collections::HashSet<u64>,
+    /// How many times a route was changed because the way was held (S53).
+    reroutes: usize,
 }
 
 impl Controller {
@@ -146,7 +161,14 @@ impl Controller {
             node_grid: NodeGrid::new(world.graph()),
             in_edges: in_edges(world.graph()),
             unserviceable: std::collections::HashSet::new(),
+            reroutes: 0,
         }
+    }
+
+    /// How many times a robot's route was changed because another robot held the
+    /// way for longer than [`REROUTE_AFTER_SECONDS`].
+    pub fn reroutes(&self) -> usize {
+        self.reroutes
     }
 
     /// Who holds which node and edge.
@@ -268,6 +290,46 @@ impl Controller {
         let wanted = self.doors.window(i, &work.plan, at, from, wanted);
         let rt = reserve_up_to(&mut self.reservations, &work.plan, i, from, wanted);
         self.doors.settle(i, rt);
+
+        // Timeout re-routing (S53): the robot stands at the end of its released
+        // route and wants to go on, but another robot holds the way (not a lift
+        // or a door, which have their own rules).
+        let stuck = at == from && wanted > from && rt == from && is_waiting(state);
+        work.blocked_seconds = if stuck {
+            work.blocked_seconds + elapsed
+        } else {
+            0.0
+        };
+        if stuck && work.blocked_seconds >= REROUTE_AFTER_SECONDS {
+            work.blocked_seconds = 0.0; // try again after another timeout
+            if let Some(plan) = reroute(
+                &self.graph,
+                &self.reservations,
+                &self.lifts,
+                &self.doors,
+                i,
+                &work.plan,
+                at,
+            ) {
+                work.plan = plan;
+                work.update_id += 1;
+                let header = OrderHeader {
+                    robot: &slot.id,
+                    header_id: slot.header_id,
+                    timestamp: &world.timestamp(),
+                    order_id: &work.order_id,
+                    order_update_id: work.update_id,
+                };
+                // nothing new is released; the unreleased part of the route changes
+                let msg = build_order(&self.graph, &header, &work.plan, from, from);
+                slot.header_id += 1;
+                match world.send_order(&msg) {
+                    Ok(Reception::Accepted) => self.reroutes += 1,
+                    other => panic!("the robot refused a changed route: {other:?}"),
+                }
+            }
+        }
+
         if rt > from {
             work.update_id += 1;
             let header = OrderHeader {
@@ -443,6 +505,7 @@ impl Controller {
                     released_through,
                     assigned_tick: tick,
                     waiting_seconds: 0.0,
+                    blocked_seconds: 0.0,
                 });
             }
             Reception::Rejected(reason) => {
@@ -468,6 +531,57 @@ impl Controller {
         let map = self.graph.map_idx(&p.map_id)?;
         self.node_grid.node_near(map, p.x, p.y, NODE_TOLERANCE)
     }
+}
+
+/// A new route for the rest of the job of `robot`, which stands at plan node `at`
+/// at the end of its released route: it goes to the same places (the nodes of the
+/// rest of the plan that have actions, and the last node) and does the same
+/// actions, but **does not enter a node another robot holds** (it holds or has
+/// had released). `None` if there is no such route, if the route would change
+/// nothing, or if the job uses a lift or a door (those have their own rules and
+/// claims that depend on the route).
+fn reroute(
+    graph: &Graph,
+    reservations: &Reservations,
+    lifts: &LiftDesk,
+    doors: &DoorDesk,
+    robot: usize,
+    plan: &Plan,
+    at: usize,
+) -> Option<Plan> {
+    let special = |e| lifts.is_ride(e) || doors.is_guarded(e);
+    if lifts.owns(robot) || doors.owns(robot) || plan.edges[at..].iter().any(|&e| special(e)) {
+        return None;
+    }
+    let blocked: std::collections::HashSet<NodeIdx> = (0..graph.nodes.len())
+        .filter(|&n| reservations.node_holder(n).is_some_and(|h| h != robot))
+        .collect();
+
+    let mut nodes = plan.nodes[..=at].to_vec();
+    let mut edges = plan.edges[..at].to_vec();
+    let mut actions = plan.actions[..=at].to_vec();
+    let mut here = plan.nodes[at];
+    for j in at + 1..=plan.last() {
+        if j != plan.last() && plan.actions[j].is_empty() {
+            continue; // not a place the job needs to stop at
+        }
+        let target = plan.nodes[j];
+        for e in shortest_path_avoiding(graph, here, target, &blocked, special)? {
+            edges.push(e);
+            nodes.push(graph.edges[e].end);
+            actions.push(Vec::new());
+        }
+        actions
+            .last_mut()
+            .expect("there is at least the node the robot stands on")
+            .extend(plan.actions[j].iter().cloned());
+        here = target;
+    }
+    (edges != plan.edges).then_some(Plan {
+        nodes,
+        edges,
+        actions,
+    })
 }
 
 /// Reserve plan nodes `from + 1 ..= wanted` for `robot`, in order, each together

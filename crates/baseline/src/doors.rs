@@ -111,6 +111,18 @@ impl DoorDesk {
         }
     }
 
+    /// Does a door guard this layout edge?
+    pub fn is_guarded(&self, edge: EdgeIdx) -> bool {
+        self.door_of.contains_key(&edge)
+    }
+
+    /// Does the robot own a door now?
+    pub fn owns(&self, robot: usize) -> bool {
+        self.owners
+            .iter()
+            .any(|o| o.as_ref().is_some_and(|o| o.robot == robot))
+    }
+
     /// The robot's order was refused: it gives back any door it was given.
     pub fn forget(&mut self, robot: usize) {
         for o in &mut self.owners {
