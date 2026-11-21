@@ -15,7 +15,7 @@
 //! Not yet: collisions, the spatial index, a controller port with queues, state
 //! publishing rules (`minimumStateInterval`), peripherals.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 use aabb::prelude::AABB;
@@ -105,7 +105,7 @@ impl fmt::Display for WorldError {
             WorldError::UnknownRobot(id) => {
                 write!(f, "no robot {}/{}", id.manufacturer, id.serial_number)
             }
-            WorldError::Start(e) => write!(f, "cannot place the robot: {e:?}"),
+            WorldError::Start(e) => write!(f, "cannot place the robot: {e}"),
             WorldError::BadTimeStep => write!(f, "the time step must be positive and finite"),
             WorldError::Disturbance(e) => write!(f, "{e}"),
             WorldError::Lift(e) => write!(f, "lift: {e}"),
@@ -140,10 +140,25 @@ struct Entry {
     next_header_id: u32,
     /// Random stops of this robot, if disturbances are on.
     stops: Option<StopGenerator>,
+    /// The state messages the controller asked for, with the tick they were made
+    /// at (only with a message delay, S58).
+    seen: VecDeque<(u64, State)>,
+}
+
+/// A message on its way to a robot (S58).
+#[derive(Debug)]
+enum Delivery {
+    Order(Order),
+    InstantActions(InstantActions),
+    Responses(vda5050::responses::Responses),
 }
 
 #[derive(Debug)]
 pub struct World {
+    /// Messages to the robots that are on their way: (tick they arrive, message).
+    inbox: VecDeque<(u64, Delivery)>,
+    /// How many steps a message takes, each way (S58); 0 = none.
+    message_delay: u64,
     /// Seed and spec of the random stops; robots added later get them too.
     stops: Option<(u64, StopSpec)>,
     /// How many random stops started so far.
@@ -237,7 +252,43 @@ impl World {
             door_widths: HashMap::new(),
             broad: AABB::new(),
             safety_stop: false,
+            inbox: VecDeque::new(),
+            message_delay: 0,
         })
+    }
+
+    /// Every message between the controller and the robots takes `steps` time
+    /// steps, in each direction (S58): orders, instant actions and responses
+    /// arrive at the robot `steps` steps after they were sent, and the state
+    /// messages the controller reads ([`World::state`]) are `steps` steps old.
+    /// 0 (the default) = instant. Set it before the run. The robot's answer to an
+    /// order is not returned any more ([`Reception::InTransit`]); it shows in the
+    /// state. Lift and door commands are not delayed.
+    pub fn set_message_delay(&mut self, steps: u64) {
+        self.message_delay = steps;
+    }
+
+    /// The message delay in steps.
+    pub fn message_delay(&self) -> u64 {
+        self.message_delay
+    }
+
+    /// Deliver the messages whose time has come, oldest first.
+    fn deliver_due(&mut self) {
+        while self.inbox.front().is_some_and(|(due, _)| *due <= self.tick) {
+            let (_, d) = self.inbox.pop_front().expect("checked just above");
+            match d {
+                Delivery::Order(o) => {
+                    let _ = self.deliver_order(&o);
+                }
+                Delivery::InstantActions(m) => {
+                    let _ = self.deliver_instant_actions(&m);
+                }
+                Delivery::Responses(m) => {
+                    let _ = self.deliver_responses(&m);
+                }
+            }
+        }
     }
 
     /// Is the onboard safety stop on?
@@ -321,6 +372,18 @@ impl World {
         if self.index(&id).is_some() {
             return Err(WorldError::DuplicateRobot(id));
         }
+        // the layout must allow the robot's type on its start node (S55)
+        if !self
+            .graph
+            .node_allows(start, &spec.manufacturer, &spec.series_name)
+        {
+            return Err(WorldError::Start(DriveError::NotAllowedForType {
+                what: format!(
+                    "node '{}' (robot type {}/{})",
+                    self.graph.nodes[start].id, spec.manufacturer, spec.series_name
+                ),
+            }));
+        }
         let mut robot =
             Robot::new(&self.graph, spec, times, start, heading).map_err(WorldError::Start)?;
         robot.set_time(self.now_ms());
@@ -347,6 +410,7 @@ impl World {
             robot,
             next_header_id: 0,
             stops,
+            seen: VecDeque::new(),
         });
         Ok(())
     }
@@ -401,6 +465,7 @@ impl World {
     /// Advance the whole world by one time step: move the robots, then check
     /// for collisions.
     pub fn step(&mut self) {
+        self.deliver_due();
         let now_ms = self.now_ms();
         self.step_doors();
         for e in &mut self.robots {
@@ -1064,7 +1129,20 @@ impl World {
     }
 
     /// Deliver an `order`; the robot is the one named in the message.
+    /// Without a message delay the robot answers at once; with one the order is
+    /// on its way and the answer is [`Reception::InTransit`].
     pub fn send_order(&mut self, order: &Order) -> Result<Reception, WorldError> {
+        let id = RobotId::new(&order.manufacturer, &order.serial_number);
+        self.find(&id)?;
+        if self.message_delay > 0 {
+            let due = self.tick + self.message_delay;
+            self.inbox.push_back((due, Delivery::Order(order.clone())));
+            return Ok(Reception::InTransit);
+        }
+        self.deliver_order(order)
+    }
+
+    fn deliver_order(&mut self, order: &Order) -> Result<Reception, WorldError> {
         let id = RobotId::new(&order.manufacturer, &order.serial_number);
         let i = self.find(&id)?;
         Ok(self.robots[i].robot.receive_order(&self.graph, order))
@@ -1076,6 +1154,18 @@ impl World {
         msg: &vda5050::responses::Responses,
     ) -> Result<(), WorldError> {
         let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
+        self.find(&id)?;
+        if self.message_delay > 0 {
+            let due = self.tick + self.message_delay;
+            self.inbox
+                .push_back((due, Delivery::Responses(msg.clone())));
+            return Ok(());
+        }
+        self.deliver_responses(msg)
+    }
+
+    fn deliver_responses(&mut self, msg: &vda5050::responses::Responses) -> Result<(), WorldError> {
+        let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
         let i = self.find(&id)?;
         let now_ms = self.now_ms();
         self.robots[i].robot.set_time(now_ms);
@@ -1085,6 +1175,18 @@ impl World {
 
     /// Deliver an `instantActions` message.
     pub fn send_instant_actions(&mut self, msg: &InstantActions) -> Result<(), WorldError> {
+        let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
+        self.find(&id)?;
+        if self.message_delay > 0 {
+            let due = self.tick + self.message_delay;
+            self.inbox
+                .push_back((due, Delivery::InstantActions(msg.clone())));
+            return Ok(());
+        }
+        self.deliver_instant_actions(msg)
+    }
+
+    fn deliver_instant_actions(&mut self, msg: &InstantActions) -> Result<(), WorldError> {
         let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
         let i = self.find(&id)?;
         self.robots[i].robot.receive_instant_actions(msg);
@@ -1096,7 +1198,10 @@ impl World {
         Ok(self.robots[self.find(id)?].robot.phase())
     }
 
-    /// The robot's state message now. Every call uses the next `headerId`.
+    /// The robot's state message as the controller gets it: the state now, or with
+    /// a message delay ([`World::set_message_delay`]) the one the robot sent that
+    /// many steps ago (before the first one has arrived, the first state). Every
+    /// call makes a new message with the next `headerId`.
     pub fn state(&mut self, id: &RobotId) -> Result<State, WorldError> {
         let i = self.find(id)?;
         let header = Header {
@@ -1107,7 +1212,18 @@ impl World {
             serial_number: id.serial_number.clone(),
         };
         self.robots[i].next_header_id += 1;
-        Ok(self.robots[i].robot.state(&self.graph, &header))
+        let now = self.robots[i].robot.state(&self.graph, &header);
+        if self.message_delay == 0 {
+            return Ok(now);
+        }
+        let due = self.tick.saturating_sub(self.message_delay);
+        let seen = &mut self.robots[i].seen;
+        seen.push_back((self.tick, now));
+        // keep the newest message that has arrived by now (made at or before `due`)
+        while seen.len() >= 2 && seen[1].0 <= due {
+            seen.pop_front();
+        }
+        Ok(seen[0].1.clone())
     }
 
     fn index(&self, id: &RobotId) -> Option<usize> {

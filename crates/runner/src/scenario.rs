@@ -10,6 +10,7 @@
 //! lif = "layout.lif.json"        # paths are relative to this file
 //! deadlock_timeout = 30.0        # optional; seconds, default 30
 //! safety_stop = true             # optional, default true: robots brake for robots ahead
+//! message_delay = 0.0            # optional: seconds a message takes, each way (default 0)
 //! zone_set = "zones.json"        # optional VDA 5050 zone set; loaded and checked only
 //!
 //! [[door]]                       # optional, any number: a door on layout edges
@@ -116,6 +117,12 @@ pub struct Scenario {
     /// deadlock; default 30 (S35).
     #[serde(default)]
     pub deadlock_timeout: Option<f64>,
+    /// How long a message takes between the controller and a robot, in each
+    /// direction, in seconds (S58): orders and answers arrive at the robot that
+    /// long after they were sent, and the controller reads states that are that
+    /// old. Rounded to whole time steps. Default 0 (instant).
+    #[serde(default)]
+    pub message_delay: Option<f64>,
     /// The robots' onboard safety stop (S54): a robot brakes when another robot
     /// is in its protective field. Default `true`; `false` lets robots drive
     /// into each other (to test collision detection).
@@ -348,6 +355,13 @@ impl Scenario {
         if let Some(t) = self.deadlock_timeout {
             positive("deadlock_timeout", t)?;
         }
+        if let Some(d) = self.message_delay
+            && !(d.is_finite() && d >= 0.0)
+        {
+            return invalid(format!(
+                "message_delay must be a finite number >= 0, got {d}"
+            ));
+        }
         self.disturbances()?; // checks the values
         self.start_unix_ms()?;
         if let Some(j) = &self.jobs {
@@ -441,6 +455,9 @@ impl Scenario {
             world.set_zones(z);
         }
         world.set_safety_stop(self.safety_stop);
+        if let Some(d) = self.message_delay {
+            world.set_message_delay((d / self.time_step).round() as u64);
+        }
         if let Some(t) = self.deadlock_timeout {
             world.set_deadlock_timeout(t);
         }

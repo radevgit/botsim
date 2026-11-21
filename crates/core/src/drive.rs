@@ -67,6 +67,9 @@ pub enum DriveError {
     MapTransition { edge: String },
     /// The edge leads through a door that is narrower than the robot is wide.
     DoorTooNarrow { edge: String },
+    /// The layout does not allow this robot's type on the node or edge (`what`
+    /// names it, e.g. `edge 'A-B'`).
+    NotAllowedForType { what: String },
     /// The robot cannot take the orientation the order asks for on this edge
     /// (VDA 5050 error `ORIENTATION_UNREACHABLE`, level WARNING).
     Orientation {
@@ -95,6 +98,9 @@ impl fmt::Display for DriveError {
                 f,
                 "edge '{edge}' leads through a door that is narrower than the robot"
             ),
+            DriveError::NotAllowedForType { what } => {
+                write!(f, "the layout does not allow this robot type on {what}")
+            }
             DriveError::Orientation { edge, error } => write!(f, "edge '{edge}': {error}"),
             DriveError::NotContinuation { expected, found } => write!(
                 f,
@@ -192,6 +198,8 @@ struct Segment {
     reversed: bool,
     /// A lift ride: no driving, the robot appears here when the ride is over.
     ride: Option<RideEnd>,
+    /// The speed limit of the edge for this robot's type (LIF `maximumSpeed`).
+    max_speed: Option<f64>,
 }
 
 /// Where a lift ride ends.
@@ -208,11 +216,12 @@ struct RideEnd {
 /// An edge to another map is accepted only if it is one of `rides`.
 fn build_segments(
     graph: &Graph,
-    kinematics: Kinematics,
+    spec: &RobotSpec,
     start: NodeIdx,
     route: &[RouteEdge],
     rides: &HashSet<EdgeIdx>,
 ) -> Result<(Vec<Segment>, NodeIdx), DriveError> {
+    let kinematics = spec.kinematics;
     let mut segments = Vec::with_capacity(route.len());
     let mut at = start;
     for re in route {
@@ -233,6 +242,7 @@ fn build_segments(
                 length: 0.0,
                 heading: 0.0, // not used: the robot keeps its heading on a ride
                 reversed: false,
+                max_speed: None,
                 ride: Some(RideEnd {
                     edge: re.edge,
                     map: b.map,
@@ -263,6 +273,7 @@ fn build_segments(
             heading,
             reversed: angle_diff(direction, heading).abs() > FRAC_PI_2,
             ride: None,
+            max_speed: graph.edge_max_speed(re.edge, &spec.manufacturer, &spec.series_name),
         });
         at = e.end;
     }
@@ -271,7 +282,6 @@ fn build_segments(
 
 #[derive(Debug, Clone)]
 pub struct Driver {
-    kinematics: Kinematics,
     limits: Limits,
     segments: Vec<Segment>,
     /// Actions to queue when segment i ends, i.e. at its end node (parallel to `segments`).
@@ -302,6 +312,8 @@ pub struct Driver {
     obstructed: bool,
     /// The edges that are lift rides (they change the map).
     rides: HashSet<EdgeIdx>,
+    /// What the robot is like (its type picks the edge properties in the layout).
+    spec: RobotSpec,
 }
 
 impl Driver {
@@ -390,13 +402,12 @@ impl Driver {
         if spec.kinematics != Kinematics::Differential {
             return Err(DriveError::UnsupportedKinematics(spec.kinematics));
         }
-        let (segments, base_end) = build_segments(graph, spec.kinematics, start, route, &rides)?;
+        let (segments, base_end) = build_segments(graph, spec, start, route, &rides)?;
 
         let s = &graph.nodes[start];
         let mut queue = ActionQueue::new();
         queue.push(start_actions.iter().map(|a| times.plan(a)));
         let mut d = Driver {
-            kinematics: spec.kinematics,
             limits: spec.limits,
             segments,
             arrive_actions,
@@ -420,6 +431,7 @@ impl Driver {
             halted: false,
             obstructed: false,
             rides,
+            spec: spec.clone(),
         };
         d.at_node();
         Ok(d)
@@ -623,13 +635,8 @@ impl Driver {
                 found: graph.nodes[route.start].id.clone(),
             });
         }
-        let (segments, base_end) = build_segments(
-            graph,
-            self.kinematics,
-            route.start,
-            &route.edges,
-            &self.rides,
-        )?;
+        let (segments, base_end) =
+            build_segments(graph, &self.spec, route.start, &route.edges, &self.rides)?;
         if let Some(plan) = &mut self.plan {
             // plan entry i is the node/edge at segment i: keep what came before the
             // decision point (index = segments so far), the update replaces the rest
@@ -809,8 +816,14 @@ impl Driver {
                 let seg = self.segments[self.current];
                 let goal = EdgeGoal {
                     length: seg.length,
-                    // held: a speed limit of 0 makes it brake and stay stopped
-                    v_limit: if held { 0.0 } else { self.limits.max_speed },
+                    // held: a speed limit of 0 makes it brake and stay stopped; the
+                    // edge may allow less than the robot can do (S55)
+                    v_limit: if held {
+                        0.0
+                    } else {
+                        seg.max_speed
+                            .map_or(self.limits.max_speed, |m| m.min(self.limits.max_speed))
+                    },
                     v_end: 0.0,
                 };
                 let (along, arrived) = advance(self.along, goal, &self.limits, dt);

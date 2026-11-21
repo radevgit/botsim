@@ -1,0 +1,40 @@
+# A mixed fleet on one layout (the LIF lists which robot type may use what):
+#  - X1: small carrier (0.8 m x 1.2 m, up to 1.5 m/s) -- may use every edge
+#  - Y2: forklift (1.4 m x 2.4 m, up to 1.0 m/s, slow to speed up and brake) -- may
+#    not use the narrow cross aisle P1 -> P4, and is limited to 0.5 m/s on the
+#    ramp P2 -> P3
+# A one-way ring P0 .. P5 (20 m sides) with the cross aisle P1 -> P4 in the middle.
+# Run it from the repository root:
+#   cargo run --release -p botsim-runner -- scenarios/mixed_fleet.toml
+name = "mixed-fleet"
+seed = 5
+duration = 3600.0
+time_step = 0.05
+start_time = 2026-11-21T10:00:00Z
+lif = "mixed.lif.json"
+
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "X"            # X-001, X-002
+factsheet = "diff_robot.factsheet.json"
+start_nodes = ["P0", "P3"]
+action_time = 1.0
+
+[robot.action_times]
+pick = 5.0
+drop = 5.0
+
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "Y"            # Y-001
+factsheet = "forklift.factsheet.json"
+start_nodes = ["P5"]
+action_time = 1.0
+
+[robot.action_times]
+pick = 8.0                     # a forklift needs longer
+drop = 8.0
+
+[jobs]
+rate_per_hour = 60.0
+nodes = ["P0", "P1", "P2", "P3", "P4", "P5"]

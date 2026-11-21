@@ -283,12 +283,13 @@ fn a_route_to_the_lift_goes_through_the_waiting_node() {
 
     let g = two_way();
     let n = |s: &str| g.node_idx(s).unwrap();
+    let all = vec![true; g.edges.len()]; // every edge may be used
 
     let w = two_way_world(true);
     let desk = LiftDesk::new(&w);
     // G0 → U0: to the lay-by, back, to the entrance, the ride, on the upper floor
     // (no detour there: the way after the ride has no ride in it)
-    let r = desk.route(n("G0"), n("U0")).unwrap();
+    let r = desk.route(&all, n("G0"), n("U0")).unwrap();
     assert_eq!(
         edge_ids(&g, &r),
         [
@@ -296,19 +297,19 @@ fn a_route_to_the_lift_goes_through_the_waiting_node() {
         ]
     );
     // a robot that starts on the entrance cannot wait outside: no detour
-    let r = desk.route(n("G2"), n("U0")).unwrap();
+    let r = desk.route(&all, n("G2"), n("U0")).unwrap();
     assert_eq!(edge_ids(&g, &r), ["G2-U2", "U2-UJ", "UJ-U0"]);
     // a robot that starts on the lay-by has passed it already
-    let r = desk.route(n("GW"), n("U2")).unwrap();
+    let r = desk.route(&all, n("GW"), n("U2")).unwrap();
     assert_eq!(edge_ids(&g, &r), ["GW-GJ", "GJ-G2", "G2-U2"]);
     // no ride, no detour
-    let r = desk.route(n("G0"), n("G2")).unwrap();
+    let r = desk.route(&all, n("G0"), n("G2")).unwrap();
     assert_eq!(edge_ids(&g, &r), ["G0-GJ", "GJ-G2"]);
 
     // without a waiting node the route is the shortest one
     let w = two_way_world(false);
     let desk = LiftDesk::new(&w);
-    let r = desk.route(n("G0"), n("U0")).unwrap();
+    let r = desk.route(&all, n("G0"), n("U0")).unwrap();
     assert_eq!(
         edge_ids(&g, &r),
         ["G0-GJ", "GJ-G2", "G2-U2", "U2-UJ", "UJ-U0"]

@@ -14,6 +14,15 @@ pub type EdgeIdx = usize;
 /// Index of a map (floor) in [`Graph::maps`]; the VDA 5050 `mapId` as a small number.
 pub type MapIdx = usize;
 
+/// A robot type as the LIF names it and the factsheet states it:
+/// (`manufacturer`, `seriesName`).
+pub type RobotTypeKey = (String, String);
+
+/// Is the type (`manufacturer`, `series`) in the list?
+fn lists_type(list: &[RobotTypeKey], manufacturer: &str, series: &str) -> bool {
+    list.iter().any(|(m, s)| m == manufacturer && s == series)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphNode {
     pub id: String,
@@ -21,6 +30,18 @@ pub struct GraphNode {
     pub map: MapIdx,
     pub x: f64,
     pub y: f64,
+    /// The robot types that may use the node (LIF `mobileRobotTypeNodeProperties`);
+    /// a type that is not listed may not.
+    pub robot_types: Vec<RobotTypeKey>,
+}
+
+/// What an edge is like for some robot types (one LIF
+/// `mobileRobotTypeEdgeProperties` entry).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeTypeProps {
+    pub robot_types: Vec<RobotTypeKey>,
+    /// Permitted maximum speed in m/s (> 0); no limit if `None`.
+    pub maximum_speed: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,13 +55,33 @@ pub struct GraphEdge {
     /// different maps cannot be compared, so there is no length; how such an
     /// edge is travelled comes with the elevator peripheral.
     pub map_transition: bool,
+    /// The properties of the edge per robot type. Only the listed types may use
+    /// the edge (LIF: "one element per allowed robot type").
+    pub types: Vec<EdgeTypeProps>,
+}
+
+impl GraphEdge {
+    /// The properties of this edge for a robot type; `None` if the type may not
+    /// use the edge.
+    pub fn props_for(&self, manufacturer: &str, series: &str) -> Option<&EdgeTypeProps> {
+        self.types
+            .iter()
+            .find(|p| lists_type(&p.robot_types, manufacturer, series))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphError {
     DuplicateNode(String),
     DuplicateEdge(String),
-    UnknownNode { edge: String, node: String },
+    UnknownNode {
+        edge: String,
+        node: String,
+    },
+    /// `maximumSpeed` must be above 0 (a robot could never drive the edge).
+    BadMaximumSpeed {
+        edge: String,
+    },
 }
 
 impl fmt::Display for GraphError {
@@ -51,6 +92,10 @@ impl fmt::Display for GraphError {
             GraphError::UnknownNode { edge, node } => {
                 write!(f, "edge '{edge}' refers to unknown node '{node}'")
             }
+            GraphError::BadMaximumSpeed { edge } => write!(
+                f,
+                "edge '{edge}': maximumSpeed must be above 0 (a robot could never drive it)"
+            ),
         }
     }
 }
@@ -108,6 +153,12 @@ impl Graph {
                 map,
                 x: n.node_position.x,
                 y: n.node_position.y,
+                robot_types: n
+                    .mobile_robot_type_node_properties
+                    .iter()
+                    .flat_map(|p| &p.mobile_robot_types)
+                    .map(|t| (t.manufacturer.clone(), t.series_name.clone()))
+                    .collect(),
             });
             g.out_edges.push(Vec::new());
         }
@@ -136,17 +187,55 @@ impl Graph {
             } else {
                 (b.x - a.x).hypot(b.y - a.y)
             };
+            let mut types = Vec::new();
+            for p in &e.mobile_robot_type_edge_properties {
+                if p.maximum_speed.is_some_and(|v| !(v.is_finite() && v > 0.0)) {
+                    return Err(GraphError::BadMaximumSpeed {
+                        edge: e.edge_id.clone(),
+                    });
+                }
+                types.push(EdgeTypeProps {
+                    robot_types: p
+                        .mobile_robot_types
+                        .iter()
+                        .map(|t| (t.manufacturer.clone(), t.series_name.clone()))
+                        .collect(),
+                    maximum_speed: p.maximum_speed,
+                });
+            }
             g.edges.push(GraphEdge {
                 id: e.edge_id.clone(),
                 start,
                 end,
                 length,
                 map_transition,
+                types,
             });
             g.out_edges[start].push(idx);
         }
 
         Ok(g)
+    }
+
+    /// May a robot of this type stand on the node?
+    pub fn node_allows(&self, node: NodeIdx, manufacturer: &str, series: &str) -> bool {
+        lists_type(&self.nodes[node].robot_types, manufacturer, series)
+    }
+
+    /// May a robot of this type drive the edge? The edge must list the type, and
+    /// the type must be allowed on both end nodes.
+    pub fn edge_allows(&self, edge: EdgeIdx, manufacturer: &str, series: &str) -> bool {
+        let e = &self.edges[edge];
+        e.props_for(manufacturer, series).is_some()
+            && self.node_allows(e.start, manufacturer, series)
+            && self.node_allows(e.end, manufacturer, series)
+    }
+
+    /// The speed limit (m/s) of the edge for this type, if it has one.
+    pub fn edge_max_speed(&self, edge: EdgeIdx, manufacturer: &str, series: &str) -> Option<f64> {
+        self.edges[edge]
+            .props_for(manufacturer, series)
+            .and_then(|p| p.maximum_speed)
     }
 
     pub fn node_idx(&self, id: &str) -> Option<NodeIdx> {

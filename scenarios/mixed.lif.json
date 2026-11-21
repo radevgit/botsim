@@ -1,0 +1,47 @@
+{
+    "metaInformation": {
+        "lifId": "mixed",
+        "creator": "radevgit",
+        "exportTimestamp": "2026-11-21T10:00:00.000Z",
+        "lifVersion": "2.0.0"
+    },
+    "origins": [{
+        "originId": "O1",
+        "layouts": [{
+            "layoutId": "Hall",
+            "layoutVersion": "1",
+            "nodes": [
+                {"nodeId": "P0", "mapId": "M", "nodePosition": {"x": 0.0, "y": 0.0},
+                 "mobileRobotTypeNodeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}, {"manufacturer": "ACME", "seriesName": "Y2"}]}]},
+                {"nodeId": "P1", "mapId": "M", "nodePosition": {"x": 20.0, "y": 0.0},
+                 "mobileRobotTypeNodeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}, {"manufacturer": "ACME", "seriesName": "Y2"}]}]},
+                {"nodeId": "P2", "mapId": "M", "nodePosition": {"x": 40.0, "y": 0.0},
+                 "mobileRobotTypeNodeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}, {"manufacturer": "ACME", "seriesName": "Y2"}]}]},
+                {"nodeId": "P3", "mapId": "M", "nodePosition": {"x": 40.0, "y": 20.0},
+                 "mobileRobotTypeNodeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}, {"manufacturer": "ACME", "seriesName": "Y2"}]}]},
+                {"nodeId": "P4", "mapId": "M", "nodePosition": {"x": 20.0, "y": 20.0},
+                 "mobileRobotTypeNodeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}, {"manufacturer": "ACME", "seriesName": "Y2"}]}]},
+                {"nodeId": "P5", "mapId": "M", "nodePosition": {"x": 0.0, "y": 20.0},
+                 "mobileRobotTypeNodeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}, {"manufacturer": "ACME", "seriesName": "Y2"}]}]}
+            ],
+            "edges": [
+                {"edgeId": "P0-P1", "startNodeId": "P0", "endNodeId": "P1",
+                 "mobileRobotTypeEdgeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}, {"manufacturer": "ACME", "seriesName": "Y2"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0]}]},
+                {"edgeId": "P1-P2", "startNodeId": "P1", "endNodeId": "P2",
+                 "mobileRobotTypeEdgeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}, {"manufacturer": "ACME", "seriesName": "Y2"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0]}]},
+                {"edgeId": "P2-P3", "startNodeId": "P2", "endNodeId": "P3",
+                 "mobileRobotTypeEdgeProperties": [
+                    {"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0]},
+                    {"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "Y2"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0], "maximumSpeed": 0.5}]},
+                {"edgeId": "P3-P4", "startNodeId": "P3", "endNodeId": "P4",
+                 "mobileRobotTypeEdgeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}, {"manufacturer": "ACME", "seriesName": "Y2"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0]}]},
+                {"edgeId": "P4-P5", "startNodeId": "P4", "endNodeId": "P5",
+                 "mobileRobotTypeEdgeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}, {"manufacturer": "ACME", "seriesName": "Y2"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0]}]},
+                {"edgeId": "P5-P0", "startNodeId": "P5", "endNodeId": "P0",
+                 "mobileRobotTypeEdgeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}, {"manufacturer": "ACME", "seriesName": "Y2"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0]}]},
+                {"edgeId": "P1-P4", "startNodeId": "P1", "endNodeId": "P4",
+                 "mobileRobotTypeEdgeProperties": [{"mobileRobotTypes": [{"manufacturer": "ACME", "seriesName": "X1"}], "orientationType": "TANGENTIAL", "mobileRobotOrientations": [0.0]}]}
+            ]
+        }]
+    }]
+}

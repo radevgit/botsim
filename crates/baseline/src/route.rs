@@ -63,11 +63,14 @@ pub fn shortest_path_avoiding(
     Some(path)
 }
 
-/// For every node, the edges that lead into it (for [`distances_to`]).
-pub fn in_edges(graph: &Graph) -> Vec<Vec<EdgeIdx>> {
+/// For every node, the edges that lead into it (for [`distances_to`]); only the
+/// edges for which `ok[e]` is true (the ones a robot type may drive, S55).
+pub fn in_edges(graph: &Graph, ok: &[bool]) -> Vec<Vec<EdgeIdx>> {
     let mut into = vec![Vec::new(); graph.nodes.len()];
     for (i, e) in graph.edges.iter().enumerate() {
-        into[e.end].push(i);
+        if ok[i] {
+            into[e.end].push(i);
+        }
     }
     into
 }

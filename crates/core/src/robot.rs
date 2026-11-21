@@ -47,6 +47,10 @@ pub enum Reception {
     Accepted,
     /// Rejected; the error is in the robot's error list.
     Rejected(ErrorType),
+    /// Not delivered yet (the world has a message delay, S58): the sender cannot
+    /// know the outcome; it shows in the robot's state later, as in VDA 5050
+    /// (the `orderId` of the state, or an error that names the order).
+    InTransit,
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +129,30 @@ impl Robot {
             crate::spec::Shape::Rect { half_width, .. } => 2.0 * half_width,
             crate::spec::Shape::Circle { radius, .. } => 2.0 * radius,
         }
+    }
+
+    /// The first node or edge of the order that the layout does not allow for
+    /// this robot's type (LIF `mobileRobotTypeNodeProperties` and
+    /// `mobileRobotTypeEdgeProperties`), as text for the error.
+    fn not_allowed(&self, graph: &Graph, route: &crate::order_route::OrderRoute) -> Option<String> {
+        let (m, s) = (&self.spec.manufacturer, &self.spec.series_name);
+        let node = route.plan_nodes.iter().find(|n| {
+            graph
+                .node_idx(&n.node_id)
+                .is_some_and(|i| !graph.node_allows(i, m, s))
+        });
+        if let Some(n) = node {
+            return Some(format!("node '{}'", n.node_id));
+        }
+        route
+            .plan_edges
+            .iter()
+            .find(|e| {
+                graph
+                    .edge_idx(&e.edge_id)
+                    .is_some_and(|i| !graph.edge_allows(i, m, s))
+            })
+            .map(|e| format!("edge '{}'", e.edge_id))
     }
 
     /// The first edge of `edges` that leads through a door narrower than the robot.
@@ -361,6 +389,11 @@ impl Robot {
             }
         };
 
+        if let Some(what) = self.not_allowed(graph, &route) {
+            let e = DriveError::NotAllowedForType { what };
+            let err = RobotError::from_drive_error(&e, &order.order_id, order.order_update_id);
+            return self.reject(err);
+        }
         if let Some(edge) = self.too_narrow(&route.plan_edges) {
             let e = DriveError::DoorTooNarrow { edge };
             let err = RobotError::from_drive_error(&e, &order.order_id, order.order_update_id);

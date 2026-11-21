@@ -38,6 +38,30 @@ LIF 2.0 (layouts).
   forwards. Orientation 0 → forwards, π → backwards (3.14 is accepted for π,
   tolerance 0.01 rad). Any other value is refused (`ORIENTATION_UNREACHABLE`).
 - Edges are straight lines; their length is the distance between the nodes.
+- **Robot types in the layout (S55).** The LIF lists, for every node and edge,
+  the robot types (`manufacturer` + `seriesName`) that may use it
+  (`mobileRobotTypeNodeProperties`, `mobileRobotTypeEdgeProperties`; "a robot
+  type without an entry may not use the node/edge"). A robot's type is the one in
+  its factsheet. So:
+  - A robot **cannot be placed** on a node its type may not use (the scenario
+    names the node and the type).
+  - An order with a **node or edge the type may not use** is refused
+    (`NO_ROUTE_TO_TARGET`, the nearest predefined error; the text names the node
+    or edge). An edge may be used only if it lists the type **and** both its end
+    nodes do.
+  - **Speed limit:** an edge's `maximumSpeed` for the robot's type limits the
+    speed on that edge (the robot's own limit still applies; it brakes to stop at
+    the end node as always). A `maximumSpeed` of 0 or less is an error when the
+    layout is read (a robot could never drive the edge).
+  - **Baseline:** routes are planned per robot type, over the edges the type may
+    use; a job goes to the nearest free robot that has a route for it; a job no
+    robot type can do waits (it is not refused) (§9).
+  - The test layouts therefore list the robot type used in the tests (the
+    official LIF example 14 names `Manufacturer_A` / `Series_1`; the copies used
+    in tests were changed to `ACME` / `X1`).
+  - Not yet: the other per-type properties (own trajectory and corridor,
+    orientations and rotation rules, `maximumRotationSpeed`, load restrictions,
+    required and forbidden actions); travel time (not length) as the route cost.
 
 ## 3. Orders (VDA 5050)
 
@@ -411,7 +435,10 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   the robot added first). A job no free robot can reach waits and does not
   block later jobs.
 - **Route**: shortest route by edge length (edges are one-way as in the
-  layout).
+  layout), **per robot type** (**S55**): only over edges the robot's type may use
+  (§2). The nearest free robot is chosen by the route length of its own type.
+  The robot type comes from the robot's factsheet (`World::spec`). An edge's
+  speed limit is not part of the route cost (length only).
 - **Release window** (**S29**, changed to 2 by the user): the robot's node
   and the next **2** nodes are released; each time the robot reaches a node the
   base is extended by an order update.
@@ -567,7 +594,9 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 - Optional `deadlock_timeout` (seconds, default 30).
 - Result: a JSON summary on standard output (scenario, seed, ticks, jobs,
   deadlocks,
-  metrics, collisions, final position of each robot). It has no clock times or
+  metrics, collisions, and for each robot its type (`manufacturer`,
+  `series_name`, **S57**), the number of jobs it finished (`jobs_done`, 0 without
+  jobs) and its final position). It has no clock times or
   file paths, so the same scenario gives the same bytes.
 - Exit codes: 0 done, 1 error (message on standard error), 2 wrong command line.
 - Command line: `botsim-runner [--timing] <scenario.toml>`.
@@ -580,7 +609,7 @@ nodes; node orientation and deviation; edge actions; other instant actions;
 operating modes; state message timing and message delay; horizon actions;
 breakdowns; walls and people as obstacles of the safety stop (§7a); deadlock
 resolution beyond the baseline's re-routing (§9);
-a debug stop at the first deadlock; stations in the layout; the viewer (the
+a debug stop at the first deadlock; stations in the layout; the other per-type LIF edge properties (§2); the viewer (the
 Rerun recording was dropped, U5). Lifts hold one robot and doors are tied to
 edges (§7g, §7h).
 

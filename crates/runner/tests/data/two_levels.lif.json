@@ -27,8 +27,8 @@
                                 {
                                     "mobileRobotTypes": [
                                         {
-                                            "manufacturer": "Manufacturer_A",
-                                            "seriesName": "Series_1"
+                                            "manufacturer": "ACME",
+                                            "seriesName": "X1"
                                         }
                                     ]
                                 }
@@ -45,8 +45,8 @@
                                 {
                                     "mobileRobotTypes": [
                                         {
-                                            "manufacturer": "Manufacturer_A",
-                                            "seriesName": "Series_1"
+                                            "manufacturer": "ACME",
+                                            "seriesName": "X1"
                                         }
                                     ]
                                 }
@@ -62,8 +62,8 @@
                                 {
                                     "mobileRobotTypes": [
                                         {
-                                            "manufacturer": "Manufacturer_A",
-                                            "seriesName": "Series_1"
+                                            "manufacturer": "ACME",
+                                            "seriesName": "X1"
                                         }
                                     ],
                                     "orientationType": "TANGENTIAL",
@@ -82,8 +82,8 @@
                                 {
                                     "mobileRobotTypes": [
                                         {
-                                            "manufacturer": "Manufacturer_A",
-                                            "seriesName": "Series_1"
+                                            "manufacturer": "ACME",
+                                            "seriesName": "X1"
                                         }
                                     ],
                                     "orientationType": "TANGENTIAL",
@@ -119,8 +119,8 @@
                                 {
                                     "mobileRobotTypes": [
                                         {
-                                            "manufacturer": "Manufacturer_A",
-                                            "seriesName": "Series_1"
+                                            "manufacturer": "ACME",
+                                            "seriesName": "X1"
                                         }
                                     ]
                                 }
@@ -137,8 +137,8 @@
                                 {
                                     "mobileRobotTypes": [
                                         {
-                                            "manufacturer": "Manufacturer_A",
-                                            "seriesName": "Series_1"
+                                            "manufacturer": "ACME",
+                                            "seriesName": "X1"
                                         }
                                     ]
                                 }
@@ -154,8 +154,8 @@
                                 {
                                     "mobileRobotTypes": [
                                         {
-                                            "manufacturer": "Manufacturer_A",
-                                            "seriesName": "Series_1"
+                                            "manufacturer": "ACME",
+                                            "seriesName": "X1"
                                         }
                                     ],
                                     "orientationType": "TANGENTIAL",
@@ -174,8 +174,8 @@
                                 {
                                     "mobileRobotTypes": [
                                         {
-                                            "manufacturer": "Manufacturer_A",
-                                            "seriesName": "Series_1"
+                                            "manufacturer": "ACME",
+                                            "seriesName": "X1"
                                         }
                                     ],
                                     "orientationType": "TANGENTIAL",
@@ -194,8 +194,8 @@
                                 {
                                     "mobileRobotTypes": [
                                         {
-                                            "manufacturer": "Manufacturer_A",
-                                            "seriesName": "Series_1"
+                                            "manufacturer": "ACME",
+                                            "seriesName": "X1"
                                         }
                                     ],
                                     "orientationType": "TANGENTIAL",

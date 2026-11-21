@@ -1,0 +1,17 @@
+[package]
+name = "botsim-record"
+description = "Recording of a botsim run (JSON Lines): line types, writer and reader"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+botsim-core = { path = "../core" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+vdma-lif = "0.1.0"
+vda5050 = "0.1.0"

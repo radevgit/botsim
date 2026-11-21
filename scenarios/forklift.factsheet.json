@@ -1,0 +1,40 @@
+{
+    "headerId": 1,
+    "timestamp": "2026-11-21T10:00:00.000Z",
+    "version": "3.0.1",
+    "manufacturer": "ACME",
+    "serialNumber": "Y-001",
+    "typeSpecification": {
+        "seriesName": "Y2",
+        "mobileRobotKinematics": "DIFFERENTIAL",
+        "mobileRobotClass": "FORKLIFT",
+        "maximumLoadMass": 1500.0,
+        "localizationTypes": ["NATURAL"],
+        "navigationTypes": ["VIRTUAL_LINE_GUIDED"]
+    },
+    "physicalParameters": {
+        "minimumSpeed": 0.1,
+        "maximumSpeed": 1.0,
+        "maximumAngularSpeed": 0.6,
+        "maximumAcceleration": 0.3,
+        "maximumDeceleration": 0.5,
+        "minimumHeight": 0.5,
+        "maximumHeight": 2.0,
+        "width": 1.4,
+        "length": 2.4
+    },
+    "protocolLimits": {
+        "maximumStringLengths": {},
+        "maximumArrayLengths": {},
+        "timing": {
+            "minimumOrderInterval": 1.0,
+            "minimumStateInterval": 0.5
+        }
+    },
+    "protocolFeatures": {
+        "optionalParameters": [],
+        "mobileRobotActions": []
+    },
+    "mobileRobotGeometry": {},
+    "loadSpecification": {}
+}

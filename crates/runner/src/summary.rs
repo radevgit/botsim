@@ -157,7 +157,12 @@ pub struct CollisionSummary {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RobotSummary {
     pub manufacturer: String,
+    /// The robot's type (factsheet `seriesName`); with `manufacturer` it is the
+    /// type the layout lists on the nodes and edges it may use (S57).
+    pub series_name: String,
     pub serial_number: String,
+    /// Jobs this robot finished (0 without a `[jobs]` section).
+    pub jobs_done: usize,
     pub map_id: String,
     pub x: f64,
     pub y: f64,
@@ -291,6 +296,14 @@ pub fn run_with(
             let state = world.state(id).expect("the id comes from the world");
             RobotSummary {
                 manufacturer: id.manufacturer.clone(),
+                series_name: world
+                    .spec(id)
+                    .expect("the id comes from the world")
+                    .series_name
+                    .clone(),
+                jobs_done: controller.as_ref().map_or(0, |c| {
+                    c.completed().iter().filter(|d| d.robot == *id).count()
+                }),
                 serial_number: id.serial_number.clone(),
                 map_id: world.graph().maps[p.map].clone(),
                 x: p.x,

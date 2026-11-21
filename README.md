@@ -18,7 +18,11 @@ same output. Edit `scenarios/ring_jobs.toml` to change robots, jobs and seed.
 Add `--timing` (before or after the file name) to also get the real time the
 controller needed per step; that is the only thing that differs between runs.
 
-`scenarios/lift_jobs.toml` is a second example: two floors, one lift and jobs
+`scenarios/mixed_fleet.toml` runs two robot types on one layout (a small carrier
+and a larger, slower forklift; the layout says which type may use which edge
+and at what speed).
+
+`scenarios/lift_jobs.toml` is another example: two floors, one lift and jobs
 between the floors (`cargo run --release -p botsim-runner -- scenarios/lift_jobs.toml`).
 
 ## Workspace

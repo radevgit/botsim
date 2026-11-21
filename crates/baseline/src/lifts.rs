@@ -38,7 +38,7 @@ use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_core::world::{RobotId, World};
 
 use crate::order_builder::Plan;
-use crate::route::shortest_path;
+use crate::route::shortest_path_avoiding;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -143,9 +143,13 @@ impl LiftDesk {
     /// node** of every lift entrance it uses that has one: to the lay-by, from
     /// there to the entrance, then the ride. No detour if the robot starts on
     /// the entrance, already passes the lay-by before the ride, or the lay-by
-    /// cannot be reached.
-    pub fn route(&self, from: NodeIdx, to: NodeIdx) -> Option<Vec<EdgeIdx>> {
-        let path = shortest_path(&self.graph, from, to)?;
+    /// cannot be reached. `ok[e]` says whether the robot's type may drive edge `e`
+    /// (S55); other edges are not used.
+    pub fn route(&self, ok: &[bool], from: NodeIdx, to: NodeIdx) -> Option<Vec<EdgeIdx>> {
+        let none = std::collections::HashSet::new();
+        let path_of =
+            |a: NodeIdx, b: NodeIdx| shortest_path_avoiding(&self.graph, a, b, &none, |e| !ok[e]);
+        let path = path_of(from, to)?;
         let mut nodes = vec![from];
         nodes.extend(path.iter().map(|&e| self.graph.edges[e].end));
         for (i, &e) in path.iter().enumerate() {
@@ -155,10 +159,7 @@ impl LiftDesk {
             let waiting = self.lifts[l].stop(a).waiting;
             let before = match waiting {
                 Some(w) if i > 0 && !nodes[..i].contains(&w) => {
-                    match (
-                        shortest_path(&self.graph, from, w),
-                        shortest_path(&self.graph, w, a),
-                    ) {
+                    match (path_of(from, w), path_of(w, a)) {
                         (Some(mut to_w), Some(w_to_a)) => {
                             to_w.extend(w_to_a);
                             to_w
@@ -170,7 +171,7 @@ impl LiftDesk {
             };
             let mut edges = before;
             edges.push(e);
-            edges.extend(self.route(b, to)?);
+            edges.extend(self.route(ok, b, to)?);
             return Some(edges);
         }
         Some(path)

@@ -86,7 +86,7 @@ fn the_node_grid_gives_the_same_node_as_scanning_every_node() {
 fn distances_to_a_node_are_the_lengths_of_the_shortest_routes() {
     for seed in 1..=5 {
         let g = random_graph(seed);
-        let into = in_edges(&g);
+        let into = in_edges(&g, &vec![true; g.edges.len()]);
         for target in 0..g.nodes.len() {
             let dist = distances_to(&g, &into, target);
             for (from, &d) in dist.iter().enumerate() {
