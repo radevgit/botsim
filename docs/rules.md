@@ -24,6 +24,33 @@ LIF 2.0 (layouts).
   pose carries a `mapId`. Robots on different maps never collide. Lifts are
   simulated (§7f, §7g); doors on layout edges are separate peripherals (§7h).
 
+## 1a. Message delay (**S58**)
+
+- Without a delay (the default) the controller and the robots exchange messages
+  within the step: an order is received at once and the robot answers at once;
+  the controller reads the robot's state as it is now.
+- With `message_delay` (scenario, seconds, rounded to whole steps) every message
+  takes that long **in each direction**: orders, instant actions and responses
+  arrive at the robot that many steps after they were sent (in the order they
+  were sent), and the state messages the controller reads are that many steps
+  old. Before the first state has "arrived" the controller sees the first state.
+  A round trip (an order and the state that shows it) takes twice the delay.
+- **The robot's answer to an order is not returned any more:** the sender gets
+  "in transit" and learns the outcome from the state — the `orderId` of the
+  state, or an error that names the order (as in VDA 5050).
+- Only the VDA 5050 messages are delayed. **Lift and door commands and what the
+  controller reads from lifts and doors are instant**, and so is everything the
+  simulator itself looks at (collisions, deadlocks, the observer, metrics).
+- **Baseline:** it sends a job's order and goes on as if it were accepted; if the
+  state later shows an error that names the order, it gives the job up (job
+  refused, what was reserved for it is released, a lift or door it was given is
+  given back). A refused order *update* is not detected with a delay (the
+  baseline only sends updates its robots can follow). Releases, re-routing and the
+  end of a job are all decided on the old state, so a robot may reach the end of
+  its released route before the next update arrives and wait there.
+- Not yet: a different delay per direction or per robot, random delays or lost
+  messages, a delay for the lift and door commands.
+
 ## 2. Robot motion
 
 - Only differential-drive robots are supported so far (others are refused).
@@ -591,7 +618,8 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 - One TOML file: name, seed, duration, `time_step`, `start_time`, the layout
   (`lif`), robot groups (`[[robot]]`) and optional `[jobs]`. Paths are
   relative to the scenario file; unknown keys are errors.
-- Optional `deadlock_timeout` (seconds, default 30).
+- Optional `deadlock_timeout` (seconds, default 30), `safety_stop` (default
+  true, §7a) and `message_delay` (seconds, default 0, §1a).
 - Result: a JSON summary on standard output (scenario, seed, ticks, jobs,
   deadlocks,
   metrics, collisions, and for each robot its type (`manufacturer`,
@@ -606,7 +634,8 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 Stops at every node; differential drive only; straight edges only; per-robot-type
 edge properties of the LIF (paths, speeds, corridors); rotation restrictions at
 nodes; node orientation and deviation; edge actions; other instant actions;
-operating modes; state message timing and message delay; horizon actions;
+operating modes; state message timing (the state is sent when the controller asks,
+not every 0.5 s, and a delay is the same for all messages, §1a); horizon actions;
 breakdowns; walls and people as obstacles of the safety stop (§7a); deadlock
 resolution beyond the baseline's re-routing (§9);
 a debug stop at the first deadlock; stations in the layout; the other per-type LIF edge properties (§2); the viewer (the

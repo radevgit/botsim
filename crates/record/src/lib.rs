@@ -6,13 +6,17 @@
 //! by their position in the lists, as in the observer port.
 
 mod layout;
+mod reader;
 mod snapshot;
+mod writer;
 
 pub use layout::{EdgeRecord, LayoutLine, NodeRecord};
+pub use reader::{ReadError, Reader, Recording, read_recording};
 pub use snapshot::{
     CallRecord, DoorRecord, DoorStateRecord, LiftRecord, ReservationRecord, RobotRecord,
     RouteRecord, ShapeRecord, SnapshotLine, StatusRecord,
 };
+pub use writer::{RecordHandle, Recorder};
 
 /// The version written in the layout line. Raise it when the format changes in a
 /// way an old reader cannot handle.

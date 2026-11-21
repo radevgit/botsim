@@ -179,6 +179,48 @@ fn a_robot_wider_than_the_door_has_its_job_refused() {
 }
 
 #[test]
+fn with_delayed_messages_a_refused_job_is_given_up_when_the_state_shows_the_refusal() {
+    // the order reaches the robot 0.5 s later and the refusal comes back 0.5 s
+    // after that, in the state; the controller has to learn it from there
+    let g = chain();
+    let mut w = world(&["N0"], Some(0.7));
+    w.set_message_delay(10);
+    let mut c = Controller::new(&w);
+    let mut jobs = Some(vec![job(&g, 1, "N0", "N5")]);
+    c.step(&mut w, jobs.take().unwrap());
+    assert_eq!(c.busy(), 1, "the controller cannot know yet");
+    for _ in 0..40 {
+        w.step();
+        c.step(&mut w, vec![]);
+    }
+    assert_eq!(c.rejected().len(), 1);
+    assert_eq!(c.busy(), 0);
+    // what had been reserved for the job is free again: the next job goes through
+    c.step(&mut w, vec![job(&g, 2, "N0", "N2")]);
+    for _ in 0..4000 {
+        w.step();
+        c.step(&mut w, vec![]);
+    }
+    assert_eq!(c.completed().len(), 1);
+    assert_eq!(c.rejected().len(), 1);
+}
+
+#[test]
+fn a_door_works_with_delayed_messages() {
+    // `run` checks at every step that the door is open while a robot is on its edge
+    let g = chain();
+    let mut w = world(&["N0", "N1"], None);
+    w.set_message_delay(10);
+    let mut c = Controller::new(&w);
+    let jobs = vec![job(&g, 1, "N1", "N5"), job(&g, 2, "N0", "N4")];
+    let on_edge = run(&mut w, &mut c, jobs, 15000);
+    assert_eq!(c.completed().len(), 2, "{:?}", c.rejected());
+    assert!(on_edge > 0);
+    assert!(w.collisions().is_empty());
+    assert_eq!(w.door_status("D1").unwrap().state, DoorState::Closed);
+}
+
+#[test]
 fn the_same_run_gives_the_same_result() {
     let run_once = || {
         let g = chain();

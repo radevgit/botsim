@@ -1,19 +1,10 @@
-use std::cell::RefCell;
-use std::rc::Rc;
+mod common;
 
-use botsim_core::actions::ActionTimes;
 use botsim_core::graph::Graph;
 use botsim_core::observer::{Observer, Snapshot};
-use botsim_core::robot::Reception::Accepted;
-use botsim_core::spec::RobotSpec;
-use botsim_core::world::{RobotId, World};
 use botsim_record::{ShapeRecord, SnapshotLine, StatusRecord};
-use vda5050::factsheet::Factsheet;
-use vda5050::order::Order;
-use vdma_lif::Lif;
-
-const DT: f64 = 0.05;
-const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scenarios/");
+use std::cell::RefCell;
+use std::rc::Rc;
 
 #[derive(Debug)]
 struct Collect(Rc<RefCell<Vec<Snapshot>>>);
@@ -27,43 +18,13 @@ impl Observer for Collect {
 
 /// Corridor A - B - C, one robot R-1 on A driving to B (then C is planned).
 fn run() -> Vec<Snapshot> {
-    let lif: Lif =
-        serde_json::from_str(&std::fs::read_to_string(format!("{DIR}corridor.lif.json")).unwrap())
-            .unwrap();
-    let graph = Graph::from_lif(&lif).unwrap();
-    let a = graph.node_idx("A").unwrap();
-    let f: Factsheet = serde_json::from_str(
-        &std::fs::read_to_string(format!("{DIR}diff_robot.factsheet.json")).unwrap(),
-    )
-    .unwrap();
-    let spec = RobotSpec::from_factsheet(&f).unwrap();
-    let mut w = World::new(graph, DT, 0).unwrap();
-    w.add_robot(
-        RobotId::new("ACME", "R-1"),
-        spec,
-        ActionTimes::new(2.0),
-        a,
-        0.0,
-    )
-    .unwrap();
+    let mut w = common::corridor_world();
     let log = Rc::new(RefCell::new(Vec::new()));
     w.set_observer(Box::new(Collect(log.clone())));
-    let order: Order = serde_json::from_str(
-        r#"{"headerId":1,"timestamp":"2026-11-20T10:00:00.000Z","version":"3.0.1",
-        "manufacturer":"ACME","serialNumber":"R-1","orderId":"o1","orderUpdateId":0,
-        "nodes":[{"nodeId":"A","sequenceId":0,"released":true,"actions":[]},
-                 {"nodeId":"B","sequenceId":2,"released":true,"actions":[]},
-                 {"nodeId":"C","sequenceId":4,"released":false,"actions":[]}],
-        "edges":[{"edgeId":"A-B","sequenceId":1,"released":true,"actions":[]},
-                 {"edgeId":"B-C","sequenceId":3,"released":false,"actions":[]}]}"#,
-    )
-    .unwrap();
-    assert_eq!(w.send_order(&order), Ok(Accepted));
     for _ in 0..400 {
         w.step();
     }
-    let snaps = log.borrow().clone();
-    snaps
+    log.borrow().clone()
 }
 
 #[test]

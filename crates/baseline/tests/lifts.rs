@@ -177,6 +177,23 @@ fn a_job_that_comes_back_down_uses_the_lift_twice() {
 }
 
 #[test]
+fn a_lift_ride_works_with_delayed_messages() {
+    let g = graph();
+    let mut w = world(&["N1"], true);
+    w.set_message_delay(10);
+    let mut c = Controller::new(&w);
+    let mut jobs = Some(vec![job(&g, 1, "N1", "N101")]);
+    for _ in 0..12000 {
+        c.step(&mut w, jobs.take().unwrap_or_default());
+        w.step();
+    }
+    assert_eq!(c.completed().len(), 1, "{:?}", c.rejected());
+    assert_eq!(map_of(&w, 1), LEVEL_2);
+    assert!(w.collisions().is_empty());
+    assert_eq!(w.lift_rider("L1").unwrap(), None);
+}
+
+#[test]
 fn a_job_that_needs_a_lift_without_stops_is_refused_by_the_robot() {
     let g = graph();
     let mut w = world(&["N1"], false);

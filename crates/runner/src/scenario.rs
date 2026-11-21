@@ -11,6 +11,7 @@
 //! deadlock_timeout = 30.0        # optional; seconds, default 30
 //! safety_stop = true             # optional, default true: robots brake for robots ahead
 //! message_delay = 0.0            # optional: seconds a message takes, each way (default 0)
+//! stop_at_first_deadlock = false # optional debug: end the run when a deadlock is reported
 //! zone_set = "zones.json"        # optional VDA 5050 zone set; loaded and checked only
 //!
 //! [[door]]                       # optional, any number: a door on layout edges
@@ -123,6 +124,12 @@ pub struct Scenario {
     /// old. Rounded to whole time steps. Default 0 (instant).
     #[serde(default)]
     pub message_delay: Option<f64>,
+    /// Debug option (S59): end the run at the step when the first deadlock is
+    /// reported (after `deadlock_timeout`), so that the situation can be looked
+    /// at. The result says so (`stopped_at_first_deadlock`) and `ticks` is the
+    /// number of steps actually run. Default `false`.
+    #[serde(default)]
+    pub stop_at_first_deadlock: bool,
     /// The robots' onboard safety stop (S54): a robot brakes when another robot
     /// is in its protective field. Default `true`; `false` lets robots drive
     /// into each other (to test collision detection).
