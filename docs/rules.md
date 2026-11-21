@@ -21,8 +21,8 @@ LIF 2.0 (layouts).
 - A robot is identified by `manufacturer` + `serialNumber`, as in the VDA 5050
   topic. Serial numbers are `<serial_prefix>-001`, `-002`, ….
 - A layout (LIF) can have several maps (levels); every node and every robot
-  pose carries a `mapId`. Robots on different maps never collide.
-  Lifts and doors are not simulated yet.
+  pose carries a `mapId`. Robots on different maps never collide. Lifts are
+  simulated (§7f, §7g); doors on layout edges are separate peripherals (§7h).
 
 ## 2. Robot motion
 
@@ -238,12 +238,12 @@ how the controller uses them. Not enforced by the simulator yet.)
   it, and waits on the node before that edge, so that node must lie **outside**
   the zone.
 
-## 7f. Lifts (peripheral, model only)
+## 7f. Lifts (peripheral)
 
 - A lift is a **peripheral** of the simulated world: not a robot and not part
   of VDA 5050 (the standard leaves talking to lifts and doors to the fleet
   control). It has its **own small command port** next to the VDA 5050 messages
-  (**S44**). So far this is the **lift model alone: no robot rides it yet.**
+  (**S44**). Robots ride it as described in §7g.
 - **Lift:** a list of floors (the maps it stops at, lowest first, at least two,
   all different), one cabin, one or more doors (see Doors). The cabin passes one floor in
   `travel_seconds_per_floor`; the door goes closed → opening
@@ -272,13 +272,86 @@ how the controller uses them. Not enforced by the simulator yet.)
   (1.5 = half way), door state, the door that is open (or used last), the floor
   it moves to, the calls waiting (floor + door).
 - **Scenario:** `[[lift]]` sections (`id`, `floors` as `mapId`s, optional
-  `doors`, optional `start_floor`, the times, optional `door_hold_seconds`).
+  `doors`, optional `stops` (§7g), optional `start_floor`, the times, optional
+  `door_hold_seconds`).
   Wrong lifts (also no door or twice the same door name) are refused with the
   lift named. The result lists each lift at the end of the run (floor map, door
   state, door name, queued calls).
-- **Not yet:** robots riding the lift (capacity, the pose moving to the other
-  floor, `initializePosition`), lift edges of the LIF layout, doors as separate
-  peripherals, several cabins in one shaft.
+- **Not yet:** doors as separate peripherals, several cabins in one shaft,
+  different door sets per floor. Riding: see §7g.
+
+## 7g. Riding a lift (S46)
+
+- **Stops.** A lift lists its **stops**: a layout node at the cabin entrance
+  with the floor (the map of that node) and the door that opens there. A node
+  belongs to at most one lift. Scenario: `stops = [{ node = "N2" },
+  { node = "N102", door = "rear", waiting = "W1" }]` (door default: the first
+  door; `waiting` optional, see §9).
+- **Ride.** A layout edge whose start and end are stops of one lift on
+  different floors (the LIF lift edge, e.g. N2→N102) is a **ride**. An order
+  may contain it only if it is one; any other edge to another map is refused as
+  before (`NO_ROUTE_TO_TARGET`). A ride edge has no length and no driving.
+- **Getting in.** A robot that arrives at the start node of a ride stands there
+  (status `WaitingForLift`) until the cabin is **at that floor with the door of
+  that stop fully open and nobody in the cabin**. Then it is in the cabin at once
+  (`RidingLift`). Robots waiting for the same lift get in in the order they were
+  added.
+- **In the cabin.** The robot's reported pose and `lastNodeId` stay at the
+  entrance until it gets out. It is **on no floor**: it cannot collide and
+  nobody waits for it on its node (collisions, deadlock rule). The cabin holds
+  **one robot** (simplification).
+- **Moving the cabin is the controller's job** (own command port, §7f): the
+  robot does not call, release or send the lift anywhere. A controller that
+  forgets to send the cabin on leaves the robot in the cabin for ever.
+- **Getting out.** The robot is out at once when the cabin is at the floor of
+  the ride's **end** stop with that stop's door fully open: its pose becomes the
+  end node (other map), the heading is kept (**simplification**: the robot
+  leaves facing as it got in; no turning in the cabin), the actions of the end
+  node start, and it goes on with its order.
+- **cancelOrder** at the entrance ends the order there; in the cabin the robot
+  cannot stop between floors, so it finishes the ride and stops at the end node
+  (like braking to the next node while driving).
+- **Waiting metric:** the robot does not drive during the whole ride, so by the
+  S32 rule (standing still with a job, not doing an action) the **ride counts as
+  waiting**.
+- **Simplifications:** getting in and out takes no time and needs no space; one
+  robot per cabin; no cabin size or door width; the robot is invisible while in
+  the cabin (observer: pose unchanged, status `RidingLift`).
+- The baseline controller uses lifts in jobs: see §9 (S47).
+
+## 7h. Doors (peripheral)
+
+- A door is a **peripheral** like a lift (§7f): not a robot, not part of VDA
+  5050, with its **own command port** (**S50**). This section is the door model
+  and what robots do at a door; the baseline controller uses doors as in §9
+  (**S51**).
+- **Door:** guards one or more **layout edges** (e.g. both directions of a
+  passage). States: closed → opening (`open_seconds`) → open → closing
+  (`close_seconds`) → closed. Times are quantised to the simulation step.
+- **Commands:** `open()` — the controller wants the door open (a closed door
+  opens; a closing door finishes closing and then opens again). `release()` —
+  the controller is done; the door closes. Without a release it stays open.
+  Option `hold_seconds`: the door releases itself after being open that long.
+- **Safety:** a door **never closes while a robot is on one of its edges**
+  (the robot is driving on it, having left the start node); it stays open until
+  the robot has left the edge, then closes. A door that is released while a robot
+  waits in front of it (has not started) does close.
+- **Robots do not open doors.** A robot does not start an edge of a door unless
+  the door is **fully open**: it turns towards the edge and waits on the start
+  node (status `WaitingForZone`, the same wait as for an ungranted RELEASE zone;
+  it counts as waiting under S32).
+- **Passage width:** a robot wider than the door's `passage_width` (its body
+  width across the direction of travel) cannot pass: an order with an edge of
+  that door is refused (`NO_ROUTE_TO_TARGET`, as for any edge the robot cannot
+  drive). No width = any robot.
+- **Scenario:** `[[door]]` sections (`id`, `edges` as `edgeId`s, optional
+  `passage_width`, `open_seconds`, `close_seconds`, optional `hold_seconds`).
+  Wrong doors (unknown edge, an edge another door has, bad numbers, same id
+  twice) are refused with the door named. The result lists each door at the end
+  of the run (`doors` with `id`, `state`; absent without doors). The observer
+  snapshot has the doors with their state and edges.
+- **Not yet:** doors that open by themselves for a robot; doors on nodes;
+  partly open doors; a lift whose cabin door is one of these doors.
 
 ## 8. Jobs
 
@@ -315,6 +388,56 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   (e.g. a second lap of a ring) stays reserved while it is still ahead.
   Consequence of "stays where it is" (S31): a robot that has finished a job
   keeps its node reserved, so it can block others until it gets a new job.
+- **Lifts** (**S47**): a route with a lift ride (§7g) needs the lift. The
+  controller moves the cabin with the lift's command port (§7f); the robot only
+  drives and waits.
+  - **One robot per lift at a time**, first come first served: the lift is
+    *owned* by the robot that asks first.
+  - **Where a robot waits (S49, design rule §7d):** a lift stop can name a
+    **waiting node** (lay-by, scenario key `waiting`, on the stop's map, not the
+    stop itself, off the lane to the stop). The route of a job is planned
+    **through that node**: to the lay-by, back, to the entrance, the ride. Without
+    a waiting node the robot waits on the node **before** the entrance. That
+    node (or the lay-by) is the robot's **gate**. A robot that starts on the
+    entrance, or on the lay-by, gets no detour.
+  - A robot is **never released past its gate unless it owns the lift**. At the
+    gate it asks: if the lift is free it owns it from then on and is released
+    through the ride; otherwise it waits and asks again every cycle. (S47 asked
+    when the window reached the ride, which could release a robot onto the
+    entrance two nodes early; the gate rule fixes that.)
+  - **A two-way lane without a lay-by deadlocks:** the waiting robot stands on the
+    lane the robot coming out must leave by. The baseline does not detect or
+    resolve it (tested: robots going opposite ways are stuck without a lay-by,
+    both get through with one). The layout must provide the lay-by.
+  - **Calling:** the cabin is called to the entrance (floor and door of the
+    stop) and called again every cycle until the robot is in the cabin (the
+    lift tells the controller who is in the cabin).
+  - **Riding:** when the robot is in the cabin the door is released and the cabin
+    is sent to the floor and door of the stop at the end of the ride.
+  - **Exiting:** when the robot has got out, the door stays open until the robot
+    has driven away from the end node (or its job is done); then the door is
+    released and the lift is free for the next robot.
+  - Not yet: several robots in a cabin, choosing between lifts, taking the lift
+    back from a robot that never comes, parking the cabin somewhere.
+- **Doors** (**S51**): a route with an edge through a door (§7h) needs the door
+  open. The controller opens and releases it with the door's command port.
+  - **One robot per door at a time**, first come first served. A robot asks when
+    its release window would include a guarded edge: if the door is free it owns
+    it and may be released through the edge; if another robot owns it, the robot
+    is released only up to the **start node** of the edge and waits there.
+  - The claim is **tentative**: if the robot cannot be released onto the edge's
+    end node (somebody else holds it), the claim is dropped in the same cycle, so
+    a robot that cannot use the door does not keep it shut for others.
+  - **Opening:** asked for every cycle while the robot owns the door. **Passing:**
+    when the robot has reached the end node of the edge (or its job is over) the
+    door is released and is free for the next robot; the door itself waits until
+    the robot has left the edge (§7h).
+  - A robot wider than the door cannot pass; its order is refused and the job
+    ends up in the refused jobs (no route around the door is looked for).
+  - **Opposite directions through a door in a one-lane corridor get stuck:** each
+    robot waits on the node the other needs (tested; no collision, no
+    resolution), like a lift without a lay-by.
+  - Not yet: robots sharing an open door, routes around a door that is too narrow.
 - Not yet: look-ahead beyond the window, timeouts and re-routing, robot types
   and per-type edge rules.
 

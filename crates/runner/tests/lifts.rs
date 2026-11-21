@@ -91,6 +91,96 @@ fn doors_default_to_one_front_door_and_can_be_named() {
     assert!(w.call_lift("L1", "Map_Z-Level_1").is_ok());
 }
 
+/// `LIFT` with a stop on each floor: N2 on floor 1, N102 on floor 2.
+fn lift_with_stops(stops: &str) -> String {
+    LIFT.replace("floors =", &format!("stops = {stops}\nfloors ="))
+}
+
+#[test]
+fn stops_make_a_ride_possible_and_a_robot_rides_to_the_other_map() {
+    use botsim_core::drive::Phase;
+    use botsim_core::world::RobotId;
+
+    let text = scenario(&lift_with_stops(r#"[{ node = "N2" }, { node = "N102" }]"#));
+    let mut w = build(&text).unwrap();
+    let r = RobotId::new("ACME", "R-001");
+    let order: vda5050::order::Order = serde_json::from_str(
+        r#"{"headerId":1,"timestamp":"2026-11-20T10:00:00.000Z","version":"3.0.1",
+        "manufacturer":"ACME","serialNumber":"R-001","orderId":"o1","orderUpdateId":0,
+        "nodes":[{"nodeId":"N1","sequenceId":0,"released":true,"actions":[]},
+                 {"nodeId":"N2","sequenceId":2,"released":true,"actions":[]},
+                 {"nodeId":"N102","sequenceId":4,"released":true,"actions":[]}],
+        "edges":[{"edgeId":"N1-N2","sequenceId":1,"released":true,"actions":[]},
+                 {"edgeId":"N2-N102","sequenceId":3,"released":true,"actions":[]}]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        w.send_order(&order),
+        Ok(botsim_core::robot::Reception::Accepted)
+    );
+    w.call_lift("L1", "Map_Z-Level_1").unwrap();
+    // the robot drives 11 m, gets in, and waits for the cabin to be sent
+    for _ in 0..600 {
+        w.step();
+    }
+    assert_eq!(w.phase(&r), Ok(Phase::Riding));
+    assert_eq!(w.lift_rider("L1").unwrap(), Some(&r));
+    w.release_lift("L1").unwrap();
+    w.call_lift("L1", "Map_Z-Level_2").unwrap();
+    for _ in 0..600 {
+        w.step();
+    }
+    assert_eq!(w.phase(&r), Ok(Phase::Finished));
+    let p = w.pose(&r).unwrap();
+    assert_eq!(w.graph().maps[p.map], "Map_Z-Level_2");
+}
+
+/// The shipped example `scenarios/lift_jobs.toml`: two floors, one lift, two
+/// robots, random jobs between floors (S48). It must stay working.
+#[test]
+fn the_lift_example_scenario_runs_jobs_through_the_lift() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/lift_jobs.toml");
+    let s = Scenario::from_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let world = s.build_world(path.parent().unwrap()).unwrap();
+    let r = summary::run(&s, world).unwrap();
+    assert_eq!(r.collision_count, 0);
+    assert_eq!(r.deadlock_count, 0);
+    assert_eq!(r.jobs.rejected, 0);
+    assert!(r.jobs.done >= 30, "{:?}", r.jobs);
+    assert_eq!(r.lifts.len(), 1);
+}
+
+#[test]
+fn wrong_stops_are_refused_with_the_lift_and_the_stop_named() {
+    let with = |stops: &str| build(&scenario(&lift_with_stops(stops))).map(|_| ());
+    let e = with(r#"[{ node = "Nowhere" }]"#).unwrap_err().to_string();
+    assert!(e.contains("L1") && e.contains("Nowhere"), "{e}");
+    // N1 is on floor 1, a floor of the lift; a lift that only has floor 2 refuses it
+    let only_top = scenario(
+        &lift_with_stops(r#"[{ node = "N1" }]"#)
+            .replace("floors = [\"Map_Z-Level_1\", ", "floors = [\"Nowhere\", "),
+    );
+    assert!(build(&only_top).is_err());
+    let e = with(r#"[{ node = "N2", door = "rear" }]"#)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("L1") && e.contains("rear"), "{e}");
+    // a waiting node must exist, be on the stop's map and not be the stop itself
+    let e = with(r#"[{ node = "N2", waiting = "Nowhere" }]"#)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("L1") && e.contains("Nowhere"), "{e}");
+    assert!(with(r#"[{ node = "N2", waiting = "N102" }]"#).is_err());
+    assert!(with(r#"[{ node = "N2", waiting = "N2" }]"#).is_err());
+    assert!(with(r#"[{ node = "N2", waiting = "N1" }]"#).is_ok());
+    let e = with(r#"[{ node = "N2" }, { node = "N2" }]"#)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("L1"), "{e}");
+    // a typo in a key
+    assert!(Scenario::from_toml(&scenario(&lift_with_stops(r#"[{ nodes = "N2" }]"#))).is_err());
+}
+
 #[test]
 fn wrong_doors_are_refused_with_the_lift_named() {
     let with = |doors: &str| {

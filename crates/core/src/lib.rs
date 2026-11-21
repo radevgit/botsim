@@ -6,6 +6,7 @@ pub mod actions;
 pub mod collision;
 pub mod deadlock;
 pub mod disturbances;
+pub mod door;
 pub mod drive;
 pub mod errors;
 pub mod graph;

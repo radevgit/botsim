@@ -16,6 +16,7 @@ fn spec(hold: Option<f64>) -> LiftSpec {
         id: "L1".into(),
         floors: vec![10, 11, 12],
         doors: vec!["front".into()],
+        stops: vec![],
         start_floor: 0,
         travel_seconds_per_floor: 4.0,
         door_open_seconds: 2.0,

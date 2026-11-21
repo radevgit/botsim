@@ -61,9 +61,20 @@ impl Plan {
     /// pickup node and `pick`, drive to the drop node and `drop`. `None` if a
     /// node cannot be reached.
     pub fn for_job(graph: &Graph, at: NodeIdx, job: &Job) -> Option<Plan> {
-        let mut edges = shortest_path(graph, at, job.pickup)?;
+        Plan::for_job_with(graph, at, job, |a, b| shortest_path(graph, a, b))
+    }
+
+    /// Like [`Plan::for_job`], with another way to find the route between two
+    /// nodes (the controller plans through lift waiting nodes, S49).
+    pub fn for_job_with(
+        graph: &Graph,
+        at: NodeIdx,
+        job: &Job,
+        route: impl Fn(NodeIdx, NodeIdx) -> Option<Vec<EdgeIdx>>,
+    ) -> Option<Plan> {
+        let mut edges = route(at, job.pickup)?;
         let pick_at = edges.len();
-        edges.extend(shortest_path(graph, job.pickup, job.drop)?);
+        edges.extend(route(job.pickup, job.drop)?);
         let mut plan = Plan::new(graph, at, edges);
         let drop_at = plan.last();
         plan.actions[pick_at].push(PICK.to_string());

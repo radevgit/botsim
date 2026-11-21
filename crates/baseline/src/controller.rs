@@ -22,6 +22,12 @@
 //!   edges nobody else holds; otherwise it waits at the end of its base and the
 //!   controller tries again every cycle. A robot without a job holds the node
 //!   it stands on.
+//! - **Lifts** (S47): a route with a lift ride needs the lift; one robot uses a
+//!   lift at a time, the controller calls, releases and sends the cabin (see
+//!   [`crate::lifts`]).
+//! - **Doors** (S51): a route with an edge through a door needs the door open;
+//!   one robot uses a door at a time, the controller opens and releases it (see
+//!   [`crate::doors`]).
 //! - **Done**: the robot stands on the last node, nothing is driving, and all
 //!   actions are finished.
 //!
@@ -39,9 +45,10 @@ use botsim_core::robot::Reception;
 use botsim_core::world::{RobotId, World};
 use vda5050::state::{ActionStatus, State};
 
+use crate::doors::DoorDesk;
+use crate::lifts::{LiftDesk, LiftRobot};
 use crate::order_builder::{OrderHeader, Plan, RELEASE_WINDOW, build_order};
 use crate::reservations::Reservations;
-use crate::route::shortest_path;
 use crate::zone_grants::{RobotView, ZoneGrants};
 use vda5050::responses::Responses;
 
@@ -100,6 +107,10 @@ pub struct Controller {
     reservations: Reservations,
     /// Answers to RELEASE zone requests; `None` if the run has no zones.
     zone_grants: Option<ZoneGrants>,
+    /// Rides in the routes: who owns which lift (see [`crate::lifts`]).
+    lifts: LiftDesk,
+    /// Guarded edges in the routes: who owns which door (see [`crate::doors`]).
+    doors: DoorDesk,
 }
 
 impl Controller {
@@ -122,6 +133,8 @@ impl Controller {
             last_tick: world.tick(),
             reservations: Reservations::new(world.graph()),
             zone_grants: world.zones().cloned().map(ZoneGrants::new),
+            lifts: LiftDesk::new(world),
+            doors: DoorDesk::new(world),
         }
     }
 
@@ -174,6 +187,7 @@ impl Controller {
         for (i, state) in states.iter().enumerate() {
             self.update_work(world, i, state, tick, elapsed);
         }
+        self.update_lifts(world, &states);
         // a robot without a job holds the node it stands on (S34)
         for (i, state) in states.iter().enumerate() {
             if self.robots[i].work.is_none()
@@ -237,7 +251,12 @@ impl Controller {
         // release as far as the window allows and nobody else holds the way
         let from = work.released_through;
         let wanted = work.plan.released_through(at, RELEASE_WINDOW);
+        // a ride in the window needs its lift (S47)
+        let wanted = self.lifts.window(i, &work.plan, at, from, wanted);
+        // so does an edge through a door (S51)
+        let wanted = self.doors.window(i, &work.plan, at, from, wanted);
         let rt = reserve_up_to(&mut self.reservations, &work.plan, i, from, wanted);
+        self.doors.settle(i, rt);
         if rt > from {
             work.update_id += 1;
             let header = OrderHeader {
@@ -254,6 +273,38 @@ impl Controller {
                 other => panic!("the robot refused an order update: {other:?}"),
             }
         }
+    }
+
+    /// Call, release and send the lifts that robots use (see [`crate::lifts`]).
+    fn update_lifts(&mut self, world: &mut World, states: &[State]) {
+        let nodes: Vec<Option<NodeIdx>> = states.iter().map(|s| self.node_of(s)).collect();
+        let ats = self.plan_positions(states);
+        let robots: Vec<LiftRobot> = self
+            .robots
+            .iter()
+            .enumerate()
+            .map(|(i, slot)| LiftRobot {
+                id: &slot.id,
+                at: ats[i],
+                node: nodes[i],
+            })
+            .collect();
+        self.lifts.update(world, &robots);
+        self.doors.update(world, &ats);
+    }
+
+    /// The plan index of each robot's last node; `None` for a robot without a job.
+    fn plan_positions(&self, states: &[State]) -> Vec<Option<usize>> {
+        self.robots
+            .iter()
+            .enumerate()
+            .map(|(i, slot)| {
+                slot.work
+                    .as_ref()
+                    .filter(|w| states[i].order_id == w.order_id)
+                    .map(|_| (states[i].last_node_sequence_id / 2) as usize)
+            })
+            .collect()
     }
 
     /// Answer the RELEASE zone requests the robots state (see [`crate::zone_grants`]).
@@ -311,8 +362,9 @@ impl Controller {
                 .iter()
                 .enumerate()
                 .filter_map(|(k, &(i, node))| {
-                    let plan = Plan::for_job(&self.graph, node, &job)?;
-                    let to_pickup = shortest_path(&self.graph, node, job.pickup)?;
+                    let plan =
+                        Plan::for_job_with(&self.graph, node, &job, |a, b| self.lifts.route(a, b))?;
+                    let to_pickup = self.lifts.route(node, job.pickup)?;
                     let d: f64 = to_pickup.iter().map(|&e| self.graph.edges[e].length).sum();
                     Some((d, i, k, plan))
                 })
@@ -333,13 +385,12 @@ impl Controller {
         let order_id = format!("job-{}", job.id);
         // node 0 is where the robot stands (it holds it already)
         self.reservations.reserve_node(plan.nodes[0], i);
-        let released_through = reserve_up_to(
-            &mut self.reservations,
-            &plan,
-            i,
-            0,
-            plan.released_through(0, RELEASE_WINDOW),
-        );
+        let wanted = self
+            .lifts
+            .window(i, &plan, 0, 0, plan.released_through(0, RELEASE_WINDOW));
+        let wanted = self.doors.window(i, &plan, 0, 0, wanted);
+        let released_through = reserve_up_to(&mut self.reservations, &plan, i, 0, wanted);
+        self.doors.settle(i, released_through);
         let header = OrderHeader {
             robot: &slot.id,
             header_id: slot.header_id,
@@ -362,6 +413,8 @@ impl Controller {
                 });
             }
             Reception::Rejected(reason) => {
+                self.lifts.forget(i);
+                self.doors.forget(i);
                 // give back what was reserved for this order (the robot still holds its node)
                 for j in 1..=released_through {
                     self.reservations.release_node(plan.nodes[j], i);

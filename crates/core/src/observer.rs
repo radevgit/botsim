@@ -16,6 +16,7 @@
 //! Not in it yet, because it does not exist yet: stations, zones, RELEASE zone
 //! requests, lifts and doors.
 
+use crate::door::DoorStatus;
 use crate::drive::Pose;
 use crate::graph::{EdgeIdx, Graph, NodeIdx};
 use crate::lift::LiftStatus;
@@ -45,8 +46,14 @@ pub enum RobotStatus {
     Acting,
     /// Standing at the end of its released route, waiting for an update.
     WaitingForRelease,
-    /// Standing before an edge that enters a RELEASE zone, waiting for the grant.
+    /// Standing before an edge that it must not start yet: it enters a RELEASE
+    /// zone that is not granted, or leads through a door that is not open.
     WaitingForZone,
+    /// Standing at the entrance of a lift, waiting for the cabin and its door.
+    WaitingForLift,
+    /// In a lift cabin. The robot's pose is still where it got in (it appears at
+    /// the other floor when it gets out).
+    RidingLift,
     /// Stopped by a disturbance (random stop).
     Held,
 }
@@ -70,6 +77,8 @@ pub struct Snapshot {
     pub deadlocks: Vec<Vec<usize>>,
     /// The lifts (peripherals): floor, door, queue.
     pub lifts: Vec<LiftStatus>,
+    /// The doors (peripherals): state and the edges they guard.
+    pub doors: Vec<DoorStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

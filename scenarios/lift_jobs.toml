@@ -1,0 +1,36 @@
+# Two floors, one lift, one-way rings on both floors (15 m sides), two robots
+# (one per floor) and random transport jobs between all the ring nodes, so many
+# jobs ride the lift. The lift stops are G2 (floor 1) and U2 (floor 2); a robot
+# waits on G1 / U1, the node before the entrance, while the lift is busy.
+# Run it from the repository root:
+#   cargo run --release -p botsim-runner -- scenarios/lift_jobs.toml
+name = "lift-jobs"
+seed = 11
+duration = 3600.0             # simulated seconds
+time_step = 0.05
+start_time = 2026-11-21T10:00:00Z
+lif = "two_floors.lif.json"
+
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "R"
+factsheet = "diff_robot.factsheet.json"
+start_nodes = ["G0", "U0"]    # one robot per floor
+action_time = 1.0
+
+[robot.action_times]
+pick = 5.0
+drop = 5.0
+
+[[lift]]
+id = "L1"
+floors = ["Level_1", "Level_2"]   # mapIds, lowest first
+stops = [{ node = "G2" }, { node = "U2" }]
+travel_seconds_per_floor = 8.0
+door_open_seconds = 3.0
+door_close_seconds = 3.0
+
+[jobs]
+rate_per_hour = 40.0
+# not the lift entrances G2 and U2: a robot standing there blocks the lift
+nodes = ["G0", "G1", "G3", "U0", "U1", "U3"]

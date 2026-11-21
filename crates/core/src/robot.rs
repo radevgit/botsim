@@ -22,6 +22,8 @@
 //! Not yet: operating modes (`MOBILE_ROBOT_NOT_AVAILABLE`), other instant actions,
 //! a deviation range around the start node (a fixed tolerance is used).
 
+use std::collections::{HashMap, HashSet};
+
 use vda5050::instant_actions::InstantActions;
 use vda5050::order::Order;
 use vda5050::state::{ActionStatus, State};
@@ -29,7 +31,7 @@ use vda5050::state::{ActionStatus, State};
 use crate::actions::ActionTimes;
 use crate::drive::{DriveError, Driver, Phase, Pose};
 use crate::errors::{ErrorType, RobotError};
-use crate::graph::{Graph, NodeIdx};
+use crate::graph::{EdgeIdx, Graph, NodeIdx};
 use crate::order_route::route_from_order;
 use crate::spec::RobotSpec;
 use crate::state_report::{Header, InstantActionState, build_state};
@@ -61,6 +63,14 @@ pub struct Robot {
     zone_requests: Option<ZoneRequester>,
     /// The time now, milliseconds since 1970 (set by the world).
     now_ms: i64,
+    /// The layout edges that are lift rides (set by the world).
+    rides: HashSet<EdgeIdx>,
+    /// Ids of the edges of doors that are not fully open (set by the world).
+    closed_door_edges: HashSet<String>,
+    /// Passage width of the doors, by edge id (set by the world).
+    door_widths: HashMap<String, f64>,
+    /// The last update blocked an edge because of a closed door.
+    door_blocked: bool,
 }
 
 impl Robot {
@@ -82,7 +92,82 @@ impl Robot {
             cancel_action: None,
             zone_requests: None,
             now_ms: 0,
+            rides: HashSet::new(),
+            closed_door_edges: HashSet::new(),
+            door_widths: HashMap::new(),
+            door_blocked: false,
         })
+    }
+
+    /// Tell the robot the passage width of the doors, by edge id: it refuses
+    /// orders with an edge of a door that is narrower than the robot.
+    pub fn set_door_widths(&mut self, widths: HashMap<String, f64>) {
+        self.door_widths = widths;
+    }
+
+    /// Tell the robot which door edges it must not start now (the door is not
+    /// fully open). Set by the world every step.
+    pub fn set_closed_door_edges(&mut self, closed: HashSet<String>) {
+        if closed != self.closed_door_edges {
+            self.closed_door_edges = closed;
+            self.update_zone_requests();
+        }
+    }
+
+    /// The id of the edge the robot is driving on, if it has left the node.
+    pub fn driving_edge_id(&self) -> Option<&str> {
+        self.driver.driving_edge_id()
+    }
+
+    /// How wide the robot is (metres), across its direction of travel.
+    pub fn width(&self) -> f64 {
+        match self.spec.shape {
+            crate::spec::Shape::Rect { half_width, .. } => 2.0 * half_width,
+            crate::spec::Shape::Circle { radius, .. } => 2.0 * radius,
+        }
+    }
+
+    /// The first edge of `edges` that leads through a door narrower than the robot.
+    fn too_narrow(&self, edges: &[crate::order_route::PlanEdge]) -> Option<String> {
+        edges
+            .iter()
+            .find(|e| {
+                self.door_widths
+                    .get(&e.edge_id)
+                    .is_some_and(|&w| self.width() > w)
+            })
+            .map(|e| e.edge_id.clone())
+    }
+
+    /// Tell the robot which edges of the layout are lift rides. Orders with such
+    /// an edge are accepted from now on; the world lets the robot in and out of
+    /// the cabin (see [`crate::drive::Driver::board`]).
+    pub fn set_rides(&mut self, rides: HashSet<EdgeIdx>) {
+        self.rides = rides;
+    }
+
+    /// The lift ride the robot waits to start or is on (its layout edge).
+    pub fn ride_edge(&self) -> Option<EdgeIdx> {
+        self.driver.ride_edge()
+    }
+
+    /// Is the robot in a lift cabin?
+    pub fn is_riding(&self) -> bool {
+        self.driver.phase() == Phase::Riding
+    }
+
+    /// Get into the cabin; see [`crate::drive::Driver::board`].
+    pub fn board(&mut self) -> bool {
+        self.driver.board()
+    }
+
+    /// Get out of the cabin; see [`crate::drive::Driver::alight`].
+    pub fn alight(&mut self) -> bool {
+        let out = self.driver.alight();
+        if out {
+            self.update_zone_requests();
+        }
+        out
     }
 
     /// Give the robot the zones of the run: it will state RELEASE zone requests
@@ -108,22 +193,35 @@ impl Robot {
 
     /// Bring the zone requests up to date with where the robot is and what is ahead.
     fn update_zone_requests(&mut self) {
-        let Some(zr) = self.zone_requests.as_mut() else {
+        // nothing to keep up to date, nothing blocked before: skip the work
+        if self.zone_requests.is_none() && self.closed_door_edges.is_empty() && !self.door_blocked {
             return;
-        };
+        }
         let p = self.driver.progress();
-        zr.update(
-            &p.remaining_edges,
-            p.pose.map,
-            p.pose.x,
-            p.pose.y,
-            self.now_ms,
-        );
-        // do not start an edge that enters a zone that is not granted
-        self.driver
-            .set_blocked_edges(zr.blocked_edges(&p.remaining_edges));
-        // after losing the release of a zone it is in: STOP means stand still
-        self.driver.set_halted(zr.halt());
+        let mut blocked = HashSet::new();
+        if let Some(zr) = self.zone_requests.as_mut() {
+            zr.update(
+                &p.remaining_edges,
+                p.pose.map,
+                p.pose.x,
+                p.pose.y,
+                self.now_ms,
+            );
+            // do not start an edge that enters a zone that is not granted
+            blocked = zr.blocked_edges(&p.remaining_edges);
+            // after losing the release of a zone it is in: STOP means stand still
+            self.driver.set_halted(zr.halt());
+        }
+        // nor an edge through a door that is not fully open
+        let doors: Vec<u32> = p
+            .remaining_edges
+            .iter()
+            .filter(|e| self.closed_door_edges.contains(&e.edge_id))
+            .map(|e| e.sequence_id)
+            .collect();
+        self.door_blocked = !doors.is_empty();
+        blocked.extend(doors);
+        self.driver.set_blocked_edges(blocked);
     }
 
     /// The robot's clock: milliseconds since 1970, set by the world before every
@@ -238,6 +336,12 @@ impl Robot {
             }
         };
 
+        if let Some(edge) = self.too_narrow(&route.plan_edges) {
+            let e = DriveError::DoorTooNarrow { edge };
+            let err = RobotError::from_drive_error(&e, &order.order_id, order.order_update_id);
+            return self.reject(err);
+        }
+
         let current = self.driver.order().map(|(id, u)| (id.to_string(), u));
         let is_update = current
             .as_ref()
@@ -270,12 +374,13 @@ impl Robot {
                     "the first node of the order is not where the robot stands",
                 );
             }
-            return match Driver::from_order_route(
+            return match Driver::from_order_route_with_rides(
                 graph,
                 &self.spec,
                 p.heading,
                 &route,
                 self.times.for_next_order(),
+                self.rides.clone(),
             ) {
                 Ok(d) => {
                     self.driver = d;

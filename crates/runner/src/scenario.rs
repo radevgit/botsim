@@ -11,10 +11,19 @@
 //! deadlock_timeout = 30.0        # optional; seconds, default 30
 //! zone_set = "zones.json"        # optional VDA 5050 zone set; loaded and checked only
 //!
+//! [[door]]                       # optional, any number: a door on layout edges
+//! id = "D1"
+//! edges = ["A-B", "B-A"]         # edgeIds through the door
+//! passage_width = 1.0            # optional (m): wider robots cannot pass
+//! open_seconds = 3.0
+//! close_seconds = 3.0
+//! hold_seconds = 20.0            # optional: releases itself after this long
+//!
 //! [[lift]]                       # optional, any number: a lift between maps
 //! id = "L1"
 //! floors = ["Map_Z-Level_1", "Map_Z-Level_2"]   # mapIds, lowest first, >= 2
 //! doors = ["front", "rear"]      # optional, default: ["front"]; one open at a time
+//! stops = [{ node = "N2", waiting = "W1" }, { node = "N102", door = "rear" }]   # optional: where robots ride
 //! start_floor = "Map_Z-Level_1"  # optional, default: the first floor
 //! travel_seconds_per_floor = 5.0
 //! door_open_seconds = 3.0
@@ -65,9 +74,10 @@ use std::path::{Path, PathBuf};
 
 use botsim_core::actions::ActionTimes;
 use botsim_core::disturbances::{Disturbances, StopSpec, check_duration_variation};
+use botsim_core::door::DoorSpec;
 use botsim_core::graph::Graph;
 use botsim_core::jobs::JobGenerator;
-use botsim_core::lift::LiftSpec;
+use botsim_core::lift::{LiftSpec, LiftStop};
 use botsim_core::spec::RobotSpec;
 use botsim_core::world::{RobotId, World, unix_ms_from_utc};
 use botsim_core::zone_requests::ZoneRequestTiming;
@@ -111,6 +121,30 @@ pub struct Scenario {
     /// Lifts (peripherals with their own command port); see [`LiftConfig`].
     #[serde(default, rename = "lift")]
     pub lifts: Vec<LiftConfig>,
+    /// Doors (peripherals with their own command port); see [`DoorConfig`].
+    #[serde(default, rename = "door")]
+    pub doors: Vec<DoorConfig>,
+}
+
+/// A `[[door]]` section (S50): a door that guards layout edges. The door model
+/// is in `botsim_core::door`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DoorConfig {
+    pub id: String,
+    /// The `edgeId`s that lead through the door (at least one, e.g. both
+    /// directions of the passage).
+    pub edges: Vec<String>,
+    /// How wide the passage is (metres); a robot wider than this cannot pass
+    /// (its order with such an edge is refused). Default: any robot.
+    #[serde(default)]
+    pub passage_width: Option<f64>,
+    pub open_seconds: f64,
+    pub close_seconds: f64,
+    /// The door releases itself after being open this long; without it the door
+    /// stays open until the controller releases it.
+    #[serde(default)]
+    pub hold_seconds: Option<f64>,
 }
 
 /// A `[[lift]]` section: a lift between maps (floors). The lift model is in
@@ -125,6 +159,12 @@ pub struct LiftConfig {
     /// through-cabin. Default: one door, `front`. Only one door is open at a time.
     #[serde(default = "one_door")]
     pub doors: Vec<String>,
+    /// Where robots get in and out (S46), e.g.
+    /// `stops = [{ node = "N2" }, { node = "N102", door = "rear" }]`. The floor of
+    /// a stop is the map of its node. A layout edge between two stops of the lift
+    /// is a ride. Without stops no robot can ride the lift.
+    #[serde(default)]
+    pub stops: Vec<LiftStopConfig>,
     /// The map the cabin starts at (default: the first floor).
     #[serde(default)]
     pub start_floor: Option<String>,
@@ -136,6 +176,23 @@ pub struct LiftConfig {
     /// door stays open until the controller releases it.
     #[serde(default)]
     pub door_hold_seconds: Option<f64>,
+}
+
+/// A stop of a lift: the node where robots get in and out, and the door that
+/// opens there.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiftStopConfig {
+    /// A `nodeId` of the layout, on one of the lift's floors.
+    pub node: String,
+    /// The door that opens at this stop (default: the lift's first door).
+    #[serde(default)]
+    pub door: Option<String>,
+    /// A waiting node (lay-by) on the same map, off the lane to the stop (S49):
+    /// the baseline controller routes robots through it and parks them there
+    /// while the lift is busy.
+    #[serde(default)]
+    pub waiting: Option<String>,
 }
 
 /// The `[disturbances]` section (S36). Seeded by the scenario seed.
@@ -406,10 +463,47 @@ impl Scenario {
                     })?
                 }
             };
+            let bad = |what: String| ScenarioError::Invalid(format!("lift \"{}\": {what}", l.id));
+            let mut stops = Vec::new();
+            for s in &l.stops {
+                let node = world
+                    .graph()
+                    .node_idx(&s.node)
+                    .ok_or_else(|| bad(format!("the layout has no node \"{}\"", s.node)))?;
+                let map = world.graph().nodes[node].map;
+                let floor = floors.iter().position(|f| *f == map).ok_or_else(|| {
+                    bad(format!(
+                        "stop node \"{}\" is on a map that is not one of the lift's floors",
+                        s.node
+                    ))
+                })?;
+                let door = match &s.door {
+                    None => 0,
+                    Some(d) => l.doors.iter().position(|x| x == d).ok_or_else(|| {
+                        bad(format!("stop \"{}\": the lift has no door \"{d}\"", s.node))
+                    })?,
+                };
+                let waiting = match &s.waiting {
+                    None => None,
+                    Some(w) => Some(world.graph().node_idx(w).ok_or_else(|| {
+                        bad(format!(
+                            "stop \"{}\": the layout has no waiting node \"{w}\"",
+                            s.node
+                        ))
+                    })?),
+                };
+                stops.push(LiftStop {
+                    node,
+                    floor,
+                    door,
+                    waiting,
+                });
+            }
             let spec = LiftSpec {
                 id: l.id.clone(),
                 floors,
                 doors: l.doors.clone(),
+                stops,
                 start_floor,
                 travel_seconds_per_floor: l.travel_seconds_per_floor,
                 door_open_seconds: l.door_open_seconds,
@@ -419,6 +513,30 @@ impl Scenario {
             world
                 .add_lift(spec)
                 .map_err(|e| ScenarioError::Invalid(format!("lift \"{}\": {e}", l.id)))?;
+        }
+        for d in &self.doors {
+            let edges = d
+                .edges
+                .iter()
+                .map(|e| {
+                    world.graph().edge_idx(e).ok_or_else(|| {
+                        ScenarioError::Invalid(format!(
+                            "door \"{}\": the layout has no edge \"{e}\"",
+                            d.id
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            world
+                .add_door(DoorSpec {
+                    id: d.id.clone(),
+                    edges,
+                    passage_width: d.passage_width,
+                    open_seconds: d.open_seconds,
+                    close_seconds: d.close_seconds,
+                    hold_seconds: d.hold_seconds,
+                })
+                .map_err(|e| ScenarioError::Invalid(format!("door \"{}\": {e}", d.id)))?;
         }
         let mut disturbances = self.disturbances()?;
         if let Some(d) = &self.disturbances

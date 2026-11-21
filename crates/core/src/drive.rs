@@ -43,6 +43,12 @@ pub enum Phase {
     /// Standing at a node because the next edge must not be started yet (it
     /// enters a RELEASE zone that has not been granted).
     WaitingForClearance,
+    /// Standing at the start node of a lift ride, waiting until the world lets
+    /// the robot into the cabin ([`Driver::board`]).
+    WaitingForLift,
+    /// In the cabin, until the world lets it out at the other floor
+    /// ([`Driver::alight`]). The pose stays where the ride began.
+    Riding,
     /// The whole order is done.
     Finished,
 }
@@ -56,9 +62,11 @@ pub enum DriveError {
     /// The edge has no usable length (start and end node coincide, or the length
     /// is not a finite number), so it has no direction.
     ZeroLengthEdge { edge: String },
-    /// The edge leads to another map (e.g. a lift ride); not supported until the
-    /// elevator peripheral exists.
+    /// The edge leads to another map, and it is not a ride of a lift (a lift ride
+    /// is accepted if the world has told the robot so, see [`Driver::from_order_route_with_rides`]).
     MapTransition { edge: String },
+    /// The edge leads through a door that is narrower than the robot is wide.
+    DoorTooNarrow { edge: String },
     /// The robot cannot take the orientation the order asks for on this edge
     /// (VDA 5050 error `ORIENTATION_UNREACHABLE`, level WARNING).
     Orientation {
@@ -83,6 +91,10 @@ impl fmt::Display for DriveError {
             DriveError::MapTransition { edge } => {
                 write!(f, "edge '{edge}' changes map; not supported yet")
             }
+            DriveError::DoorTooNarrow { edge } => write!(
+                f,
+                "edge '{edge}' leads through a door that is narrower than the robot"
+            ),
             DriveError::Orientation { edge, error } => write!(f, "edge '{edge}': {error}"),
             DriveError::NotContinuation { expected, found } => write!(
                 f,
@@ -178,15 +190,28 @@ struct Segment {
     heading: f64,
     /// The robot drives this edge backwards (its heading points against the travel direction).
     reversed: bool,
+    /// A lift ride: no driving, the robot appears here when the ride is over.
+    ride: Option<RideEnd>,
+}
+
+/// Where a lift ride ends.
+#[derive(Debug, Clone, Copy)]
+struct RideEnd {
+    edge: EdgeIdx,
+    map: MapIdx,
+    x: f64,
+    y: f64,
 }
 
 /// Copy the edges of `route`, which must run on from `start`, out of the graph.
 /// Returns the segments and the node where the last one ends (`start` if empty).
+/// An edge to another map is accepted only if it is one of `rides`.
 fn build_segments(
     graph: &Graph,
     kinematics: Kinematics,
     start: NodeIdx,
     route: &[RouteEdge],
+    rides: &HashSet<EdgeIdx>,
 ) -> Result<(Vec<Segment>, NodeIdx), DriveError> {
     let mut segments = Vec::with_capacity(route.len());
     let mut at = start;
@@ -196,7 +221,27 @@ fn build_segments(
             return Err(DriveError::NotConnected { edge: e.id.clone() });
         }
         if e.map_transition {
-            return Err(DriveError::MapTransition { edge: e.id.clone() });
+            if !rides.contains(&re.edge) {
+                return Err(DriveError::MapTransition { edge: e.id.clone() });
+            }
+            let (a, b) = (&graph.nodes[e.start], &graph.nodes[e.end]);
+            segments.push(Segment {
+                ax: a.x,
+                ay: a.y,
+                bx: a.x,
+                by: a.y,
+                length: 0.0,
+                heading: 0.0, // not used: the robot keeps its heading on a ride
+                reversed: false,
+                ride: Some(RideEnd {
+                    edge: re.edge,
+                    map: b.map,
+                    x: b.x,
+                    y: b.y,
+                }),
+            });
+            at = e.end;
+            continue;
         }
         // Also guards the division by the length when the pose is computed in `step`.
         if !(e.length.is_finite() && e.length > 0.0) {
@@ -217,6 +262,7 @@ fn build_segments(
             length: e.length,
             heading,
             reversed: angle_diff(direction, heading).abs() > FRAC_PI_2,
+            ride: None,
         });
         at = e.end;
     }
@@ -252,6 +298,8 @@ pub struct Driver {
     blocked: HashSet<u32>,
     /// Standing still after losing a zone release (see [`Driver::set_halted`]).
     halted: bool,
+    /// The edges that are lift rides (they change the map).
+    rides: HashSet<EdgeIdx>,
 }
 
 impl Driver {
@@ -274,6 +322,7 @@ impl Driver {
             &[],
             vec![Vec::new(); route.len()],
             ActionTimes::new(0.0), // no actions, so the times do not matter
+            HashSet::new(),
         )
     }
 
@@ -288,6 +337,20 @@ impl Driver {
         route: &OrderRoute,
         times: ActionTimes,
     ) -> Result<Driver, DriveError> {
+        Driver::from_order_route_with_rides(graph, spec, heading, route, times, HashSet::new())
+    }
+
+    /// Like [`Driver::from_order_route`]; the edges in `rides` are lift rides:
+    /// the robot may have them in its route (any other edge to another map is
+    /// refused with [`DriveError::MapTransition`]). See [`Driver::board`].
+    pub fn from_order_route_with_rides(
+        graph: &Graph,
+        spec: &RobotSpec,
+        heading: f64,
+        route: &OrderRoute,
+        times: ActionTimes,
+        rides: HashSet<EdgeIdx>,
+    ) -> Result<Driver, DriveError> {
         let mut d = Driver::build(
             graph,
             spec,
@@ -298,6 +361,7 @@ impl Driver {
             &route.node_actions[0],
             route.node_actions[1..].to_vec(),
             times,
+            rides,
         )?;
         d.plan = Some(Plan {
             order_id: route.order_id.clone(),
@@ -319,11 +383,12 @@ impl Driver {
         start_actions: &[ActionSpec],
         arrive_actions: Vec<Vec<ActionSpec>>,
         mut times: ActionTimes,
+        rides: HashSet<EdgeIdx>,
     ) -> Result<Driver, DriveError> {
         if spec.kinematics != Kinematics::Differential {
             return Err(DriveError::UnsupportedKinematics(spec.kinematics));
         }
-        let (segments, base_end) = build_segments(graph, spec.kinematics, start, route)?;
+        let (segments, base_end) = build_segments(graph, spec.kinematics, start, route, &rides)?;
 
         let s = &graph.nodes[start];
         let mut queue = ActionQueue::new();
@@ -351,9 +416,50 @@ impl Driver {
             hold: 0.0,
             blocked: HashSet::new(),
             halted: false,
+            rides,
         };
         d.at_node();
         Ok(d)
+    }
+
+    /// The lift ride the robot is waiting to start or is on: the edge of the
+    /// ride. `None` in every other phase.
+    pub fn ride_edge(&self) -> Option<EdgeIdx> {
+        if !matches!(self.phase, Phase::WaitingForLift | Phase::Riding) {
+            return None;
+        }
+        self.segments.get(self.current)?.ride.map(|r| r.edge)
+    }
+
+    /// Get into the cabin: only from [`Phase::WaitingForLift`], and not while
+    /// the edge is blocked (a zone that is not granted) or the robot is halted.
+    /// Returns whether the robot is in the cabin now.
+    pub fn board(&mut self) -> bool {
+        if self.phase != Phase::WaitingForLift || self.edge_blocked(self.current) || self.halted {
+            return false;
+        }
+        self.phase = Phase::Riding;
+        true
+    }
+
+    /// Get out of the cabin at the other floor: only from [`Phase::Riding`]. The
+    /// pose moves to the end node of the ride (the heading is kept), the actions
+    /// of that node start, and the robot goes on with its order.
+    pub fn alight(&mut self) -> bool {
+        if self.phase != Phase::Riding {
+            return false;
+        }
+        let end = self.segments[self.current]
+            .ride
+            .expect("a riding robot is on a ride segment");
+        self.pose.map = end.map;
+        self.pose.x = end.x;
+        self.pose.y = end.y;
+        let actions = std::mem::take(&mut self.arrive_actions[self.current]);
+        self.queue.push(actions.iter().map(|a| self.times.plan(a)));
+        self.current += 1;
+        self.at_node();
+        true
     }
 
     /// The edges (by `sequenceId`) the robot must not start driving yet, e.g.
@@ -370,6 +476,20 @@ impl Driver {
             .as_ref()
             .and_then(|p| p.edges.get(i))
             .is_some_and(|e| self.blocked.contains(&e.sequence_id))
+    }
+
+    /// The id of the layout edge the robot is on: it is driving and has left the
+    /// start node. `None` while turning, standing or at a node. (A door does not
+    /// close while a robot is on its edge.)
+    pub fn driving_edge_id(&self) -> Option<&str> {
+        if self.phase != Phase::Driving || self.along.s <= 0.0 {
+            return None;
+        }
+        self.plan
+            .as_ref()?
+            .edges
+            .get(self.current)
+            .map(|e| e.edge_id.as_str())
     }
 
     /// Is the robot driving or turning (not standing at a node waiting or acting)?
@@ -436,8 +556,10 @@ impl Driver {
         self.queue
             .push_failed(pending.iter().map(|a| times.plan(a)));
 
-        // keep the segment being driven (to its end node), or none if standing at a node
-        let keep = if self.phase == Phase::Driving {
+        // keep the segment being driven (to its end node), or none if standing at a
+        // node; a robot in the cabin cannot stop there and finishes the ride
+        let on_the_way = matches!(self.phase, Phase::Driving | Phase::Riding);
+        let keep = if on_the_way {
             self.current + 1
         } else {
             self.current
@@ -448,7 +570,7 @@ impl Driver {
             plan.nodes.truncate(keep + 1);
             plan.edges.truncate(keep);
         }
-        if self.phase != Phase::Driving {
+        if !on_the_way {
             self.at_node();
         }
     }
@@ -468,8 +590,13 @@ impl Driver {
                 found: graph.nodes[route.start].id.clone(),
             });
         }
-        let (segments, base_end) =
-            build_segments(graph, self.kinematics, route.start, &route.edges)?;
+        let (segments, base_end) = build_segments(
+            graph,
+            self.kinematics,
+            route.start,
+            &route.edges,
+            &self.rides,
+        )?;
         if let Some(plan) = &mut self.plan {
             // plan entry i is the node/edge at segment i: keep what came before the
             // decision point (index = segments so far), the update replaces the rest
@@ -596,6 +723,7 @@ impl Driver {
             Phase::Acting
         } else {
             match self.segments.get(self.current) {
+                Some(seg) if seg.ride.is_some() => Phase::WaitingForLift,
                 Some(seg) if angle_diff(self.pose.heading, seg.heading).abs() < 1e-9 => {
                     Phase::Driving
                 }
@@ -617,6 +745,8 @@ impl Driver {
         }
         match self.phase {
             Phase::Finished | Phase::Waiting => {}
+            // the world decides when the robot gets in and out of the cabin
+            Phase::WaitingForLift | Phase::Riding => {}
             Phase::Acting => self.at_node(),
             Phase::WaitingForClearance => {
                 if !self.edge_blocked(self.current) {

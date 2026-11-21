@@ -3,6 +3,8 @@
 //! through VDA 5050 messages, like any other controller.
 
 pub mod controller;
+pub mod doors;
+pub mod lifts;
 pub mod order_builder;
 pub mod reservations;
 pub mod route;

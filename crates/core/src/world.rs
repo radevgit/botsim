@@ -15,7 +15,7 @@
 //! Not yet: collisions, the spatial index, a controller port with queues, state
 //! publishing rules (`minimumStateInterval`), peripherals.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use vda5050::instant_actions::InstantActions;
@@ -26,9 +26,10 @@ use crate::actions::ActionTimes;
 use crate::collision::{Body, overlap, place};
 use crate::deadlock::{DEFAULT_TIMEOUT_SECONDS, DeadlockDetector};
 use crate::disturbances::{DisturbanceError, StopGenerator, StopSpec, check_duration_variation};
+use crate::door::{Door, DoorError, DoorSpec, DoorStatus};
 use crate::drive::Phase;
 use crate::drive::{DriveError, Pose};
-use crate::graph::{Graph, NodeIdx};
+use crate::graph::{EdgeIdx, Graph, NodeIdx};
 use crate::jobs::Rng;
 use crate::lift::{Lift, LiftError, LiftSpec, LiftStatus};
 use crate::metrics::is_waiting;
@@ -78,6 +79,14 @@ pub enum WorldError {
     UnknownDoor(String),
     /// A map id that the layout does not have (a lift floor, a lift call).
     UnknownMap(String),
+    /// A door is wrong.
+    Door(DoorError),
+    DuplicateDoor(String),
+    /// No door with this id (not to be mixed up with a door of a lift).
+    NoSuchDoor(String),
+    /// A door edge is not an edge of the layout, or another door guards it
+    /// already.
+    BadDoorEdge(String),
 }
 
 impl fmt::Display for WorldError {
@@ -101,6 +110,13 @@ impl fmt::Display for WorldError {
             WorldError::UnknownLift(id) => write!(f, "no lift \"{id}\""),
             WorldError::UnknownDoor(id) => write!(f, "the lift has no door \"{id}\""),
             WorldError::UnknownMap(id) => write!(f, "the layout has no map \"{id}\""),
+            WorldError::Door(e) => write!(f, "door: {e}"),
+            WorldError::DuplicateDoor(id) => write!(f, "door \"{id}\" exists already"),
+            WorldError::NoSuchDoor(id) => write!(f, "no door \"{id}\""),
+            WorldError::BadDoorEdge(id) => write!(
+                f,
+                "edge \"{id}\" is not in the layout, or another door guards it already"
+            ),
             WorldError::BadObserverInterval(v) => {
                 write!(
                     f,
@@ -151,6 +167,14 @@ pub struct World {
     zones: Option<Zones>,
     /// Lifts: peripherals with their own command port.
     lifts: Vec<Lift>,
+    /// The layout edges that are lift rides (between two stops of one lift).
+    rides: HashSet<EdgeIdx>,
+    /// Doors: peripherals with their own command port (S50).
+    doors: Vec<Door>,
+    /// The door that guards an edge → index into `doors`.
+    door_of_edge: HashMap<EdgeIdx, usize>,
+    /// Passage width of the doors by edge id (for robots added later).
+    door_widths: HashMap<String, f64>,
 }
 
 /// A deadlock: robots waiting for each other in a cycle (see [`crate::deadlock`]).
@@ -200,6 +224,10 @@ impl World {
             observer_every: 1,
             zones: None,
             lifts: Vec::new(),
+            rides: HashSet::new(),
+            doors: Vec::new(),
+            door_of_edge: HashMap::new(),
+            door_widths: HashMap::new(),
         })
     }
 
@@ -270,6 +298,8 @@ impl World {
         let mut robot =
             Robot::new(&self.graph, spec, times, start, heading).map_err(WorldError::Start)?;
         robot.set_time(self.now_ms());
+        robot.set_rides(self.rides.clone());
+        robot.set_door_widths(self.door_widths.clone());
         if let Some(zones) = &self.zones {
             robot.set_zones(zones.clone(), ZoneRequestTiming::default());
         }
@@ -346,6 +376,7 @@ impl World {
     /// for collisions.
     pub fn step(&mut self) {
         let now_ms = self.now_ms();
+        self.step_doors();
         for e in &mut self.robots {
             e.robot.set_time(now_ms);
             // a robot that is moving, and not stopped already, may be stopped (S37)
@@ -362,6 +393,7 @@ impl World {
         for l in &mut self.lifts {
             l.step(self.dt);
         }
+        self.update_rides();
         self.tick += 1;
         self.check_collisions();
         self.check_deadlocks();
@@ -402,6 +434,108 @@ impl World {
         self.observer.is_some()
     }
 
+    /// Add a door (a peripheral, see [`crate::door`]). Its edges are edge
+    /// indices of the layout; an edge has at most one door; the id must be new.
+    pub fn add_door(&mut self, spec: DoorSpec) -> Result<(), WorldError> {
+        if self.doors.iter().any(|d| d.spec().id == spec.id) {
+            return Err(WorldError::DuplicateDoor(spec.id));
+        }
+        for &e in &spec.edges {
+            if e >= self.graph.edges.len() || self.door_of_edge.contains_key(&e) {
+                let id = self
+                    .graph
+                    .edges
+                    .get(e)
+                    .map_or(format!("#{e}"), |x| x.id.clone());
+                return Err(WorldError::BadDoorEdge(id));
+            }
+        }
+        let door = Door::new(spec).map_err(WorldError::Door)?;
+        let index = self.doors.len();
+        for &e in &door.spec().edges {
+            self.door_of_edge.insert(e, index);
+            if let Some(w) = door.spec().passage_width {
+                self.door_widths.insert(self.graph.edges[e].id.clone(), w);
+            }
+        }
+        for e in &mut self.robots {
+            e.robot.set_door_widths(self.door_widths.clone());
+        }
+        self.doors.push(door);
+        Ok(())
+    }
+
+    /// Move the doors one step and tell the robots which door edges they must
+    /// not start: a door closes only while no robot is on one of its edges.
+    fn step_doors(&mut self) {
+        if self.doors.is_empty() {
+            return;
+        }
+        let mut occupied = vec![false; self.doors.len()];
+        for e in &self.robots {
+            if let Some(id) = e.robot.driving_edge_id()
+                && let Some(edge) = self.graph.edge_idx(id)
+                && let Some(&d) = self.door_of_edge.get(&edge)
+            {
+                occupied[d] = true;
+            }
+        }
+        for (d, door) in self.doors.iter_mut().enumerate() {
+            door.step(self.dt, occupied[d]);
+        }
+        let closed: HashSet<String> = self
+            .doors
+            .iter()
+            .filter(|d| !d.is_open())
+            .flat_map(|d| {
+                d.spec()
+                    .edges
+                    .iter()
+                    .map(|&e| self.graph.edges[e].id.clone())
+            })
+            .collect();
+        for e in &mut self.robots {
+            e.robot.set_closed_door_edges(closed.clone());
+        }
+    }
+
+    fn door_index(&self, id: &str) -> Result<usize, WorldError> {
+        self.doors
+            .iter()
+            .position(|d| d.spec().id == id)
+            .ok_or_else(|| WorldError::NoSuchDoor(id.to_string()))
+    }
+
+    /// Door command port: the controller wants door `door_id` open (see [`Door::open`]).
+    pub fn open_door(&mut self, door_id: &str) -> Result<(), WorldError> {
+        let i = self.door_index(door_id)?;
+        self.doors[i].open();
+        Ok(())
+    }
+
+    /// Door command port: the controller is done with the door; it closes once no
+    /// robot is on its edges (see [`Door::release`]).
+    pub fn release_door(&mut self, door_id: &str) -> Result<(), WorldError> {
+        let i = self.door_index(door_id)?;
+        self.doors[i].release();
+        Ok(())
+    }
+
+    /// What door `door_id` looks like now.
+    pub fn door_status(&self, door_id: &str) -> Result<DoorStatus, WorldError> {
+        Ok(self.doors[self.door_index(door_id)?].status())
+    }
+
+    /// All doors, in the order they were added.
+    pub fn doors(&self) -> Vec<DoorStatus> {
+        self.doors.iter().map(Door::status).collect()
+    }
+
+    /// What the doors are like (edges, width, times), in the order they were added.
+    pub fn door_specs(&self) -> Vec<DoorSpec> {
+        self.doors.iter().map(|d| d.spec().clone()).collect()
+    }
+
     /// Add a lift (a peripheral, see [`crate::lift`]). Its floors are map indices
     /// of the layout; the id must be new.
     pub fn add_lift(&mut self, spec: LiftSpec) -> Result<(), WorldError> {
@@ -411,8 +545,101 @@ impl World {
         if let Some(&bad) = spec.floors.iter().find(|&&m| m >= self.graph.maps.len()) {
             return Err(WorldError::UnknownMap(format!("#{bad}")));
         }
-        self.lifts.push(Lift::new(spec).map_err(WorldError::Lift)?);
+        // a stop is a node of the layout, on the map of its floor, used by one lift only
+        for (i, s) in spec.stops.iter().enumerate() {
+            let ok = self
+                .graph
+                .nodes
+                .get(s.node)
+                .is_some_and(|n| spec.floors.get(s.floor) == Some(&n.map))
+                && !self.lifts.iter().any(|l| l.stop_at(s.node).is_some())
+                // a waiting node is another node on the same map
+                && s.waiting.is_none_or(|w| {
+                    w != s.node
+                        && self
+                            .graph
+                            .nodes
+                            .get(w)
+                            .is_some_and(|n| spec.floors.get(s.floor) == Some(&n.map))
+                });
+            if !ok {
+                return Err(WorldError::Lift(LiftError::BadStop(i)));
+            }
+        }
+        let lift = Lift::new(spec).map_err(WorldError::Lift)?;
+        // the layout edges between two stops of this lift on different floors are rides
+        for (i, e) in self.graph.edges.iter().enumerate() {
+            if let (Some(a), Some(b)) = (lift.stop_at(e.start), lift.stop_at(e.end))
+                && a.floor != b.floor
+                && e.map_transition
+            {
+                self.rides.insert(i);
+            }
+        }
+        for e in &mut self.robots {
+            e.robot.set_rides(self.rides.clone());
+        }
+        self.lifts.push(lift);
         Ok(())
+    }
+
+    /// Robots get into and out of the cabins. A robot waiting at the start of a
+    /// ride gets in when the cabin is at its floor with the door of its stop open
+    /// and nobody is in the cabin; a robot in the cabin gets out when the door of
+    /// the stop at the end of the ride is open at that floor. Both are instant
+    /// (see `docs/rules.md` §7g). Robots are served in the order they were added.
+    fn update_rides(&mut self) {
+        for i in 0..self.robots.len() {
+            let Some(edge) = self.robots[i].robot.ride_edge() else {
+                continue;
+            };
+            let e = &self.graph.edges[edge];
+            let Some((li, from, to)) = self
+                .lifts
+                .iter()
+                .enumerate()
+                .find_map(|(li, l)| Some((li, l.stop_at(e.start)?, l.stop_at(e.end)?)))
+            else {
+                continue; // cannot happen: only rides of a lift are accepted
+            };
+            if self.robots[i].robot.is_riding() {
+                if self.lifts[li].open_at(to) {
+                    self.robots[i].robot.alight();
+                }
+            } else if self.lifts[li].open_at(from)
+                && !self.robots.iter().any(|r| {
+                    r.robot.is_riding()
+                        && r.robot
+                            .ride_edge()
+                            .is_some_and(|re| self.lift_of_ride(re) == Some(li))
+                })
+            {
+                self.robots[i].robot.board();
+            }
+        }
+    }
+
+    /// The index of the lift a ride edge belongs to.
+    fn lift_of_ride(&self, edge: EdgeIdx) -> Option<usize> {
+        let e = &self.graph.edges[edge];
+        self.lifts
+            .iter()
+            .position(|l| l.stop_at(e.start).is_some() && l.stop_at(e.end).is_some())
+    }
+
+    /// The robot in the cabin of lift `lift_id`, if any (one robot at a time).
+    pub fn lift_rider(&self, lift_id: &str) -> Result<Option<&RobotId>, WorldError> {
+        let li = self.lift_index(lift_id)?;
+        Ok(self
+            .robots
+            .iter()
+            .find(|r| {
+                r.robot.is_riding()
+                    && r.robot
+                        .ride_edge()
+                        .is_some_and(|e| self.lift_of_ride(e) == Some(li))
+            })
+            .map(|r| &r.id))
     }
 
     fn lift_index(&self, id: &str) -> Result<usize, WorldError> {
@@ -477,6 +704,12 @@ impl World {
     /// What lift `lift_id` looks like now.
     pub fn lift_status(&self, lift_id: &str) -> Result<LiftStatus, WorldError> {
         Ok(self.lifts[self.lift_index(lift_id)?].status())
+    }
+
+    /// What the lifts are like (floors, doors, stops), in the order they were
+    /// added. A controller needs it to know which layout edges are lift rides.
+    pub fn lift_specs(&self) -> Vec<LiftSpec> {
+        self.lifts.iter().map(|l| l.spec().clone()).collect()
     }
 
     /// All lifts, in the order they were added.
@@ -552,6 +785,8 @@ impl World {
                     (_, Phase::Acting) => RobotStatus::Acting,
                     (_, Phase::Waiting) => RobotStatus::WaitingForRelease,
                     (_, Phase::WaitingForClearance) => RobotStatus::WaitingForZone,
+                    (_, Phase::WaitingForLift) => RobotStatus::WaitingForLift,
+                    (_, Phase::Riding) => RobotStatus::RidingLift,
                     (_, Phase::Finished) => RobotStatus::Idle,
                 };
                 let mut snap = RobotSnapshot {
@@ -614,6 +849,7 @@ impl World {
             overlapping,
             deadlocks,
             lifts: self.lifts.iter().map(Lift::status).collect(),
+            doors: self.doors.iter().map(Door::status).collect(),
         }
     }
 
@@ -632,7 +868,18 @@ impl World {
     /// [`crate::deadlock`]).
     fn check_deadlocks(&mut self) {
         let header = plain_header();
-        let poses: Vec<Pose> = self.robots.iter().map(|e| e.robot.pose()).collect();
+        // a robot in a lift cabin stands on no node (map = none)
+        let poses: Vec<Pose> = self
+            .robots
+            .iter()
+            .map(|e| {
+                let mut p = e.robot.pose();
+                if e.robot.is_riding() {
+                    p.map = usize::MAX;
+                }
+                p
+            })
+            .collect();
         let waits_for: Vec<Option<usize>> = self
             .robots
             .iter()
@@ -665,18 +912,22 @@ impl World {
     /// Every pair is tested (fine for tens of robots; a spatial index comes
     /// later). Robots on different maps never collide.
     fn check_collisions(&mut self) {
-        let bodies: Vec<(usize, Body)> = self
+        // a robot in a lift cabin is not on any floor: it touches nobody
+        let bodies: Vec<Option<(usize, Body)>> = self
             .robots
             .iter()
             .map(|e| {
                 let p = e.robot.pose();
-                (p.map, place(e.robot.shape(), p.x, p.y, p.heading))
+                (!e.robot.is_riding()).then(|| (p.map, place(e.robot.shape(), p.x, p.y, p.heading)))
             })
             .collect();
         let mut now = HashSet::new();
         for i in 0..bodies.len() {
             for j in i + 1..bodies.len() {
-                if bodies[i].0 == bodies[j].0 && overlap(&bodies[i].1, &bodies[j].1) {
+                let (Some(a), Some(b)) = (&bodies[i], &bodies[j]) else {
+                    continue;
+                };
+                if a.0 == b.0 && overlap(&a.1, &b.1) {
                     now.insert((i, j));
                     if !self.touching.contains(&(i, j)) {
                         self.collisions.push(Collision {
@@ -717,6 +968,11 @@ impl World {
         let i = self.find(&id)?;
         self.robots[i].robot.receive_instant_actions(msg);
         Ok(())
+    }
+
+    /// What the robot is doing now (turning, driving, waiting for a lift, …).
+    pub fn phase(&self, id: &RobotId) -> Result<Phase, WorldError> {
+        Ok(self.robots[self.find(id)?].robot.phase())
     }
 
     /// The robot's state message now. Every call uses the next `headerId`.

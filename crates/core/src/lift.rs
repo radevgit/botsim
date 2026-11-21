@@ -3,7 +3,8 @@
 //! to the fleet control), so a lift has its **own small command port** next to the
 //! VDA 5050 messages.
 //!
-//! This is the lift model alone: no robot rides it yet.
+//! Robots ride a lift through its **stops** (S46): see [`LiftStop`] and
+//! `docs/rules.md` §7g. The world, not this type, moves the robots in and out.
 //!
 //! **Model.** A lift has a list of **floors** (the maps it stops at, in physical
 //! order) and one cabin with one or more **doors** (S45: a through-cabin has a
@@ -32,14 +33,14 @@
 //! The time is quantised to the simulation step, like the actions of a robot: a
 //! stage that has a few steps left is over when its time is used up.
 //!
-//! Not yet: robots riding the lift (capacity, the robot's pose moving to the other
-//! floor), lifts in the LIF layout (lift edges), several cabins in one shaft.
+//! Not yet: more than one robot in the cabin (capacity), walking in and out
+//! taking time, several cabins in one shaft.
 
 use std::collections::VecDeque;
 use std::fmt;
 
 use crate::actions::TIME_EPSILON;
-use crate::graph::MapIdx;
+use crate::graph::{MapIdx, NodeIdx};
 
 /// What a lift is like.
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +51,11 @@ pub struct LiftSpec {
     /// The names of the cabin's doors (e.g. `front`, `rear`); at least one, all
     /// different. Door `i` is `doors[i]`.
     pub doors: Vec<String>,
+    /// Where robots get in and out (S46): the node of the layout at the cabin
+    /// entrance, with the floor and the door that belong to it. A layout edge
+    /// between two stops of the lift on different floors is a **ride**. Without
+    /// stops the lift can be called but no robot can ride it.
+    pub stops: Vec<LiftStop>,
     /// The floor the cabin starts at (index into `floors`).
     pub start_floor: usize,
     /// Seconds for the cabin to pass one floor.
@@ -60,8 +66,27 @@ pub struct LiftSpec {
     pub door_hold_seconds: Option<f64>,
 }
 
+/// A place where robots get into or out of the cabin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiftStop {
+    /// The layout node at the cabin entrance (on the map of `floor`).
+    pub node: NodeIdx,
+    /// Index into the lift's floors.
+    pub floor: usize,
+    /// Index into the lift's doors: the door that opens here.
+    pub door: usize,
+    /// A waiting node (lay-by) for robots that wait for the lift, on the same
+    /// map as `node` and off the lane that leads to it (S49). The simulator does
+    /// not use it; a controller can (the baseline routes robots through it and
+    /// parks them there while the lift is busy).
+    pub waiting: Option<NodeIdx>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum LiftError {
+    /// A stop names a floor or door the lift does not have, or two stops share a
+    /// node.
+    BadStop(usize),
     /// A lift needs at least two floors, all different.
     BadFloors,
     /// A lift needs at least one door; the names must be different.
@@ -85,6 +110,10 @@ impl fmt::Display for LiftError {
                 write!(f, "a lift needs at least one door, with different names")
             }
             LiftError::UnknownDoor(i) => write!(f, "the lift has no door {i}"),
+            LiftError::BadStop(i) => write!(
+                f,
+                "stop {i} names a floor or door the lift does not have, a node used twice, or a bad waiting node"
+            ),
             LiftError::BadStartFloor(i) => write!(f, "start floor {i} is not a floor of the lift"),
             LiftError::BadTime(what) => write!(f, "{what} must be a finite number >= 0"),
             LiftError::UnknownFloor(i) => write!(f, "the lift has no floor {i}"),
@@ -188,6 +217,12 @@ impl Lift {
         if !doors_ok {
             return Err(LiftError::BadDoors);
         }
+        for (i, s) in spec.stops.iter().enumerate() {
+            let twice = spec.stops[..i].iter().any(|o| o.node == s.node);
+            if s.floor >= n || s.door >= spec.doors.len() || twice {
+                return Err(LiftError::BadStop(i));
+            }
+        }
         if spec.start_floor >= n {
             return Err(LiftError::BadStartFloor(spec.start_floor));
         }
@@ -217,6 +252,19 @@ impl Lift {
 
     pub fn spec(&self) -> &LiftSpec {
         &self.spec
+    }
+
+    /// The stop at layout node `node`, if the lift has one there.
+    pub fn stop_at(&self, node: NodeIdx) -> Option<LiftStop> {
+        self.spec.stops.iter().copied().find(|s| s.node == node)
+    }
+
+    /// Is the door open at `stop` right now: the cabin is at its floor and the
+    /// door of the stop is fully open (not opening or closing)?
+    pub fn open_at(&self, stop: LiftStop) -> bool {
+        matches!(self.phase, Phase::Open { .. })
+            && self.floor == stop.floor
+            && self.door == stop.door
     }
 
     pub fn status(&self) -> LiftStatus {

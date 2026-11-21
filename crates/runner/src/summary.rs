@@ -37,6 +37,9 @@ pub struct Summary {
     /// The lifts as they stand at the end of the run; left out without lifts.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub lifts: Vec<LiftSummary>,
+    /// The doors as they stand at the end of the run; left out without doors.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub doors: Vec<DoorSummary>,
     pub jobs: JobsSummary,
     pub metrics: MetricsSummary,
     pub robots: Vec<RobotSummary>,
@@ -55,6 +58,24 @@ pub struct TimingSummary {
     /// `null` if the controller did not run.
     pub controller_mean_us: Option<f64>,
     pub controller_max_us: Option<f64>,
+}
+
+/// A door at the end of the run.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DoorSummary {
+    pub id: String,
+    /// `closed`, `opening`, `open` or `closing`.
+    pub state: String,
+}
+
+/// The name of a door state, for the summary.
+fn door_name(s: DoorState) -> &'static str {
+    match s {
+        DoorState::Closed => "closed",
+        DoorState::Opening => "opening",
+        DoorState::Open => "open",
+        DoorState::Closing => "closing",
+    }
 }
 
 /// A lift at the end of the run.
@@ -324,15 +345,17 @@ pub fn run_with(
                     .lift_floor_map(&l.id, l.floor)
                     .unwrap_or_default()
                     .to_string(),
-                door: match l.door {
-                    DoorState::Closed => "closed",
-                    DoorState::Opening => "opening",
-                    DoorState::Open => "open",
-                    DoorState::Closing => "closing",
-                }
-                .to_string(),
+                door: door_name(l.door).to_string(),
                 door_id: l.door_id.clone(),
                 queued_calls: l.queue.len(),
+            })
+            .collect(),
+        doors: world
+            .doors()
+            .iter()
+            .map(|d| DoorSummary {
+                id: d.id.clone(),
+                state: door_name(d.state).to_string(),
             })
             .collect(),
         zone_set: world.zones().map(|z| ZoneSetSummary {
