@@ -6,8 +6,8 @@
 # O4 omnidirectional, C5 small. The forklift and the three-wheel robot may not use
 # the narrow roads (the labyrinths and the lanes along the walls); the others may.
 #
-# A 3 minute video (1920x1080, 30 fps, 5400 frames) from the repository root; the
-# run is 1800 simulated seconds, shown at speed 10 (data/ is not in git):
+# A 2 minute video (1920x1080, 30 fps, 3600 frames) from the repository root; the
+# run is 1200 simulated seconds, shown at speed 10 (data/ is not in git):
 #   cargo run --release -p botsim-runner -- --record data/warehouse2.jsonl --record-interval 0.25 \
 #       --geometry scenarios/warehouse2.geometry.json scenarios/warehouse2.toml
 #   cargo run --release -p botsim-export -- data/warehouse2.jsonl data/warehouse2_frames --speed 10
@@ -16,7 +16,7 @@
 #     -movflags +faststart data/warehouse2.mp4
 name = "warehouse2"
 seed = 29                     # first robot drives at 17 s, 10 robots busy by 104 s; no collision or deadlock
-duration = 1800.0
+duration = 1200.0
 time_step = 0.05
 start_time = 2026-11-22T10:00:00Z
 lif = "warehouse2.lif.json"
