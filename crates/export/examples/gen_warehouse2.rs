@@ -119,6 +119,50 @@ fn segments(range: (f64, f64), mut gaps: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     parts
 }
 
+/// The parts of the shelving row north of road `k` of the labyrinth in the north
+/// (x ranges): the row without the gap where the shortcut goes through.
+fn h_row_parts(k: usize) -> Vec<(f64, f64)> {
+    let r = H_STEP / 2.0;
+    let xs = shortcut_x(k);
+    let shortcut = if k.is_multiple_of(2) {
+        (xs - 1.0, xs + r + 1.5)
+    } else {
+        (xs - r - 1.5, xs + 1.0)
+    };
+    segments((122.0, 186.0), vec![shortcut])
+}
+
+/// The parts of the shelving row east of aisle `k` of the vertical labyrinth (y ranges).
+fn v_row_parts(k: usize) -> Vec<(f64, f64)> {
+    let r = V_STEP / 2.0;
+    let y = v_shortcut_y(k);
+    // the half circle of the shortcut bulges north from an even aisle, south from an
+    // odd one
+    let shortcut = if k.is_multiple_of(2) {
+        (y - 1.0, y + r + 1.5)
+    } else {
+        (y - r - 1.5, y + 1.0)
+    };
+    segments((V_BOTTOM + 3.0, V_TOP - 3.0), vec![shortcut])
+}
+
+/// The stops in the aisles of both labyrinths (station, point): in the middle of every
+/// part of the shelving, on the aisle.
+fn aisle_stops() -> Vec<(String, P)> {
+    let mut out = Vec::new();
+    for k in 0..H_AISLES {
+        for (a, b) in h_row_parts(k) {
+            out.push((format!("LN{k}"), ((a + b) / 2.0, h_y(k))));
+        }
+    }
+    for k in 0..V_AISLES {
+        for (a, b) in v_row_parts(k) {
+            out.push((format!("LV{k}"), (v_x(k), (a + b) / 2.0)));
+        }
+    }
+    out
+}
+
 /// The x of the road `k` of the vertical labyrinth (`V_AISLES` is the column).
 fn v_x(k: usize) -> f64 {
     V_X0 + V_STEP * k as f64
@@ -361,6 +405,85 @@ fn id(n: usize) -> String {
     format!("N{n:03}")
 }
 
+/// The robot types that cannot use the narrow roads: the forklift `Y2` (too big for
+/// the aisles) and the three-wheel robot `T3` (the half circles of the labyrinths
+/// are tighter than it can turn).
+const WIDE: [&str; 2] = ["Y2", "T3"];
+
+/// The middle of an edge (for a curve the point of the arc half way).
+fn edge_middle(net: &Net, e: &Edge) -> P {
+    let (a, b) = (net.nodes[e.a], net.nodes[e.b]);
+    match e.curve {
+        // a rational quadratic Bezier at t = 1/2
+        Some((c, w)) => (
+            (a.0 + 2.0 * w * c.0 + b.0) / (2.0 + 2.0 * w),
+            (a.1 + 2.0 * w * c.1 + b.1) / (2.0 + 2.0 * w),
+        ),
+        None => ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0),
+    }
+}
+
+/// Is this point on a narrow road: in one of the two labyrinths or in a lane along
+/// the south or north wall?
+fn narrow(p: P) -> bool {
+    // (the top ring road at y = H - RING is the way out of the north labyrinth: wide)
+    let north = (100.5..196.0).contains(&p.0) && (88.0..H - RING - 0.3).contains(&p.1);
+    let middle = (100.5..139.5).contains(&p.0) && (RING + 0.5..66.0).contains(&p.1);
+    let lane = p.1 < RING - 0.5 || p.1 > H - RING + 0.5;
+    north || middle || lane
+}
+
+/// The robot types that may drive an edge.
+fn edge_types(net: &Net, e: &Edge) -> Vec<Value> {
+    let narrow = narrow(edge_middle(net, e));
+    TYPES
+        .iter()
+        .filter(|t| !(narrow && WIDE.contains(t)))
+        .map(|s| json!({"manufacturer": "ACME", "seriesName": s}))
+        .collect()
+}
+
+/// The stations that a robot type can serve: those with an interaction node that it
+/// can reach from node 0 and from which it can come back to node 0.
+fn stations_served(net: &Net, wide: bool) -> (usize, usize) {
+    let allowed: Vec<&Edge> = net
+        .edges
+        .iter()
+        .filter(|e| !(wide && narrow(edge_middle(net, e))))
+        .collect();
+    let reach = |forward: bool| {
+        let mut next = vec![Vec::new(); net.nodes.len()];
+        for e in &allowed {
+            let (from, to) = if forward { (e.a, e.b) } else { (e.b, e.a) };
+            next[from].push(to);
+        }
+        let mut seen = vec![false; net.nodes.len()];
+        let mut todo = vec![0];
+        seen[0] = true;
+        while let Some(n) = todo.pop() {
+            for &m in &next[n] {
+                if !seen[m] {
+                    seen[m] = true;
+                    todo.push(m);
+                }
+            }
+        }
+        seen
+    };
+    let (out, back) = (reach(true), reach(false));
+    let served = net
+        .stations
+        .iter()
+        .filter(|s| {
+            s.points
+                .iter()
+                .filter_map(|&p| net.find(p))
+                .any(|n| out[n] && back[n])
+        })
+        .count();
+    (served, net.stations.len())
+}
+
 /// The nodes that cannot be reached from node 0, or from which node 0 cannot be
 /// reached (none when the net is strongly connected), with their position.
 fn not_strongly_connected(net: &Net) -> Vec<(P, &'static str)> {
@@ -586,11 +709,52 @@ fn east_row_runs_east(y: f64) -> bool {
 /// the apex (the stop) with its side to the rack, picks or drops, and rejoins the
 /// road, so it does not block the aisle while it works.
 struct Pocket {
-    /// The station: a rack block (its two sides are two stops of one station).
+    /// The station: a rack block, a row of shelving between two aisles or the
+    /// shelving along a wall (its stops are the interaction nodes of one station).
     station: String,
+    /// What the station is called, and what it is (`rack`, `shelf`).
+    label: &'static str,
+    kind: &'static str,
     a: P,
     b: P,
     apex: P,
+}
+
+/// Where along the shelving of the lanes at the south and north walls the stops are (x).
+const WALL_STOPS_X: [f64; 3] = [70.0, 110.0, 150.0];
+
+/// The stops of the shelving along the walls: the lanes along the south and the north
+/// wall have three stops each, 0.4 m from the shelving (no niche needed). (The
+/// aisles of the labyrinths have stops on the aisle itself: see `build_net`.)
+fn shelf_pockets() -> Vec<Pocket> {
+    let mut out = Vec::new();
+    // the lanes along the south wall (they run east) and the north wall (west)
+    for (station, y, bulge, east) in [("WALL-S", 4.0, -1.8, true), ("WALL-N", H - 4.0, 1.8, false)]
+    {
+        for xc in WALL_STOPS_X {
+            let (a, b) = if east {
+                ((xc - 4.0, y), (xc + 4.0, y))
+            } else {
+                ((xc + 4.0, y), (xc - 4.0, y))
+            };
+            out.push(Pocket {
+                station: station.into(),
+                label: "Shelf",
+                kind: "shelf",
+                a,
+                b,
+                apex: (xc, y + bulge),
+            });
+        }
+    }
+    out
+}
+
+/// All the stops in front of racks and shelves.
+fn all_pockets() -> Vec<Pocket> {
+    let mut all = rack_pockets();
+    all.extend(shelf_pockets());
+    all
 }
 
 fn cell_pockets(
@@ -615,6 +779,8 @@ fn cell_pockets(
         };
         out.push(Pocket {
             station: station.into(),
+            label: "Rack",
+            kind: "rack",
             a,
             b,
             apex: (cx, y + bulge),
@@ -767,6 +933,14 @@ fn build_net() -> Net {
 
     vertical_labyrinth(&mut net);
 
+    // stops in the aisles of both labyrinths, in the middle of every part of the
+    // shelving (never at a shortcut): the robot stands on the aisle, with shelving
+    // 1.3 m away on both sides, so the aisle is blocked while it works
+    for (station, p) in aisle_stops() {
+        net.node(p);
+        net.add_station(&station, &format!("Shelf {station}"), "shelf", p);
+    }
+
     // charging and parking bays in the north-east: a lane north from the row at
     // y = 84 to the top ring road, in by an arc from the row (which runs west) and
     // out by an arc onto the ring (which also runs west), so that a robot that cannot
@@ -816,10 +990,12 @@ fn build_net() -> Net {
         net.add_station(&format!("GOODS-OUT-{}", n + 1), &name, "bay", apex);
     }
 
-    // a stop in front of every rack block, in a pocket off the road (see `rack_pockets`)
-    for p in rack_pockets() {
+    // a stop in front of every rack block and every row of shelving, in a pocket off
+    // the road (see `rack_pockets` and `shelf_pockets`)
+    for p in all_pockets() {
         net.bow(p.a, p.apex, p.b);
-        net.add_station(&p.station, &format!("Rack {}", p.station), "rack", p.apex);
+        let name = format!("{} {}", p.label, p.station);
+        net.add_station(&p.station, &name, p.kind, p.apex);
     }
 
     // narrow lanes along the south wall (east) and the north wall (west)
@@ -879,7 +1055,7 @@ fn lif(net: &Net) -> Value {
         .iter()
         .map(|e| {
             let mut props = json!({
-                "mobileRobotTypes": types,
+                "mobileRobotTypes": edge_types(net, e),
                 "orientationType": "TANGENTIAL",
                 "mobileRobotOrientations": [0.0],
             });
@@ -986,23 +1162,10 @@ impl Shapes {
     /// The shelving of the vertical labyrinth: a row between every two aisles, in two
     /// parts with a gap where the shortcut between the two aisles goes through.
     fn vertical_labyrinth(&mut self) {
-        let r = V_STEP / 2.0;
         for k in 0..V_AISLES {
             let x = v_x(k);
-            let y = v_shortcut_y(k);
-            // the half circle of the shortcut bulges north from an even aisle, south
-            // from an odd one
-            let shortcut = if k.is_multiple_of(2) {
-                (y - 1.0, y + r + 1.5)
-            } else {
-                (y - r - 1.5, y + 1.0)
-            };
-            let gaps = vec![shortcut];
             let across = (x + 1.3, x + V_STEP - 1.3);
-            for (i, part) in segments((V_BOTTOM + 3.0, V_TOP - 3.0), gaps)
-                .into_iter()
-                .enumerate()
-            {
+            for (i, part) in v_row_parts(k).into_iter().enumerate() {
                 self.row(
                     &format!("shelf-v{k}-{i}"),
                     GeometryKind::Shelf,
@@ -1109,8 +1272,9 @@ fn build_geometry() -> GeometryFile {
         }
     }
 
-    // the stops in front of the rack blocks: a small station square at each
-    for (k, p) in rack_pockets().iter().enumerate() {
+    // the stops in front of the rack blocks and the shelving: a small station square
+    // at each
+    for (k, p) in all_pockets().iter().enumerate() {
         s.polygon(
             format!("stop-{}-{k}", p.station),
             GeometryKind::Station,
@@ -1120,6 +1284,15 @@ fn build_geometry() -> GeometryFile {
                 p.apex.0 + 0.7,
                 p.apex.1 + 0.7,
             ),
+        );
+    }
+
+    // the stops in the labyrinth aisles: a station square on the aisle
+    for (k, (station, p)) in aisle_stops().iter().enumerate() {
+        s.polygon(
+            format!("stop-{station}-{k}"),
+            GeometryKind::Station,
+            (p.0 - 0.7, p.1 - 0.7, p.0 + 0.7, p.1 + 0.7),
         );
     }
 
@@ -1141,23 +1314,16 @@ fn build_geometry() -> GeometryFile {
 
     // the labyrinth: a row of shelving between every two aisles
     // (with a gap where the shortcut between the two aisles goes through)
-    let r = H_STEP / 2.0;
     for k in 0..H_AISLES {
         let y = h_y(k);
-        let xs = shortcut_x(k);
-        let shortcut = if k.is_multiple_of(2) {
-            (xs - 1.0, xs + r + 1.5)
-        } else {
-            (xs - r - 1.5, xs + 1.0)
-        };
-        let gaps = vec![shortcut];
-        for (i, part) in segments((122.0, 186.0), gaps).into_iter().enumerate() {
+        let across = (y + 1.3, y + H_STEP - 1.3);
+        for (i, part) in h_row_parts(k).into_iter().enumerate() {
             s.row(
                 &format!("shelf-l{k}-{i}"),
                 GeometryKind::Shelf,
                 true,
                 part,
-                (y + 1.3, y + H_STEP - 1.3),
+                across,
             );
         }
     }
@@ -1184,7 +1350,8 @@ fn build_geometry() -> GeometryFile {
     s.rack_block("rack-q0", (196.0, 90.0, 200.0, 124.0));
     s.rack_block("rack-q1", (150.0, 128.0 - 1.0, 196.0, 128.0));
 
-    // shelving along the south and the north wall, outside the narrow lanes
+    // shelving along the south and the north wall, outside the narrow lanes (the stops
+    // are 0.4 m from it: no niche needed)
     s.row(
         "shelf-s",
         GeometryKind::Shelf,
@@ -1236,14 +1403,58 @@ fn write(path: &Path, value: &Value) {
     std::fs::write(path, text).unwrap_or_else(|e| panic!("cannot write {}: {e}", path.display()));
 }
 
+/// The stops (station, position) that have no rack or shelf within `reach` metres:
+/// a robot there could not put a load anywhere.
+fn stops_without_shelving(geometry: &GeometryFile, reach: f64) -> Vec<(String, P)> {
+    // the boxes of the racks and shelves (all are rectangles along the axes)
+    let boxes: Vec<(f64, f64, f64, f64)> = geometry
+        .shapes
+        .iter()
+        .filter(|s| matches!(s.kind, GeometryKind::Rack | GeometryKind::Shelf))
+        .map(|s| {
+            let xs = s.vertices.iter().map(|v| v.x);
+            let ys = s.vertices.iter().map(|v| v.y);
+            (
+                xs.clone().fold(f64::INFINITY, f64::min),
+                ys.clone().fold(f64::INFINITY, f64::min),
+                xs.fold(f64::NEG_INFINITY, f64::max),
+                ys.fold(f64::NEG_INFINITY, f64::max),
+            )
+        })
+        .collect();
+    let distance = |p: P| {
+        boxes
+            .iter()
+            .map(|b| {
+                let dx = (b.0 - p.0).max(0.0).max(p.0 - b.2);
+                let dy = (b.1 - p.1).max(0.0).max(p.1 - b.3);
+                dx.hypot(dy)
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    all_pockets()
+        .into_iter()
+        .filter(|p| distance(p.apex) > reach)
+        .map(|p| (p.station, p.apex))
+        .collect()
+}
+
 fn main() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let net = build_net();
     let lost = not_strongly_connected(&net);
     assert!(lost.is_empty(), "not strongly connected: {lost:?}");
+    let (all, wide) = (stations_served(&net, false), stations_served(&net, true));
+    println!(
+        "stations a small robot can serve: {} of {}; a forklift or three-wheel robot: {}",
+        all.0, all.1, wide.0
+    );
     let lif_json = lif(&net);
     let geometry = build_geometry();
     geometry.validate().expect("the geometry is valid");
+    // every stop must have racking or shelving within reach
+    let far = stops_without_shelving(&geometry, 2.5);
+    assert!(far.is_empty(), "stops with no shelving close: {far:?}");
 
     write(&root.join("scenarios/warehouse2.lif.json"), &lif_json);
     let geometry_json = serde_json::to_value(&geometry).expect("serializes");
