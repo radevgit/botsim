@@ -8,6 +8,8 @@
 #
 # A 2 minute video (1920x1080, 30 fps, 3600 frames) from the repository root; the
 # run is 1200 simulated seconds, shown at speed 10 (data/ is not in git):
+#   mkdir -p data                 # (data/ is not in git, so a new checkout does not have it)
+#   (step 1 prints the run summary as JSON and ends: that is normal, the recording is the file)
 #   cargo run --release -p botsim-runner -- --record data/warehouse2.jsonl --record-interval 0.25 \
 #       --geometry scenarios/warehouse2.geometry.json scenarios/warehouse2.toml
 #   cargo run --release -p botsim-export -- data/warehouse2.jsonl data/warehouse2_frames --speed 10

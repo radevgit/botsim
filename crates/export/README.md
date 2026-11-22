@@ -12,6 +12,7 @@ commands from the root of the repository (the directory with the workspace
 
 ```sh
 cd /path/to/botsim
+mkdir -p data    # not in git: a new checkout does not have it
 
 # 1. run a scenario and record it (and draw the static geometry: walls, racks, ...)
 cargo run --release -p botsim-runner -- --record data/warehouse.jsonl \
