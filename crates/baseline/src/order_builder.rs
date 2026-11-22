@@ -24,7 +24,7 @@ use botsim_core::world::{PROTOCOL_VERSION, RobotId};
 use serde_json::json;
 use vda5050::order::Order;
 
-use crate::route::shortest_path;
+use crate::route::{Arrival, shortest_path};
 
 /// How many nodes ahead of the robot are released.
 pub const RELEASE_WINDOW: usize = 2;
@@ -61,20 +61,27 @@ impl Plan {
     /// pickup node and `pick`, drive to the drop node and `drop`. `None` if a
     /// node cannot be reached.
     pub fn for_job(graph: &Graph, at: NodeIdx, job: &Job) -> Option<Plan> {
-        Plan::for_job_with(graph, at, job, |a, b| shortest_path(graph, a, b))
+        Plan::for_job_with(graph, at, Arrival::Free, job, |a, _, b| {
+            shortest_path(graph, a, b)
+        })
     }
 
     /// Like [`Plan::for_job`], with another way to find the route between two
-    /// nodes (the controller plans through lift waiting nodes, S49).
+    /// nodes (the controller plans through lift waiting nodes, S49, and around turns
+    /// the robot cannot make, S73). `route(from, arrival, to)` gets how the robot
+    /// arrives at `from`: as the robot does at `at` for the first part, by the last
+    /// edge of the first part for the second.
     pub fn for_job_with(
         graph: &Graph,
         at: NodeIdx,
+        arrival: Arrival,
         job: &Job,
-        route: impl Fn(NodeIdx, NodeIdx) -> Option<Vec<EdgeIdx>>,
+        route: impl Fn(NodeIdx, Arrival, NodeIdx) -> Option<Vec<EdgeIdx>>,
     ) -> Option<Plan> {
-        let mut edges = route(at, job.pickup)?;
+        let mut edges = route(at, arrival, job.pickup)?;
         let pick_at = edges.len();
-        edges.extend(route(job.pickup, job.drop)?);
+        let then = edges.last().map_or(arrival, |&e| Arrival::Edge(e));
+        edges.extend(route(job.pickup, then, job.drop)?);
         let mut plan = Plan::new(graph, at, edges);
         let drop_at = plan.last();
         plan.actions[pick_at].push(PICK.to_string());
@@ -108,16 +115,18 @@ pub struct OrderHeader<'a> {
 ///
 /// `from` is 0 for a new order, or the decision node for an update; the first
 /// node of an order is always released, so `from <= released_through` is
-/// required (a caller bug otherwise).
+/// required. `None` if it is not (a caller bug), or if the message cannot be built.
 pub fn build_order(
     graph: &Graph,
     h: &OrderHeader,
     plan: &Plan,
     from: usize,
     released_through: usize,
-) -> Order {
+) -> Option<Order> {
     let released_through = released_through.min(plan.last());
-    assert!(from <= released_through, "the first node must be released");
+    if from > released_through {
+        return None; // the first node must be released
+    }
 
     let nodes: Vec<_> = (from..=plan.last())
         .map(|i| {
@@ -159,5 +168,5 @@ pub fn build_order(
         "nodes": nodes,
         "edges": edges,
     });
-    serde_json::from_value(message).expect("the message has all required order fields")
+    serde_json::from_value(message).ok()
 }

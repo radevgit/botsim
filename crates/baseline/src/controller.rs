@@ -47,7 +47,9 @@ use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_core::jobs::Job;
 use botsim_core::metrics::{Metrics, is_waiting, summarize};
 use botsim_core::robot::Reception;
+use botsim_core::spec::Kinematics;
 use botsim_core::world::{RobotId, World};
+use vda5050::order::Order;
 use vda5050::state::{ActionStatus, State};
 
 use crate::doors::DoorDesk;
@@ -55,7 +57,7 @@ use crate::lifts::{LiftDesk, LiftRobot};
 use crate::node_grid::NodeGrid;
 use crate::order_builder::{OrderHeader, Plan, RELEASE_WINDOW, build_order};
 use crate::reservations::Reservations;
-use crate::route::{distances_to, in_edges, shortest_path_avoiding};
+use crate::route::{Arrival, Mover, Turns, distances_to, in_edges, plan_path, travel_lengths};
 use crate::zone_grants::{RobotView, ZoneGrants};
 use vda5050::responses::Responses;
 
@@ -102,6 +104,10 @@ struct Work {
     /// The order was sent with a message delay and the robot's state has not
     /// shown it yet (S58): the controller does not know whether it was accepted.
     awaiting_ack: bool,
+    /// The robot refused an update of the order (S70, e.g. a car-like robot that
+    /// cannot take a turn): the order was cancelled, and the job is given up as soon
+    /// as the robot has stopped. Until then the robot keeps what it holds.
+    cancelling: Option<ErrorType>,
 }
 
 /// What a robot type may drive (S55): the layout lists the types that may use
@@ -110,8 +116,24 @@ struct Work {
 struct TypeRouting {
     /// `ok[e]`: the type may drive edge `e` (the edge and both its nodes allow it).
     ok: Vec<bool>,
+    /// The turns the type cannot make (S73); `None` if it can make them all.
+    turns: Option<Turns>,
+    /// The distance the type drives on each edge (S74): a curve is longer than the
+    /// straight line between its nodes.
+    cost: Vec<f64>,
     /// The allowed edges into each node.
     into: Vec<Vec<EdgeIdx>>,
+}
+
+impl TypeRouting {
+    /// What the type can drive, for the route search.
+    fn mover(&self) -> Mover<'_> {
+        Mover {
+            ok: &self.ok,
+            cost: &self.cost,
+            turns: self.turns.as_ref(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -170,17 +192,21 @@ impl Controller {
         // the robot types (manufacturer, series) in the order they first appear
         let graph = world.graph();
         let mut keys: Vec<(String, String)> = Vec::new();
+        let mut kinds: Vec<Kinematics> = Vec::new();
         let robots: Vec<Slot> = world
             .robot_ids()
-            .map(|id| {
-                // the robot's type comes from its factsheet message (S61)
-                let f = world.factsheet(id).expect("the robot exists");
+            .filter_map(|id| {
+                // the robot's type comes from its factsheet message (S61); a robot
+                // that has none cannot be read and gets no jobs
+                let f = world.factsheet(id).ok()?;
+                let kinematics = world.spec(id).ok()?.kinematics;
                 let key = (f.manufacturer, f.type_specification.series_name);
                 let type_idx = keys.iter().position(|k| *k == key).unwrap_or_else(|| {
                     keys.push(key);
+                    kinds.push(kinematics);
                     keys.len() - 1
                 });
-                Slot {
+                Some(Slot {
                     id: id.clone(),
                     type_idx,
                     work: None,
@@ -190,17 +216,20 @@ impl Controller {
                     enable_sent: false,
                     zone_set_header_id: 0,
                     instant_header_id: 0,
-                }
+                })
             })
             .collect();
         let types: Vec<TypeRouting> = keys
             .iter()
-            .map(|(m, s)| {
+            .zip(&kinds)
+            .map(|((m, s), &kinematics)| {
                 let ok: Vec<bool> = (0..graph.edges.len())
                     .map(|e| graph.edge_allows(e, m, s))
                     .collect();
                 TypeRouting {
                     into: in_edges(graph, &ok),
+                    turns: Turns::for_type(graph, kinematics, m, s),
+                    cost: travel_lengths(graph, m, s),
                     ok,
                 }
             })
@@ -275,11 +304,16 @@ impl Controller {
         let elapsed = (tick - self.last_tick) as f64 * world.dt();
         self.last_tick = tick;
 
-        let states: Vec<State> = self
+        // (the robots are the ones the world had; if one cannot be read, this cycle
+        // does nothing)
+        let Ok(states) = self
             .robots
             .iter()
-            .map(|s| world.state(&s.id).expect("the robot exists"))
-            .collect();
+            .map(|s| world.state(&s.id))
+            .collect::<Result<Vec<State>, _>>()
+        else {
+            return;
+        };
 
         for (i, state) in states.iter().enumerate() {
             self.update_work(world, i, state, tick, elapsed);
@@ -309,12 +343,37 @@ impl Controller {
         let Some(work) = slot.work.as_mut() else {
             return;
         };
+        if let Some(reason) = work.cancelling {
+            // wait until the robot has stopped (it brakes to the next node); until
+            // then the way it is on stays reserved
+            if !state.driving {
+                let Some(work) = slot.work.take() else {
+                    return;
+                };
+                give_back(
+                    &mut self.reservations,
+                    &mut self.lifts,
+                    &mut self.doors,
+                    i,
+                    &work.plan,
+                    work.released_through,
+                );
+                self.rejected.push(Rejected {
+                    job: work.job,
+                    robot: slot.id.clone(),
+                    reason,
+                });
+            }
+            return;
+        }
         if work.awaiting_ack {
             if state.order_id == work.order_id {
                 work.awaiting_ack = false; // the robot has taken the order
             } else if let Some(reason) = order_error(state, &work.order_id) {
                 // The robot refused the order (the state says so): give the job up.
-                let work = slot.work.take().expect("checked above");
+                let Some(work) = slot.work.take() else {
+                    return;
+                };
                 give_back(
                     &mut self.reservations,
                     &mut self.lifts,
@@ -340,7 +399,9 @@ impl Controller {
         let last = work.plan.last();
 
         if at == last && is_idle(state) {
-            let work = slot.work.take().expect("checked above");
+            let Some(work) = slot.work.take() else {
+                return;
+            };
             self.completed.push(Completed {
                 job: work.job,
                 robot: slot.id.clone(),
@@ -396,7 +457,7 @@ impl Controller {
                 &self.reservations,
                 &self.lifts,
                 &self.doors,
-                &self.types[slot.type_idx].ok,
+                &self.types[slot.type_idx].mover(),
                 i,
                 &work.plan,
                 at,
@@ -413,9 +474,13 @@ impl Controller {
                 // nothing new is released; the unreleased part of the route changes
                 let msg = build_order(&self.graph, &header, &work.plan, from, from);
                 slot.header_id += 1;
-                match world.send_order(&msg) {
-                    Ok(Reception::Accepted | Reception::InTransit) => self.reroutes += 1,
-                    other => panic!("the robot refused a changed route: {other:?}"),
+                match deliver(world, msg) {
+                    Ok(_) => self.reroutes += 1,
+                    Err(reason) => {
+                        // the robot cannot drive the changed route: give the job up
+                        cancel_order(world, slot, reason);
+                        return;
+                    }
                 }
             }
         }
@@ -431,9 +496,13 @@ impl Controller {
             };
             let msg = build_order(&self.graph, &header, &work.plan, from, rt);
             slot.header_id += 1;
-            match world.send_order(&msg) {
-                Ok(Reception::Accepted | Reception::InTransit) => work.released_through = rt,
-                other => panic!("the robot refused an order update: {other:?}"),
+            match deliver(world, msg) {
+                Ok(_) => work.released_through = rt,
+                Err(reason) => {
+                    // the robot cannot drive the next part (e.g. a car-like robot
+                    // that cannot take the turn): give the job up (S70)
+                    cancel_order(world, slot, reason);
+                }
             }
         }
     }
@@ -509,11 +578,14 @@ impl Controller {
                     "manufacturer": slot.id.manufacturer,
                     "serialNumber": slot.id.serial_number,
                     "zoneSet": zs,
-                }))
-                .expect("the message has all required fields");
+                }));
                 slot.zone_set_header_id += 1;
                 slot.zone_set_sent = true;
-                world.send_zone_set(&msg).expect("the robot exists");
+                // (the message has all its fields and the robot is in the world; if
+                // not, the robot gets no zone set)
+                if let Ok(msg) = msg {
+                    let _ = world.send_zone_set(&msg);
+                }
             } else if status == Some(vda5050::state::EnabledStatus::Disabled) && !slot.enable_sent {
                 let msg = serde_json::from_value(serde_json::json!({
                     "headerId": slot.instant_header_id,
@@ -527,11 +599,12 @@ impl Controller {
                         "blockingType": "NONE",
                         "actionParameters": [{"key": "zoneSetId", "value": zs.zone_set_id}],
                     }],
-                }))
-                .expect("the message has all required fields");
+                }));
                 slot.instant_header_id += 1;
                 slot.enable_sent = true;
-                world.send_instant_actions(&msg).expect("the robot exists");
+                if let Ok(msg) = msg {
+                    let _ = world.send_instant_actions(&msg);
+                }
             }
         }
     }
@@ -562,17 +635,18 @@ impl Controller {
             if mine.is_empty() {
                 continue;
             }
-            let msg: Responses = serde_json::from_value(serde_json::json!({
+            let msg: Result<Responses, _> = serde_json::from_value(serde_json::json!({
                 "headerId": slot.response_header_id,
                 "timestamp": world.timestamp(),
                 "version": botsim_core::world::PROTOCOL_VERSION,
                 "manufacturer": slot.id.manufacturer,
                 "serialNumber": slot.id.serial_number,
                 "responses": mine,
-            }))
-            .expect("the message has all required fields");
+            }));
             slot.response_header_id += 1;
-            world.send_responses(&msg).expect("the robot exists");
+            if let Ok(msg) = msg {
+                let _ = world.send_responses(&msg);
+            }
         }
     }
 
@@ -606,17 +680,26 @@ impl Controller {
                     continue;
                 }
                 if dist[t].is_none() {
+                    // (however the robot arrives at the pickup: the most it can do)
                     if self
                         .lifts
-                        .route(&self.types[t].ok, job.pickup, job.drop)
+                        .route_from(&self.types[t].mover(), Arrival::Free, job.pickup, job.drop)
                         .is_none()
                     {
                         self.unserviceable.insert((job.id, t));
                         continue;
                     }
-                    dist[t] = Some(distances_to(&self.graph, &self.types[t].into, job.pickup));
+                    dist[t] = Some(distances_to(
+                        &self.graph,
+                        &self.types[t].into,
+                        &self.types[t].cost,
+                        job.pickup,
+                    ));
                 }
-                let d = dist[t].as_ref().expect("computed just above")[node];
+                let Some(dist_t) = dist[t].as_ref() else {
+                    continue; // (computed just above)
+                };
+                let d = dist_t[node];
                 if d.is_finite() {
                     // smallest distance (to a nanometre); equal → the robot added first
                     order.push(((d * 1e9).round() as i64, i, k));
@@ -626,9 +709,15 @@ impl Controller {
             // the first robot in that order that has a plan for the job
             let chosen = order.iter().find_map(|&(_, i, k)| {
                 let (_, node) = free[k];
-                let ok = &self.types[self.robots[i].type_idx].ok;
-                let plan =
-                    Plan::for_job_with(&self.graph, node, &job, |a, b| self.lifts.route(ok, a, b))?;
+                let mover = self.types[self.robots[i].type_idx].mover();
+                // the robot's heading matters if it cannot turn on the spot (S73)
+                let arrival = states[i]
+                    .mobile_robot_position
+                    .as_ref()
+                    .map_or(Arrival::Free, |p| Arrival::Heading(p.theta));
+                let plan = Plan::for_job_with(&self.graph, node, arrival, &job, |a, arr, b| {
+                    self.lifts.route_from(&mover, arr, a, b)
+                })?;
                 Some((i, k, plan))
             });
             let Some((i, k, plan)) = chosen else {
@@ -661,9 +750,8 @@ impl Controller {
         };
         let msg = build_order(&self.graph, &header, &plan, 0, released_through);
         slot.header_id += 1;
-        let reception = world.send_order(&msg).expect("the robot exists");
-        match reception {
-            Reception::Accepted | Reception::InTransit => {
+        match deliver(world, msg) {
+            Ok(reception) => {
                 slot.work = Some(Work {
                     job,
                     plan,
@@ -674,9 +762,10 @@ impl Controller {
                     waiting_seconds: 0.0,
                     blocked_seconds: 0.0,
                     awaiting_ack: reception == Reception::InTransit,
+                    cancelling: None,
                 });
             }
-            Reception::Rejected(reason) => {
+            Err(reason) => {
                 give_back(
                     &mut self.reservations,
                     &mut self.lifts,
@@ -720,6 +809,45 @@ fn give_back(
     }
 }
 
+/// Send an order message to its robot: `Ok` with `Accepted` or `InTransit`, or the
+/// error type if the robot refused it, if there is no message (it could not be
+/// built), or if the robot is unknown to the world.
+fn deliver(world: &mut World, msg: Option<Order>) -> Result<Reception, ErrorType> {
+    let msg = msg.ok_or(ErrorType::ValidationFailure)?;
+    match world.send_order(&msg) {
+        Ok(Reception::Rejected(reason)) => Err(reason),
+        Ok(reception) => Ok(reception),
+        Err(_) => Err(ErrorType::ValidationFailure),
+    }
+}
+
+/// The robot refused an update of its order: tell it to cancel the order (it brakes
+/// to the next node and stops), and note that the job is to be given up once it has
+/// stopped (see `Work::cancelling`). If the message cannot be built or sent, the
+/// robot waits at the end of what it was given and the job is still given up.
+fn cancel_order(world: &mut World, slot: &mut Slot, reason: ErrorType) {
+    let Some(work) = slot.work.as_mut() else {
+        return;
+    };
+    work.cancelling = Some(reason);
+    let message = serde_json::from_value(serde_json::json!({
+        "headerId": slot.instant_header_id,
+        "timestamp": world.timestamp(),
+        "version": botsim_core::world::PROTOCOL_VERSION,
+        "manufacturer": slot.id.manufacturer,
+        "serialNumber": slot.id.serial_number,
+        "actions": [{
+            "actionType": "cancelOrder",
+            "actionId": format!("cancel-{}", work.order_id),
+            "blockingType": "NONE",
+        }],
+    }));
+    slot.instant_header_id += 1;
+    if let Ok(msg) = message {
+        let _ = world.send_instant_actions(&msg);
+    }
+}
+
 /// The error type of an error in `state` that names the order `order_id`: the
 /// robot has refused that order (VDA 5050 puts the `orderId` in the references).
 fn order_error(state: &State, order_id: &str) -> Option<ErrorType> {
@@ -751,7 +879,7 @@ fn reroute(
     reservations: &Reservations,
     lifts: &LiftDesk,
     doors: &DoorDesk,
-    ok: &[bool],
+    mover: &Mover,
     robot: usize,
     plan: &Plan,
     at: usize,
@@ -760,8 +888,8 @@ fn reroute(
     if lifts.owns(robot) || doors.owns(robot) || plan.edges[at..].iter().any(|&e| special(e)) {
         return None;
     }
-    // no lift ride, no door, and only edges the robot's type may drive (S55)
-    let forbidden = |e: EdgeIdx| special(e) || !ok[e];
+    // no lift ride and no door; the edges the robot's type may drive (S55) and the
+    // turns it can make (S73) are in `mover`
     let blocked: std::collections::HashSet<NodeIdx> = (0..graph.nodes.len())
         .filter(|&n| reservations.node_holder(n).is_some_and(|h| h != robot))
         .collect();
@@ -770,20 +898,26 @@ fn reroute(
     let mut edges = plan.edges[..at].to_vec();
     let mut actions = plan.actions[..=at].to_vec();
     let mut here = plan.nodes[at];
+    // how the robot arrives at `here`: by the edge it has driven (not known at the
+    // very start)
+    let mut arrival = if at > 0 {
+        Arrival::Edge(plan.edges[at - 1])
+    } else {
+        Arrival::Free
+    };
     for j in at + 1..=plan.last() {
         if j != plan.last() && plan.actions[j].is_empty() {
             continue; // not a place the job needs to stop at
         }
         let target = plan.nodes[j];
-        for e in shortest_path_avoiding(graph, here, target, &blocked, forbidden)? {
+        for e in plan_path(graph, mover, arrival, here, target, &blocked, special)? {
             edges.push(e);
             nodes.push(graph.edges[e].end);
             actions.push(Vec::new());
+            arrival = Arrival::Edge(e);
         }
-        actions
-            .last_mut()
-            .expect("there is at least the node the robot stands on")
-            .extend(plan.actions[j].iter().cloned());
+        // (there is at least the node the robot stands on)
+        actions.last_mut()?.extend(plan.actions[j].iter().cloned());
         here = target;
     }
     (edges != plan.edges).then_some(Plan {

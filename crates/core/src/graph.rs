@@ -7,6 +7,11 @@ use std::fmt;
 
 use vdma_lif::{Layout, Lif};
 
+use crate::drive::THREE_WHEEL_TOLERANCE;
+use crate::motion::angle_diff;
+use crate::path::{Nurbs, Path};
+use crate::spec::Kinematics;
+
 /// Index of a node in [`Graph::nodes`].
 pub type NodeIdx = usize;
 /// Index of an edge in [`Graph::edges`].
@@ -35,6 +40,58 @@ pub struct GraphNode {
     pub robot_types: Vec<RobotTypeKey>,
 }
 
+/// Which ways a robot may turn on the spot at a node (LIF `rotationAtStartNodeAllowed`
+/// / `rotationAtEndNodeAllowed`, S64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rotation {
+    None,
+    /// Counter-clockwise (positive) only.
+    Ccw,
+    /// Clockwise (negative) only.
+    Cw,
+    Both,
+}
+
+impl Rotation {
+    fn bits(self) -> u8 {
+        match self {
+            Rotation::None => 0,
+            Rotation::Ccw => 1,
+            Rotation::Cw => 2,
+            Rotation::Both => 3,
+        }
+    }
+
+    /// What two rules together allow: both must allow it (LIF §8.3.13.1: the
+    /// rotation at the end node of the edge a robot comes in on and at the start
+    /// node of the edge it leaves on "are combined as a boolean and").
+    pub fn and(self, other: Rotation) -> Rotation {
+        match self.bits() & other.bits() {
+            0 => Rotation::None,
+            1 => Rotation::Ccw,
+            2 => Rotation::Cw,
+            _ => Rotation::Both,
+        }
+    }
+
+    /// May the robot turn counter-clockwise (`ccw`) or clockwise?
+    pub fn allows(self, ccw: bool) -> bool {
+        self.bits() & if ccw { 1 } else { 2 } != 0
+    }
+}
+
+impl From<vdma_lif::edge::RotationAllowed> for Rotation {
+    fn from(r: vdma_lif::edge::RotationAllowed) -> Rotation {
+        use vdma_lif::edge::RotationAllowed as R;
+        match r {
+            R::None => Rotation::None,
+            R::Ccw => Rotation::Ccw,
+            R::Cw => Rotation::Cw,
+            R::Both => Rotation::Both,
+        }
+    }
+}
+
 /// What an edge is like for some robot types (one LIF
 /// `mobileRobotTypeEdgeProperties` entry).
 #[derive(Debug, Clone, PartialEq)]
@@ -42,6 +99,13 @@ pub struct EdgeTypeProps {
     pub robot_types: Vec<RobotTypeKey>,
     /// Permitted maximum speed in m/s (> 0); no limit if `None`.
     pub maximum_speed: Option<f64>,
+    /// Rotation allowed at the start node of the edge (LIF default: both ways).
+    pub rotation_at_start: Rotation,
+    /// Rotation allowed at the end node of the edge (LIF default: both ways).
+    pub rotation_at_end: Rotation,
+    /// The curve the robot follows between the two nodes (LIF `trajectory`, S69);
+    /// a straight line if `None`.
+    pub trajectory: Option<Nurbs>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +132,42 @@ impl GraphEdge {
             .iter()
             .find(|p| lists_type(&p.robot_types, manufacturer, series))
     }
+}
+
+/// How far (m) a trajectory may end from the node it should end at.
+const TRAJECTORY_TOLERANCE: f64 = 0.05;
+
+/// A LIF trajectory as a curve; it must start at the start node and end at the end
+/// node of its edge (the control points include both ends).
+fn read_trajectory(
+    t: &vdma_lif::edge::Trajectory,
+    edge: &str,
+    start: (f64, f64),
+    end: (f64, f64),
+) -> Result<Nurbs, GraphError> {
+    let bad = |reason: String| GraphError::BadTrajectory {
+        edge: edge.to_string(),
+        reason,
+    };
+    let points: Vec<(f64, f64, Option<f64>)> = t
+        .control_points
+        .iter()
+        .map(|p| (p.x, p.y, p.weight))
+        .collect();
+    let curve = Nurbs::new(
+        t.degree.unwrap_or(1) as usize,
+        t.knot_vector.clone(),
+        &points,
+    )
+    .map_err(|e| bad(e.to_string()))?;
+    let (a, b) = curve.ends();
+    let off = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).hypot(p.1 - q.1);
+    if off(a, start) > TRAJECTORY_TOLERANCE || off(b, end) > TRAJECTORY_TOLERANCE {
+        return Err(bad(
+            "it does not run from the start node to the end node of the edge".to_string(),
+        ));
+    }
+    Ok(curve)
 }
 
 /// A station (LIF): a logical place where a robot interacts with the
@@ -99,6 +199,12 @@ pub enum GraphError {
     BadMaximumSpeed {
         edge: String,
     },
+    /// A trajectory is not a usable curve, or does not run from the start node to
+    /// the end node of its edge.
+    BadTrajectory {
+        edge: String,
+        reason: String,
+    },
 }
 
 impl fmt::Display for GraphError {
@@ -108,6 +214,9 @@ impl fmt::Display for GraphError {
             GraphError::DuplicateEdge(id) => write!(f, "duplicate edgeId '{id}'"),
             GraphError::UnknownNode { edge, node } => {
                 write!(f, "edge '{edge}' refers to unknown node '{node}'")
+            }
+            GraphError::BadTrajectory { edge, reason } => {
+                write!(f, "edge '{edge}': trajectory: {reason}")
             }
             GraphError::DuplicateStation(id) => write!(f, "duplicate stationId '{id}'"),
             GraphError::BadStation {
@@ -230,6 +339,18 @@ impl Graph {
                         .map(|t| (t.manufacturer.clone(), t.series_name.clone()))
                         .collect(),
                     maximum_speed: p.maximum_speed,
+                    rotation_at_start: p
+                        .rotation_at_start_node_allowed
+                        .map_or(Rotation::Both, Rotation::from),
+                    rotation_at_end: p
+                        .rotation_at_end_node_allowed
+                        .map_or(Rotation::Both, Rotation::from),
+                    trajectory: match (&p.trajectory, map_transition) {
+                        (Some(t), false) => {
+                            Some(read_trajectory(t, &e.edge_id, (a.x, a.y), (b.x, b.y))?)
+                        }
+                        _ => None,
+                    },
                 });
             }
             g.edges.push(GraphEdge {
@@ -297,6 +418,130 @@ impl Graph {
         e.props_for(manufacturer, series).is_some()
             && self.node_allows(e.start, manufacturer, series)
             && self.node_allows(e.end, manufacturer, series)
+    }
+
+    /// The rotation this type may do at the start and at the end node of the edge
+    /// (both ways if the layout says nothing, or the type may not use the edge).
+    pub fn edge_rotation(
+        &self,
+        edge: EdgeIdx,
+        manufacturer: &str,
+        series: &str,
+    ) -> (Rotation, Rotation) {
+        self.edges[edge]
+            .props_for(manufacturer, series)
+            .map_or((Rotation::Both, Rotation::Both), |p| {
+                (p.rotation_at_start, p.rotation_at_end)
+            })
+    }
+
+    /// The path a robot of this type follows on the edge: its trajectory sampled,
+    /// or the straight line between the nodes (S69). Lift rides have none.
+    pub fn edge_path(&self, edge: EdgeIdx, manufacturer: &str, series: &str) -> Path {
+        let e = &self.edges[edge];
+        match e
+            .props_for(manufacturer, series)
+            .and_then(|p| p.trajectory.as_ref())
+        {
+            Some(curve) => curve.to_path(),
+            None => {
+                let (a, b) = (&self.nodes[e.start], &self.nodes[e.end]);
+                Path::straight((a.x, a.y), (b.x, b.y))
+            }
+        }
+    }
+
+    /// The direction the edge starts in and the direction it ends in (radians), for
+    /// this type: from the curve's control points, or the straight line. Cheap (no
+    /// sampling), unlike [`Graph::edge_path`].
+    pub fn edge_directions(&self, edge: EdgeIdx, manufacturer: &str, series: &str) -> (f64, f64) {
+        let e = &self.edges[edge];
+        match e
+            .props_for(manufacturer, series)
+            .and_then(|p| p.trajectory.as_ref())
+        {
+            Some(curve) => curve.end_tangents(),
+            None => {
+                let (a, b) = (&self.nodes[e.start], &self.nodes[e.end]);
+                let dir = (b.y - a.y).atan2(b.x - a.x);
+                (dir, dir)
+            }
+        }
+    }
+
+    /// Can a robot that has just driven edge `prev` (no orientation given: forwards)
+    /// drive edge `next`, which starts where `prev` ends (S71)? It must turn if the
+    /// direction `prev` ends in differs from the one `next` starts in:
+    /// - an omnidirectional robot keeps its heading and needs no turn;
+    /// - a three-wheel robot cannot turn on the spot: the directions must agree;
+    /// - a differential robot turns on the spot if the layout allows the turn (the
+    ///   rotation rules at the end of `prev` and at the start of `next`, combined).
+    ///
+    /// The same rules the driver applies when it takes an order. Lift rides always
+    /// pass.
+    pub fn can_follow(
+        &self,
+        prev: EdgeIdx,
+        next: EdgeIdx,
+        kinematics: Kinematics,
+        manufacturer: &str,
+        series: &str,
+    ) -> bool {
+        if self.edges[prev].map_transition || self.edges[next].map_transition {
+            return true;
+        }
+        let heading = self.edge_directions(prev, manufacturer, series).1;
+        let (_, end_rotation) = self.edge_rotation(prev, manufacturer, series);
+        self.can_start(
+            heading,
+            Some(end_rotation),
+            next,
+            kinematics,
+            manufacturer,
+            series,
+        )
+    }
+
+    /// Can a robot that heads `heading` (radians) at the start node of `edge` drive
+    /// it forwards (S71)? `end_rotation` is what the edge it came in on allows at
+    /// this node (`None` if unknown, e.g. it stands there). See [`Graph::can_follow`].
+    pub fn can_start(
+        &self,
+        heading: f64,
+        end_rotation: Option<Rotation>,
+        edge: EdgeIdx,
+        kinematics: Kinematics,
+        manufacturer: &str,
+        series: &str,
+    ) -> bool {
+        if self.edges[edge].map_transition || kinematics == Kinematics::Omnidirectional {
+            return true;
+        }
+        let (start_dir, _) = self.edge_directions(edge, manufacturer, series);
+        let diff = angle_diff(heading, start_dir);
+        if kinematics == Kinematics::ThreeWheel {
+            return diff.abs() <= THREE_WHEEL_TOLERANCE;
+        }
+        if diff.abs() <= 1e-9 {
+            return true;
+        }
+        let (start_rotation, _) = self.edge_rotation(edge, manufacturer, series);
+        let allowed = end_rotation.map_or(start_rotation, |r| r.and(start_rotation));
+        allowed.allows(true) || allowed.allows(false)
+    }
+
+    /// The distance a robot of this type drives on the edge (S74): the length of
+    /// the curve for an edge with a trajectory, else the straight distance between
+    /// the nodes ([`GraphEdge::length`]). Samples the curve, so compute it once.
+    pub fn edge_travel_length(&self, edge: EdgeIdx, manufacturer: &str, series: &str) -> f64 {
+        let e = &self.edges[edge];
+        match e
+            .props_for(manufacturer, series)
+            .and_then(|p| p.trajectory.as_ref())
+        {
+            Some(curve) => curve.to_path().length(),
+            None => e.length,
+        }
     }
 
     /// The speed limit (m/s) of the edge for this type, if it has one.

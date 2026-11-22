@@ -1,10 +1,12 @@
 //! Drawing one frame: geometry, track graph and robots of one floor.
 
 use botsim_record::{
-    GeometryKind, LayoutLine, Outline, RobotRecord, ShapeRecord, SnapshotLine, StatusRecord,
+    EdgePath, EdgeRecord, GeometryKind, LayoutLine, Outline, RobotRecord, ShapeRecord,
+    SnapshotLine, StatusRecord,
 };
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 
+use crate::clock::{Clock, NoFont};
 use crate::palette::{self, Rgb};
 use crate::view::{View, ViewError};
 
@@ -23,37 +25,110 @@ const ARROW_WIDTH: f64 = 0.25;
 const ROBOT_OUTLINE: f64 = 0.04;
 /// Lines are never thinner than this many pixels.
 const MIN_LINE_PX: f32 = 1.0;
+/// Roads, nodes and arrowheads are never smaller than this (pixels), so that they
+/// stay visible when a big hall is drawn small. (In a small layout they are bigger
+/// than this anyway.)
+const MIN_ROAD_PX: f32 = 2.0;
+const MIN_NODE_RADIUS_PX: f32 = 3.0;
+const MIN_ARROW_LENGTH_PX: f64 = 7.0;
+/// Width of a blocking arrow, metres.
+const BLOCKING_WIDTH: f64 = 0.08;
+/// Width of the ring around a robot in a deadlock or an overlap, metres.
+const RING_WIDTH: f64 = 0.12;
+/// Space between a robot's body and the inside of its deadlock ring, metres.
+const DEADLOCK_RING_GAP: f64 = 0.15;
+/// The overlap ring lies outside the deadlock ring, so a robot that is in both
+/// shows both: the same gap, the ring width and a little more.
+const OVERLAP_RING_GAP: f64 = DEADLOCK_RING_GAP + RING_WIDTH + 0.05;
 
 /// Draws the frames of one floor of a recording. The geometry and the track
 /// graph never change, so they are drawn once; every frame starts from that
 /// picture and adds the robots.
-pub struct Renderer<'a> {
-    layout: &'a LayoutLine,
+pub struct Renderer {
+    layout: LayoutLine,
     view: View,
     map: usize,
     base: Pixmap,
+    /// The font of the text in the frames (the clock, the name); `None` while no
+    /// text is wanted.
+    clock: Option<Clock>,
+    show_clock: bool,
+    show_brand: bool,
+    /// Where the right edge of the name `botsim` is (pixels from the left): a few
+    /// metres inside the right wall of the building.
+    brand_right: f32,
 }
 
-impl<'a> Renderer<'a> {
+/// How far inside the right wall of the building the name ends (metres), at most
+/// 5% of the width of the image.
+const BRAND_INSET_M: f64 = 3.0;
+
+impl Renderer {
     /// A renderer for floor `map` (an index into the layout's maps), with the
     /// view fitted once to that floor.
     pub fn new(
-        layout: &'a LayoutLine,
+        layout: &LayoutLine,
         map: usize,
         width: u32,
         height: u32,
-    ) -> Result<Renderer<'a>, ViewError> {
+    ) -> Result<Renderer, ViewError> {
         let view = View::fit(layout, map, width, height)?;
         let mut base = Pixmap::new(width, height).ok_or(ViewError::NoPixels)?;
         base.fill(color(palette::BACKGROUND));
         draw_geometry(&mut base, layout, &view, map);
         draw_graph(&mut base, layout, &view, map);
+        // the name ends a few metres inside the right wall of the building (and never
+        // outside the image)
+        let right_wall = View::content_bounds(layout, map).map_or(width as f64, |b| {
+            let inset = (BRAND_INSET_M * view.scale).min(0.05 * width as f64);
+            view.to_px(b.2, 0.0).0 as f64 - inset
+        });
+        let brand_right = right_wall.min(width as f64 - 0.03 * height as f64) as f32;
         Ok(Renderer {
-            layout,
+            layout: layout.clone(),
             view,
             map,
             base,
+            clock: None,
+            show_clock: false,
+            show_brand: false,
+            brand_right,
         })
+    }
+
+    /// The plate of the name `botsim` `(x, y, width, height)` in pixels, if the name
+    /// is on (see [`Renderer::with_brand`]).
+    pub fn brand_area(&self) -> Option<(f32, f32, f32, f32)> {
+        let text = self.clock.as_ref().filter(|_| self.show_brand)?;
+        Some(text.brand_area(self.brand_right, self.view.height))
+    }
+
+    /// Put the simulated time in a corner of every [`Renderer::frame`] (not of
+    /// [`Renderer::empty_frame`]).
+    /// Fails if the system has no usable font for the label.
+    pub fn with_clock(mut self, on: bool) -> Result<Renderer, NoFont> {
+        self.show_clock = on;
+        self.load_font()?;
+        Ok(self)
+    }
+
+    /// Put the name `botsim` at the bottom of every [`Renderer::frame`] (not of
+    /// [`Renderer::empty_frame`]), a few metres inside the right wall of the
+    /// building. Fails if the system has no usable font.
+    pub fn with_brand(mut self, on: bool) -> Result<Renderer, NoFont> {
+        self.show_brand = on;
+        self.load_font()?;
+        Ok(self)
+    }
+
+    /// The font is looked for once, and only if some text is wanted.
+    fn load_font(&mut self) -> Result<(), NoFont> {
+        if !(self.show_clock || self.show_brand) {
+            self.clock = None;
+        } else if self.clock.is_none() {
+            self.clock = Some(Clock::new()?);
+        }
+        Ok(())
     }
 
     pub fn view(&self) -> &View {
@@ -61,16 +136,73 @@ impl<'a> Renderer<'a> {
     }
 
     pub fn layout(&self) -> &LayoutLine {
-        self.layout
+        &self.layout
     }
 
-    /// The picture of a snapshot: the floor and the robots that are on it.
+    /// The picture of a snapshot: the floor and the robots that are on it, then
+    /// the rings of deadlocks and overlaps and the blocking arrows above them.
     pub fn frame(&self, snapshot: &SnapshotLine) -> Pixmap {
+        self.frame_selected(snapshot, None)
+    }
+
+    /// Like [`Renderer::frame`], with a robot selected (by its id): on edges where
+    /// the robot types follow different curves, the curve of the selected robot's
+    /// type is drawn strong over the dimmed ones. A robot whose type is not in the
+    /// layout line, or an id that is no robot, selects nothing.
+    pub fn frame_selected(&self, snapshot: &SnapshotLine, selected: Option<&str>) -> Pixmap {
         let mut pixmap = self.base.clone();
-        for robot in &snapshot.robots {
-            // a robot in a lift cabin is not on any floor (its pose is where it got in)
-            if robot.map == self.map && robot.status != StatusRecord::RidingLift {
-                draw_robot(&mut pixmap, &self.view, robot);
+        let robot_type = selected.and_then(|id| {
+            self.layout
+                .robots
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| r.robot_type.as_str())
+        });
+        if let Some(robot_type) = robot_type {
+            draw_selected_curves(&mut pixmap, &self.layout, &self.view, self.map, robot_type);
+        }
+        // a robot in a lift cabin is not on any floor (its pose is where it got in)
+        let on_floor =
+            |robot: &RobotRecord| robot.map == self.map && robot.status != StatusRecord::RidingLift;
+        for robot in snapshot.robots.iter().filter(|r| on_floor(r)) {
+            draw_robot(&mut pixmap, &self.view, robot);
+        }
+        // the lists of the snapshot refer to robots by position; one that is not
+        // on this floor (or does not exist) is left out
+        let robot_on_floor = |i: usize| snapshot.robots.get(i).filter(|r| on_floor(r));
+        for &i in snapshot.deadlocks.iter().flatten() {
+            if let Some(r) = robot_on_floor(i) {
+                draw_ring(
+                    &mut pixmap,
+                    &self.view,
+                    r,
+                    DEADLOCK_RING_GAP,
+                    palette::DEADLOCK,
+                );
+            }
+        }
+        for &i in snapshot.overlapping.iter().flatten() {
+            if let Some(r) = robot_on_floor(i) {
+                draw_ring(
+                    &mut pixmap,
+                    &self.view,
+                    r,
+                    OVERLAP_RING_GAP,
+                    palette::OVERLAP,
+                );
+            }
+        }
+        for &[waiter, blocker] in &snapshot.blocking {
+            if let (Some(w), Some(b)) = (robot_on_floor(waiter), robot_on_floor(blocker)) {
+                draw_blocking(&mut pixmap, &self.view, w, b);
+            }
+        }
+        if let Some(text) = &self.clock {
+            if self.show_clock {
+                text.draw(&mut pixmap, snapshot.time);
+            }
+            if self.show_brand {
+                text.draw_brand(&mut pixmap, self.brand_right);
             }
         }
         pixmap
@@ -171,9 +303,109 @@ fn draw_geometry(pixmap: &mut Pixmap, layout: &LayoutLine, view: &View, map: usi
 /// Track edges (a two-way pair as one line, a one-way edge with an arrowhead),
 /// then the nodes. Edges between maps are not drawn.
 fn draw_graph(pixmap: &mut Pixmap, layout: &LayoutLine, view: &View, map: usize) {
+    draw_edges(pixmap, layout, view, map);
+    draw_nodes(pixmap, layout, view, map);
+}
+
+/// The distinct curves of an edge (several robot types can follow the same one).
+fn distinct_paths(edge: &EdgeRecord) -> Vec<&EdgePath> {
+    let mut distinct: Vec<&EdgePath> = Vec::new();
+    for path in &edge.paths {
+        if !distinct.iter().any(|d| d.points == path.points) {
+            distinct.push(path);
+        }
+    }
+    distinct
+}
+
+/// A curve as a line with an arrowhead along its last piece.
+fn draw_edge_path(pixmap: &mut Pixmap, view: &View, points: &[[f64; 2]], c: Rgb, width: f64) {
+    let points: Vec<(f64, f64)> = points.iter().map(|p| (p[0], p[1])).collect();
+    if let Some(path) = polyline(view, &points, false) {
+        // a wider line (the selected curve) keeps its proportion at the minimum
+        let min_px = MIN_ROAD_PX * (width / EDGE_WIDTH) as f32;
+        line(pixmap, &path, c, view.px(width).max(min_px));
+    }
+    if let [.., a, b] = points[..] {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let length = dx.hypot(dy);
+        if length > 1e-9 {
+            let u = (dx / length, dy / length);
+            let rim = node_radius(view);
+            let tip = (b.0 - u.0 * rim, b.1 - u.1 * rim);
+            draw_arrow_head_in(pixmap, view, tip, u, c);
+        }
+    }
+}
+
+/// The radius of a node in metres: at least [`MIN_NODE_RADIUS_PX`] pixels.
+fn node_radius(view: &View) -> f64 {
+    (NODE_DIAMETER / 2.0).max(MIN_NODE_RADIUS_PX as f64 / view.scale)
+}
+
+/// An edge with curves: the one curve, or all of them dimmed if the types of
+/// robots follow different ones.
+fn draw_curved_edge(pixmap: &mut Pixmap, view: &View, edge: &EdgeRecord) {
+    let distinct = distinct_paths(edge);
+    let colour = if distinct.len() == 1 {
+        palette::GRAPH
+    } else {
+        palette::GRAPH_DIM
+    };
+    for path in distinct {
+        draw_edge_path(pixmap, view, &path.points, colour, EDGE_WIDTH);
+    }
+}
+
+/// On the edges where the types of robots follow different curves: the curve of
+/// this robot type, strong, over the dimmed ones.
+fn draw_selected_curves(
+    pixmap: &mut Pixmap,
+    layout: &LayoutLine,
+    view: &View,
+    map: usize,
+    robot_type: &str,
+) {
+    let mut drawn = false;
+    for edge in &layout.edges {
+        let on_floor =
+            !edge.map_transition && layout.nodes.get(edge.start).is_some_and(|n| n.map == map);
+        if !on_floor || distinct_paths(edge).len() < 2 {
+            continue;
+        }
+        if let Some(path) = edge
+            .paths
+            .iter()
+            .find(|p| p.types.iter().any(|t| t == robot_type))
+        {
+            draw_edge_path(
+                pixmap,
+                view,
+                &path.points,
+                palette::GRAPH_SELECTED,
+                EDGE_WIDTH * 1.5,
+            );
+            drawn = true;
+        }
+    }
+    // the strong lines end in the middle of the nodes: draw the nodes again (only
+    // then: drawing them twice changes the anti-aliased rim)
+    if drawn {
+        draw_nodes(pixmap, layout, view, map);
+    }
+}
+
+fn draw_edges(pixmap: &mut Pixmap, layout: &LayoutLine, view: &View, map: usize) {
     for (i, e) in layout.edges.iter().enumerate() {
-        let (a, b) = (&layout.nodes[e.start], &layout.nodes[e.end]);
+        // an edge that names a node the recording does not have is left out
+        let (Some(a), Some(b)) = (layout.nodes.get(e.start), layout.nodes.get(e.end)) else {
+            continue;
+        };
         if e.map_transition || a.map != map || b.map != map {
+            continue;
+        }
+        if !e.paths.is_empty() {
+            draw_curved_edge(pixmap, view, e);
             continue;
         }
         let reverse = layout
@@ -187,15 +419,21 @@ fn draw_graph(pixmap: &mut Pixmap, layout: &LayoutLine, view: &View, map: usize)
             None => draw_arrow_head(pixmap, view, (a.x, a.y), (b.x, b.y)),
         }
         if let Some(path) = polyline(view, &[(a.x, a.y), (b.x, b.y)], false) {
-            line(pixmap, &path, palette::GRAPH, view.px(EDGE_WIDTH));
+            line(
+                pixmap,
+                &path,
+                palette::GRAPH,
+                view.px(EDGE_WIDTH).max(MIN_ROAD_PX),
+            );
         }
     }
+}
+
+fn draw_nodes(pixmap: &mut Pixmap, layout: &LayoutLine, view: &View, map: usize) {
+    let rim = node_radius(view);
     for n in layout.nodes.iter().filter(|n| n.map == map) {
         let (x, y) = view.to_px(n.x, n.y);
-        for (radius, c) in [
-            (NODE_DIAMETER / 2.0, palette::GRAPH),
-            (NODE_DIAMETER / 4.0, palette::NODE_CENTRE),
-        ] {
+        for (radius, c) in [(rim, palette::GRAPH), (rim / 2.0, palette::NODE_CENTRE)] {
             if let Some(path) = PathBuilder::from_circle(x, y, view.px(radius).max(1.0)) {
                 fill(pixmap, &path, c);
             }
@@ -210,53 +448,130 @@ fn draw_arrow_head(pixmap: &mut Pixmap, view: &View, from: (f64, f64), to: (f64,
     if length < 1e-9 {
         return;
     }
-    let (ux, uy) = (dx / length, dy / length);
-    let tip = (
-        to.0 - ux * NODE_DIAMETER / 2.0,
-        to.1 - uy * NODE_DIAMETER / 2.0,
-    );
-    let base = (tip.0 - ux * ARROW_LENGTH, tip.1 - uy * ARROW_LENGTH);
-    let (nx, ny) = (-uy * ARROW_WIDTH / 2.0, ux * ARROW_WIDTH / 2.0);
+    let u = (dx / length, dy / length);
+    let rim = node_radius(view);
+    let tip = (to.0 - u.0 * rim, to.1 - u.1 * rim);
+    draw_arrow_head_in(pixmap, view, tip, u, palette::GRAPH);
+}
+
+/// A filled triangle with its tip at `tip`, pointing along the unit vector `u`; at
+/// least [`MIN_ARROW_LENGTH_PX`] pixels long, in the same proportion.
+fn draw_arrow_head_in(pixmap: &mut Pixmap, view: &View, tip: (f64, f64), u: (f64, f64), c: Rgb) {
+    let length = ARROW_LENGTH.max(MIN_ARROW_LENGTH_PX / view.scale);
+    let width = ARROW_WIDTH * length / ARROW_LENGTH;
+    let base = (tip.0 - u.0 * length, tip.1 - u.1 * length);
+    let (nx, ny) = (-u.1 * width / 2.0, u.0 * width / 2.0);
     let points = [tip, (base.0 + nx, base.1 + ny), (base.0 - nx, base.1 - ny)];
     if let Some(path) = polyline(view, &points, true) {
-        fill(pixmap, &path, palette::GRAPH);
+        fill(pixmap, &path, c);
+    }
+}
+
+/// A ring around the body, `gap` metres outside it.
+fn draw_ring(pixmap: &mut Pixmap, view: &View, robot: &RobotRecord, gap: f64, c: Rgb) {
+    if let Some(path) = body_path(view, robot, gap + RING_WIDTH / 2.0) {
+        line(pixmap, &path, c, view.px(RING_WIDTH));
+    }
+}
+
+/// An arrow from the waiting robot to the one that blocks it: from the edge of
+/// one body to the edge of the other. Nothing if the bodies touch.
+fn draw_blocking(pixmap: &mut Pixmap, view: &View, waiter: &RobotRecord, blocker: &RobotRecord) {
+    let (from, to) = (body_centre(waiter), body_centre(blocker));
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    let distance = dx.hypot(dy);
+    if distance < 1e-9 {
+        return;
+    }
+    let u = (dx / distance, dy / distance);
+    let start = body_reach(waiter, u);
+    let end = distance - body_reach(blocker, (-u.0, -u.1));
+    if end <= start {
+        return;
+    }
+    let tail = (from.0 + u.0 * start, from.1 + u.1 * start);
+    let tip = (from.0 + u.0 * end, from.1 + u.1 * end);
+    if let Some(path) = polyline(view, &[tail, tip], false) {
+        line(pixmap, &path, palette::BLOCKING, view.px(BLOCKING_WIDTH));
+    }
+    draw_arrow_head_in(pixmap, view, tip, u, palette::BLOCKING);
+}
+
+/// A point given in the robot frame (x forward, y left), in the world.
+fn to_world(robot: &RobotRecord, lx: f64, ly: f64) -> (f64, f64) {
+    let (sin, cos) = robot.heading.sin_cos();
+    (robot.x + lx * cos - ly * sin, robot.y + lx * sin + ly * cos)
+}
+
+/// The outline of a robot's body, grown by `margin` metres on every side.
+fn body_path(view: &View, robot: &RobotRecord, margin: f64) -> Option<Path> {
+    match robot.shape {
+        ShapeRecord::Rect([cx, cy, half_length, half_width]) => {
+            let (l, w) = (half_length + margin, half_width + margin);
+            let corners = [
+                to_world(robot, cx + l, cy + w),
+                to_world(robot, cx - l, cy + w),
+                to_world(robot, cx - l, cy - w),
+                to_world(robot, cx + l, cy - w),
+            ];
+            polyline(view, &corners, true)
+        }
+        ShapeRecord::Circle([cx, cy, radius]) => {
+            let (x, y) = to_world(robot, cx, cy);
+            let (px, py) = view.to_px(x, y);
+            PathBuilder::from_circle(px, py, view.px(radius + margin).max(1.0))
+        }
+    }
+}
+
+/// The middle of the body, in the world.
+fn body_centre(robot: &RobotRecord) -> (f64, f64) {
+    let (cx, cy) = match robot.shape {
+        ShapeRecord::Rect([cx, cy, ..]) | ShapeRecord::Circle([cx, cy, _]) => (cx, cy),
+    };
+    to_world(robot, cx, cy)
+}
+
+/// How far the body's edge is from its middle, looking along the world
+/// direction `(ux, uy)` (a unit vector).
+fn body_reach(robot: &RobotRecord, (ux, uy): (f64, f64)) -> f64 {
+    match robot.shape {
+        ShapeRecord::Circle([_, _, radius]) => radius,
+        ShapeRecord::Rect([_, _, half_length, half_width]) => {
+            // the direction in the robot frame
+            let (sin, cos) = robot.heading.sin_cos();
+            let (lx, ly) = ((ux * cos + uy * sin).abs(), (-ux * sin + uy * cos).abs());
+            let along = if lx > 1e-12 {
+                half_length / lx
+            } else {
+                f64::INFINITY
+            };
+            let across = if ly > 1e-12 {
+                half_width / ly
+            } else {
+                f64::INFINITY
+            };
+            along.min(across)
+        }
     }
 }
 
 fn draw_robot(pixmap: &mut Pixmap, view: &View, robot: &RobotRecord) {
-    let (sin, cos) = robot.heading.sin_cos();
-    // robot frame (x forward, y left) to world
-    let world = |lx: f64, ly: f64| (robot.x + lx * cos - ly * sin, robot.y + lx * sin + ly * cos);
+    let world = |lx: f64, ly: f64| to_world(robot, lx, ly);
     let fill_colour = palette::status(robot.status);
     let outline = palette::darker(fill_colour);
     let outline_px = view.px(ROBOT_OUTLINE);
 
-    // the body, and the point at the front where the heading marker ends
-    let (body, front) = match robot.shape {
-        ShapeRecord::Rect([cx, cy, half_length, half_width]) => {
-            let corners = [
-                world(cx + half_length, cy + half_width),
-                world(cx - half_length, cy + half_width),
-                world(cx - half_length, cy - half_width),
-                world(cx + half_length, cy - half_width),
-            ];
-            (polyline(view, &corners, true), (cx + half_length, cy))
-        }
-        ShapeRecord::Circle([cx, cy, radius]) => {
-            let (x, y) = world(cx, cy);
-            let (px, py) = view.to_px(x, y);
-            (
-                PathBuilder::from_circle(px, py, view.px(radius).max(1.0)),
-                (cx + radius, cy),
-            )
-        }
-    };
-    if let Some(path) = body {
+    if let Some(path) = body_path(view, robot, 0.0) {
         fill(pixmap, &path, fill_colour);
         line(pixmap, &path, outline, outline_px);
     }
 
-    // the heading: a white line from the kinematic center to the front
+    // the heading: a white line from the kinematic center to the front of the body
+    let front = match robot.shape {
+        ShapeRecord::Rect([cx, cy, half_length, _]) => (cx + half_length, cy),
+        ShapeRecord::Circle([cx, cy, radius]) => (cx + radius, cy),
+    };
     let (centre, tip) = (world(0.0, 0.0), world(front.0, front.1));
     if let Some(path) = polyline(view, &[centre, tip], false) {
         line(

@@ -1,0 +1,13 @@
+[package]
+name = "botsim-viewer"
+description = "Replay viewer for botsim recordings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+botsim-export = { path = "../export" }
+botsim-record = { path = "../record" }
+eframe = "0.37.0"

@@ -46,6 +46,43 @@ pub struct View {
 }
 
 impl View {
+    /// The box `(min_x, min_y, max_x, max_y)` round everything on floor `map`: its
+    /// nodes, its geometry (the walls of the building) and its curves; `None` if
+    /// there is nothing.
+    pub fn content_bounds(layout: &LayoutLine, map: usize) -> Option<(f64, f64, f64, f64)> {
+        let nodes = layout
+            .nodes
+            .iter()
+            .filter(|n| n.map == map)
+            .map(|n| (n.x, n.y));
+        let corners = layout
+            .geometry
+            .iter()
+            .filter(|s| s.map == map)
+            .flat_map(|s| s.vertices.iter().map(|v| (v.x, v.y)));
+        // a curved edge can bulge out of the box round its nodes
+        let curves = layout
+            .edges
+            .iter()
+            .filter(|e| {
+                !e.map_transition && layout.nodes.get(e.start).is_some_and(|n| n.map == map)
+            })
+            .flat_map(|e| {
+                e.paths
+                    .iter()
+                    .flat_map(|p| p.points.iter().map(|q| (q[0], q[1])))
+            });
+        let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
+        let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for (x, y) in nodes.chain(corners).chain(curves) {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+        (min_x <= max_x).then_some((min_x, min_y, max_x, max_y))
+    }
+
     /// The view that shows all nodes and geometry of `map` in a
     /// `width` × `height` image. Use the same view for every frame of a video.
     pub fn fit(
@@ -60,27 +97,9 @@ impl View {
         if map >= layout.maps.len() {
             return Err(ViewError::NoSuchMap(map));
         }
-        let nodes = layout
-            .nodes
-            .iter()
-            .filter(|n| n.map == map)
-            .map(|n| (n.x, n.y));
-        let corners = layout
-            .geometry
-            .iter()
-            .filter(|s| s.map == map)
-            .flat_map(|s| s.vertices.iter().map(|v| (v.x, v.y)));
-        let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
-        let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
-        for (x, y) in nodes.chain(corners) {
-            min_x = min_x.min(x);
-            max_x = max_x.max(x);
-            min_y = min_y.min(y);
-            max_y = max_y.max(y);
-        }
-        if min_x > max_x {
+        let Some((min_x, min_y, max_x, max_y)) = View::content_bounds(layout, map) else {
             return Err(ViewError::EmptyMap(map));
-        }
+        };
         let extent_x = (max_x - min_x).max(MIN_EXTENT);
         let extent_y = (max_y - min_y).max(MIN_EXTENT);
         let usable = 1.0 - 2.0 * MARGIN;
@@ -98,6 +117,15 @@ impl View {
         (
             (self.width as f64 / 2.0 + (x - self.centre.0) * self.scale) as f32,
             (self.height as f64 / 2.0 - (y - self.centre.1) * self.scale) as f32,
+        )
+    }
+
+    /// The world point (metres) that is at an image pixel: the inverse of
+    /// [`View::to_px`].
+    pub fn to_world(&self, px: f32, py: f32) -> (f64, f64) {
+        (
+            self.centre.0 + (px as f64 - self.width as f64 / 2.0) / self.scale,
+            self.centre.1 - (py as f64 - self.height as f64 / 2.0) / self.scale,
         )
     }
 

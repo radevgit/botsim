@@ -38,7 +38,7 @@ use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_core::world::{RobotId, World};
 
 use crate::order_builder::Plan;
-use crate::route::shortest_path_avoiding;
+use crate::route::{Arrival, Mover, plan_path, straight_lengths};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -73,11 +73,9 @@ struct LiftInfo {
 }
 
 impl LiftInfo {
-    fn stop(&self, node: NodeIdx) -> &Stop {
-        self.stops
-            .iter()
-            .find(|s| s.node == node)
-            .expect("a ride starts and ends at stops of the lift")
+    /// The stop of the lift at `node` (a ride starts and ends at stops of its lift).
+    fn stop(&self, node: NodeIdx) -> Option<&Stop> {
+        self.stops.iter().find(|s| s.node == node)
     }
 }
 
@@ -146,32 +144,50 @@ impl LiftDesk {
     /// cannot be reached. `ok[e]` says whether the robot's type may drive edge `e`
     /// (S55); other edges are not used.
     pub fn route(&self, ok: &[bool], from: NodeIdx, to: NodeIdx) -> Option<Vec<EdgeIdx>> {
+        let cost = straight_lengths(&self.graph);
+        let mover = Mover {
+            ok,
+            cost: &cost,
+            turns: None,
+        };
+        self.route_from(&mover, Arrival::Free, from, to)
+    }
+
+    /// Like [`LiftDesk::route`] for a robot that cannot make every turn (S73):
+    /// `arrival` says how it gets to `from`, and `mover` its turn rules.
+    pub fn route_from(
+        &self,
+        mover: &Mover,
+        arrival: Arrival,
+        from: NodeIdx,
+        to: NodeIdx,
+    ) -> Option<Vec<EdgeIdx>> {
         let none = std::collections::HashSet::new();
-        let path_of =
-            |a: NodeIdx, b: NodeIdx| shortest_path_avoiding(&self.graph, a, b, &none, |e| !ok[e]);
-        let path = path_of(from, to)?;
+        let path_of = |a: NodeIdx, arrival: Arrival, b: NodeIdx| {
+            plan_path(&self.graph, mover, arrival, a, b, &none, |_| false)
+        };
+        let path = path_of(from, arrival, to)?;
         let mut nodes = vec![from];
         nodes.extend(path.iter().map(|&e| self.graph.edges[e].end));
         for (i, &e) in path.iter().enumerate() {
             let Some(&(l, a, b)) = self.rides.get(&e) else {
                 continue;
             };
-            let waiting = self.lifts[l].stop(a).waiting;
+            let waiting = self.lifts[l].stop(a).and_then(|s| s.waiting);
             let before = match waiting {
                 Some(w) if i > 0 && !nodes[..i].contains(&w) => {
-                    match (path_of(from, w), path_of(w, a)) {
-                        (Some(mut to_w), Some(w_to_a)) => {
-                            to_w.extend(w_to_a);
-                            to_w
-                        }
-                        _ => path[..i].to_vec(),
-                    }
+                    let detour = path_of(from, arrival, w).and_then(|mut to_w| {
+                        let at_w = to_w.last().map_or(arrival, |&l| Arrival::Edge(l));
+                        to_w.extend(path_of(w, at_w, a)?);
+                        Some(to_w)
+                    });
+                    detour.unwrap_or_else(|| path[..i].to_vec())
                 }
                 _ => path[..i].to_vec(),
             };
             let mut edges = before;
             edges.push(e);
-            edges.extend(self.route(ok, b, to)?);
+            edges.extend(self.route_from(mover, Arrival::Edge(e), b, to)?);
             return Some(edges);
         }
         Some(path)
@@ -183,7 +199,7 @@ impl LiftDesk {
     fn gate(&self, plan: &Plan, k: usize, lift: usize, entrance: NodeIdx) -> usize {
         self.lifts[lift]
             .stop(entrance)
-            .waiting
+            .and_then(|s| s.waiting)
             .and_then(|w| plan.nodes[..k].iter().rposition(|&n| n == w))
             .unwrap_or(k.saturating_sub(1))
     }
@@ -254,24 +270,31 @@ impl LiftDesk {
                 continue;
             };
             let info = &self.lifts[l];
-            let (_, a, b) = self.rides[&o.edge];
-            let (stop_a, stop_b) = (info.stop(a), info.stop(b));
+            // (a ride is between two stops of its lift, which the controller found in
+            // the layout; if not, the owner lets go)
+            let ride = self
+                .rides
+                .get(&o.edge)
+                .and_then(|&(_, a, b)| Some((b, info.stop(a)?, info.stop(b)?)));
+            let Some((b, stop_a, stop_b)) = ride else {
+                self.owners[l] = None;
+                continue;
+            };
             let r = robots[o.robot];
+            // (the lift, map and door are the ones found in the world)
             let call = |world: &mut World, s: &Stop| {
-                world
-                    .call_lift_door(&info.id, &s.map_id, &s.door_id)
-                    .expect("the lift, map and door exist");
+                let _ = world.call_lift_door(&info.id, &s.map_id, &s.door_id);
             };
 
             let Some(at) = r.at else {
                 // the job is over: the door is let go and the lift is free
-                world.release_lift(&info.id).expect("the lift exists");
+                let _ = world.release_lift(&info.id);
                 self.owners[l] = None;
                 continue;
             };
             if o.stage == Stage::Calling {
-                if world.lift_rider(&info.id).expect("the lift exists") == Some(r.id) {
-                    world.release_lift(&info.id).expect("the lift exists");
+                if world.lift_rider(&info.id).ok().flatten() == Some(r.id) {
+                    let _ = world.release_lift(&info.id);
                     call(world, stop_b);
                     o.stage = Stage::Riding;
                 } else {
@@ -282,7 +305,7 @@ impl LiftDesk {
                 o.stage = Stage::Exiting;
             }
             if o.stage == Stage::Exiting && r.node != Some(b) {
-                world.release_lift(&info.id).expect("the lift exists");
+                let _ = world.release_lift(&info.id);
                 self.owners[l] = None;
                 continue;
             }

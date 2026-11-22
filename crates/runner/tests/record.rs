@@ -48,6 +48,44 @@ fn record_writes_a_recording_and_leaves_the_summary_unchanged() {
 }
 
 #[test]
+fn the_layout_line_lists_the_type_of_every_robot() {
+    // the mixed fleet has two robot types
+    let s = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/mixed_fleet.toml");
+    let file = tmp("types.jsonl");
+    let o = cli(&[
+        "--record-interval",
+        "10",
+        "--record",
+        file.to_str().unwrap(),
+        s.to_str().unwrap(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let rec = read_recording(BufReader::new(File::open(&file).unwrap())).unwrap();
+    // one entry per robot, with the id the snapshots use
+    let mut listed: Vec<&str> = rec.layout.robots.iter().map(|r| r.id.as_str()).collect();
+    let mut seen: Vec<&str> = rec.snapshots[0]
+        .robots
+        .iter()
+        .map(|r| r.id.as_str())
+        .collect();
+    listed.sort_unstable();
+    seen.sort_unstable();
+    assert_eq!(listed, seen);
+    assert!(!listed.is_empty());
+    // "manufacturer/seriesName"; two different types
+    let mut types: Vec<&str> = rec
+        .layout
+        .robots
+        .iter()
+        .map(|r| r.robot_type.as_str())
+        .collect();
+    types.sort_unstable();
+    types.dedup();
+    assert_eq!(types.len(), 2, "{types:?}");
+    assert!(types.iter().all(|t| t.starts_with("ACME/")), "{types:?}");
+}
+
+#[test]
 fn record_interval_sets_the_snapshot_rate_and_the_file_is_repeatable() {
     let s = scenario();
     let s = s.to_str().unwrap();

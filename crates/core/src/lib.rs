@@ -17,6 +17,7 @@ pub mod motion;
 pub mod observer;
 pub mod order_route;
 pub mod orientation;
+pub mod path;
 pub mod robot;
 pub mod safety;
 pub mod spec;

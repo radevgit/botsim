@@ -1,4 +1,6 @@
-use botsim_baseline::order_builder::{OrderHeader, Plan, RELEASE_WINDOW, build_order};
+use botsim_baseline::order_builder::{
+    OrderHeader, Plan, RELEASE_WINDOW, build_order as try_build_order,
+};
 use botsim_core::actions::ActionTimes;
 use botsim_core::graph::Graph;
 use botsim_core::jobs::Job;
@@ -10,6 +12,17 @@ use vda5050::state::ActionStatus::{Finished, Running};
 
 mod common;
 use common::graph;
+
+/// The order message; the tests build only valid ones.
+fn build_order(
+    g: &Graph,
+    h: &OrderHeader,
+    p: &Plan,
+    from: usize,
+    through: usize,
+) -> vda5050::order::Order {
+    try_build_order(g, h, p, from, through).unwrap()
+}
 
 const DT: f64 = 0.05;
 

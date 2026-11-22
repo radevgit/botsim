@@ -2,7 +2,7 @@
 
 use botsim_baseline::controller::Controller;
 use botsim_baseline::node_grid::NodeGrid;
-use botsim_baseline::route::{distances_to, in_edges, shortest_path};
+use botsim_baseline::route::{distances_to, in_edges, shortest_path, straight_lengths};
 use botsim_core::actions::ActionTimes;
 use botsim_core::graph::Graph;
 use botsim_core::jobs::{Job, Rng};
@@ -88,7 +88,7 @@ fn distances_to_a_node_are_the_lengths_of_the_shortest_routes() {
         let g = random_graph(seed);
         let into = in_edges(&g, &vec![true; g.edges.len()]);
         for target in 0..g.nodes.len() {
-            let dist = distances_to(&g, &into, target);
+            let dist = distances_to(&g, &into, &straight_lengths(&g), target);
             for (from, &d) in dist.iter().enumerate() {
                 match shortest_path(&g, from, target) {
                     None => assert!(d.is_infinite(), "seed {seed}: {from} → {target}"),

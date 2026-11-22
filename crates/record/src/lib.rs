@@ -15,7 +15,7 @@ pub use geometry::{
     GEOMETRY_VERSION, GeometryError, GeometryFile, GeometryKind, GeometryShape, Outline,
     StaticShape, Vertex,
 };
-pub use layout::{EdgeRecord, LayoutLine, NodeRecord};
+pub use layout::{EdgePath, EdgeRecord, LayoutLine, LayoutRobot, NodeRecord};
 pub use reader::{ReadError, Reader, Recording, read_recording};
 pub use snapshot::{
     CallRecord, DoorRecord, DoorStateRecord, LiftRecord, ReservationRecord, RobotRecord,

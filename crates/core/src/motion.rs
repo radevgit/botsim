@@ -102,6 +102,24 @@ pub fn angle_diff(from: f64, to: f64) -> f64 {
     normalize_angle(to - from)
 }
 
+/// Like [`rotate`], but in the given direction (`ccw` or clockwise), even if that
+/// is the long way round (S64: the layout may allow only one direction).
+pub fn rotate_in(heading: f64, target: f64, rate: f64, dt: f64, ccw: bool) -> (f64, bool) {
+    // how far there is to go in that direction, in (0, 2π]
+    let remaining = if ccw {
+        (target - heading).rem_euclid(std::f64::consts::TAU)
+    } else {
+        (heading - target).rem_euclid(std::f64::consts::TAU)
+    };
+    let step = rate * dt;
+    if remaining <= step {
+        (normalize_angle(target), true)
+    } else {
+        let turn = if ccw { step } else { -step };
+        (normalize_angle(heading + turn), false)
+    }
+}
+
 /// Rotate on the spot by one step of `dt` seconds towards `target`, the
 /// shortest way, at constant angular speed `rate` (rad/s, > 0). Angles in
 /// radians, counter-clockwise positive. Returns the new heading in (-π, π] and

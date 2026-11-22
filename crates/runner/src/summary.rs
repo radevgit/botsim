@@ -138,6 +138,9 @@ pub struct JobsSummary {
     pub in_progress: usize,
     /// Refused by a robot.
     pub rejected: usize,
+    /// How many times the baseline controller gave a robot a new route because
+    /// another robot had held the way for too long (S53).
+    pub rerouted: usize,
 }
 
 /// The metrics of the run. Waiting is the time robots stood still with a job
@@ -275,6 +278,7 @@ pub fn run_with(
                     waiting_for_robot,
                     in_progress: c.busy(),
                     rejected: c.rejected().len(),
+                    rerouted: c.reroutes(),
                 },
                 MetricsSummary {
                     throughput_per_hour: m.throughput_per_hour,
@@ -290,6 +294,7 @@ pub fn run_with(
                 waiting_for_robot: 0,
                 in_progress: 0,
                 rejected: 0,
+                rerouted: 0,
             },
             MetricsSummary {
                 throughput_per_hour: 0.0,
@@ -301,33 +306,26 @@ pub fn run_with(
     let ids: Vec<_> = world.robot_ids().cloned().collect();
     let robots = ids
         .iter()
-        .map(|id| {
-            let p = world.pose(id).expect("the id comes from the world");
-            let state = world.state(id).expect("the id comes from the world");
-            RobotSummary {
+        // (the ids come from the world, so every lookup succeeds; a robot that
+        // somehow cannot be read is left out of the list)
+        .filter_map(|id| {
+            let p = world.pose(id).ok()?;
+            let state = world.state(id).ok()?;
+            let spec = world.spec(id).ok()?;
+            Some(RobotSummary {
                 manufacturer: id.manufacturer.clone(),
-                series_name: world
-                    .spec(id)
-                    .expect("the id comes from the world")
-                    .series_name
-                    .clone(),
+                series_name: spec.series_name.clone(),
                 jobs_done: controller.as_ref().map_or(0, |c| {
                     c.completed().iter().filter(|d| d.robot == *id).count()
                 }),
                 serial_number: id.serial_number.clone(),
-                map_id: world.graph().maps[p.map].clone(),
+                map_id: world.graph().maps.get(p.map).cloned().unwrap_or_default(),
                 x: p.x,
                 y: p.y,
                 heading: p.heading,
-                max_speed: round_micro(
-                    world
-                        .spec(id)
-                        .expect("the id comes from the world")
-                        .limits
-                        .max_speed,
-                ),
+                max_speed: round_micro(spec.limits.max_speed),
                 last_node_id: state.last_node_id,
-            }
+            })
         })
         .collect();
     let name =

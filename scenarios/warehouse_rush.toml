@@ -1,0 +1,44 @@
+# The warehouse of warehouse.toml in a rush: 16 robots and 300 jobs per hour,
+# more than the aisles can take. The baseline controller gets into deadlocks
+# (waiting loops) that last until the end, which makes a video of who blocks whom.
+#   cargo run --release -p botsim-runner -- --record data/rush.jsonl \
+#       --geometry scenarios/warehouse.geometry.json scenarios/warehouse_rush.toml
+#   cargo run --release -p botsim-export -- data/rush.jsonl data/rush_frames --speed 10
+#   ffmpeg -framerate 30 -i data/rush_frames/frame_%06d.png -c:v libx264 -preset slow -crf 18 \
+#     -vf "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p" -colorspace bt709 \
+#     -movflags +faststart data/rush.mp4
+name = "warehouse-rush"
+seed = 3
+duration = 900.0
+time_step = 0.05
+start_time = 2026-11-21T10:00:00Z
+lif = "warehouse.lif.json"
+deadlock_timeout = 20.0
+
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "R"           # R-001 ... R-016
+factsheet = "diff_robot.factsheet.json"
+start_nodes = [
+    "R1C2", "R1C3", "R1C4", "R1C5",
+    "R2C2", "R2C3", "R2C4", "R2C5",
+    "R3C2", "R3C3", "R3C4", "R3C5",
+    "R4C2", "R4C3", "R4C4", "R4C5",
+]
+action_time = 1.0
+
+[robot.action_times]
+pick = 5.0
+drop = 5.0
+
+[jobs]
+rate_per_hour = 300.0
+nodes = ["W1", "W2", "W3", "W4", "E1", "E2", "E3", "E4"]
+
+[disturbances]
+enabled = true
+speed_variation = 0.05
+action_variation = 0.2
+stops_per_hour = 12.0
+stop_seconds_min = 5.0
+stop_seconds_max = 15.0

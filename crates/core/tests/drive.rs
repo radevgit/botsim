@@ -3,7 +3,7 @@ use std::f64::consts::{FRAC_PI_2, PI};
 use botsim_core::drive::{DriveError, Driver, Phase, RouteEdge};
 use botsim_core::graph::Graph;
 use botsim_core::orientation::OrientationError;
-use botsim_core::spec::{Kinematics, RobotSpec};
+use botsim_core::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 use vdma_lif::Lif;
 
@@ -101,7 +101,7 @@ fn empty_route_is_finished_at_once() {
 }
 
 #[test]
-fn rejects_unconnected_route_and_unsupported_kinematics() {
+fn rejects_an_unconnected_route() {
     let g = graph();
     let start = g.node_idx("A").unwrap();
     // B-C does not start at A
@@ -114,16 +114,7 @@ fn rejects_unconnected_route_and_unsupported_kinematics() {
     )
     .unwrap_err();
     assert_eq!(err, DriveError::NotConnected { edge: "B-C".into() });
-
-    // a car-like robot needs curved paths, which are not modelled (S63: the
-    // omnidirectional robot is, see omnidirectional.rs)
-    let mut s = spec();
-    s.kinematics = Kinematics::ThreeWheel;
-    let err = Driver::new(&g, &s, start, 0.0, &route(&g)).unwrap_err();
-    assert_eq!(
-        err,
-        DriveError::UnsupportedKinematics(Kinematics::ThreeWheel)
-    );
+    // (the car-like robot is in three_wheel.rs, S70)
 }
 
 #[test]

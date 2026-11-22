@@ -64,25 +64,77 @@ and is not a message yet):
 | to the robot | `zoneSet` + instant actions `enableZoneSet` / `deleteZoneSet` | done (**S62**, §7c): the scenario's zone set file is the *site's* zone set; the baseline controller sends it to every robot and enables it |
 | from the robot | `state` | done (§3); delayed with a message delay (§1a) |
 | from the robot | `factsheet` | done (**S61**): `World::factsheet(id)` is the factsheet the robot's spec was made from, with the robot's own header (manufacturer, serial number, protocol version, time now, `headerId` 0); not delayed. The baseline gets each robot's type (`manufacturer`, `seriesName`) from it |
-| from the robot | `visualization` | not built (the observer port, §7b, is the read-only view for viewers) |
+| from the robot | `visualization` | **not planned** (S66 discussion): it is the standard's optional topic for a high-rate position and path feed to outside visualization tools (never used by fleet control for logic). Viewers and recorders use the observer port (§7b), which shows the whole world; the message would only matter once an MQTT adapter feeds an outside tool |
 
 Lift and door commands are not VDA 5050; they have their own ports (§7f, §7h).
 
 ## 2. Robot motion
 
-- **Differential** and **omnidirectional** robots are supported (**S63**). A
-  **three-wheel** (car-like) robot is refused: it needs curved paths, which are
-  not modelled (edges are straight).
+- **Differential**, **omnidirectional** (**S63**) and **three-wheel** (car-like,
+  **S70**) robots are supported.
 - The robot's position is its kinematic center. Its body (a rectangle or a
   circle) is taken from the factsheet and turns with the heading.
 - Speed and acceleration limits come from the factsheet. If the factsheet has
   no maximum angular speed, 1.0 rad/s is used (**S7**).
 - On an edge the robot accelerates, cruises and brakes to stop at the end
-  node. It **stops at every node** (no driving through nodes at speed yet).
+  node, unless it drives through the node (next point).
+- **Driving through nodes (S66).** With `drive_through_nodes` (scenario, default
+  `true`; the core world has it off until `World::set_pass_through(true)`) a robot
+  does **not** stop at a node when
+  - the next edge is part of the **released** route (the end of the base, with
+    the horizon behind it, is a stop),
+  - nothing is to be done at the node (**no actions**: `pick`, `drop`, … stop it),
+  - it goes **straight on** (same direction) and needs no turn (a corner, or an
+    orientation it does not have yet, means a stop and a turn),
+  - the next edge is not one it must not start yet (a RELEASE zone not granted, a
+    door that is not open), and is not a **door's edge** or a **lift ride** (it
+    stops in front of those, so the door or lift can be seen ready from a
+    standstill),
+  - and it is not being stopped (hold, zone release lost, safety stop, a
+    cancelled order).
+  Its speed at the node is then the lowest of the two edges' speed limits, and low
+  enough to stop at the end of the next edge. The node counts as reached when the
+  robot gets to it (the state's `lastNodeId` changes then), so the controller's
+  release window (2 nodes ahead) is wide enough for it to keep going; with late
+  orders it stops at the end of what it has and goes on when the update arrives.
+  - Simplifications: the distance left over in the step in which a node is
+    reached is dropped (at most one step's travel, 7.5 cm at 1.5 m/s); a
+    `cancelOrder` while driving through a node cannot always stop at the next
+    node within the deceleration limit (the speed then drops to 0 at that node);
+    turning corners without stopping (blending) is not modelled.
 - At a node it turns on the spot to the heading of the next edge, then drives.
 - Heading on an edge (**S9**, **S13**): no orientation given → always drive
   forwards. Orientation 0 → forwards, π → backwards (3.14 is accepted for π,
   tolerance 0.01 rad). Any other value is refused (`ORIENTATION_UNREACHABLE`).
+- **Rotation allowed at nodes (S64).** The LIF can say, per edge and robot type,
+  which ways a robot may turn on the spot at the edge's start node
+  (`rotationAtStartNodeAllowed`) and end node (`rotationAtEndNodeAllowed`):
+  `NONE`, `CCW`, `CW` or `BOTH` (default). At a node where a robot comes in on one
+  edge and leaves on another, the two rules are **combined as a boolean and**
+  (LIF §8.3.13.1): `BOTH` + `CCW` = `CCW`, `CW` + `CCW` = nothing. For the first
+  edge of an order only its start node rule counts (how the robot came is not
+  known); an order update continues from the last edge of what was planned.
+  - When the robot has to turn (its heading is not the heading the next edge
+    needs), it takes the **shorter way if it is allowed**, else the **other way
+    round** (up to 270°), and if no direction is allowed the **order (or update)
+    is refused** (`NO_ROUTE_TO_TARGET`, the text names the edge and the node) —
+    when it is received, not when the robot gets there.
+  - Applies to differential robots and to omnidirectional robots that must turn
+    (a named orientation); an omnidirectional robot without orientation keeps its
+    heading and never needs a turn (§ above). A lift ride resets the rule (the
+    robot is in a cabin).
+  - **The baseline controller plans around these rules (S73, §9):** it does not
+    send a route that needs a turn the robot cannot make.
+  - **A planner can ask the layout (S71):** `Graph::can_follow(prev, next, kinematics,
+    manufacturer, series)` says whether a robot that has driven edge `prev` can drive
+    edge `next` (no orientation given), and `Graph::can_start(heading, end_rotation,
+    edge, …)` the same for the first edge from a known heading. They apply the same
+    rules as the robot (rotation rules for a differential robot, "no turn on the
+    spot" for a three-wheel robot, nothing for an omnidirectional one, §2) and are
+    tested against the robot's own acceptance of an order. The baseline uses them
+    (S73).
+  - Not yet: `maximumRotationSpeed` per edge; rotation while driving
+    (`reachOrientationBeforeEntering = false`).
 - **Omnidirectional robots (S63).** Heading and travel direction are
   independent: the robot travels along the edge whatever it faces.
   - With **no orientation** in the order it **keeps its heading** (the standard
@@ -103,7 +155,72 @@ Lift and door commands are not VDA 5050; they have their own ports (§7f, §7h).
     for sideways travel. Not modelled: the width of the body across the travel
     direction for a door (§7h) is taken across the heading; accelerations are
     the same in every direction.
-- Edges are straight lines; their length is the distance between the nodes.
+- **Curved edges (S69).** An edge is a straight line unless the LIF gives the
+  robot's type a **`trajectory`**: a NURBS curve (`degree`, default 1; `knotVector`,
+  default uniform and clamped; `controlPoints` with `weight`, default 1) in the edge's
+  properties for that type. So the same edge can be straight for one type and curved
+  for another.
+  - The layout is checked when it is read: a valid curve (degree ≥ 1, at least
+    degree + 1 finite control points, weights above 0, a knot vector of the right
+    length that does not decrease) that **starts at the start node and ends at the
+    end node** of its edge (5 cm tolerance); otherwise an error naming the edge.
+  - The curve is **sampled every 2 cm** into a path with a length; the robot
+    follows it, and the trip is as long as the curve. The edge's `length` in the
+    graph stays the straight distance between the nodes; the baseline's **route
+    costs** use the length of the curve for the robot's type (S74,
+    `Graph::edge_travel_length`).
+  - **Heading follows the direction of the path** for a differential robot (forwards;
+    backwards with orientation π, then the heading is against the direction) and
+    for an omnidirectional robot with a tangential orientation (that angle to the
+    direction). At a node it turns on the spot to the direction the curve **starts**
+    in, as for a straight edge; on the curve it turns with it, and ends with the
+    direction the curve **ends** in. A global orientation, or none for an
+    omnidirectional robot (§ above), keeps the heading fixed: the robot then drives
+    the curve sideways. The state's `omega` is the speed times the curvature.
+  - **Driving through nodes** (§ above) works where the end direction of one edge is
+    the start direction of the next (the curves join smoothly); a kink is a stop and
+    a turn.
+  - The protective field (§7a) and the checks that look the way the robot goes use the
+    direction of the path where the robot is.
+  - **Speed on a curve (S70):** where the heading follows the path, the robot turns at
+    speed × curvature, which may not exceed its maximum angular speed. So on a curve
+    the speed is at most (maximum angular speed) / (sharpest curvature of the edge),
+    one limit for the whole edge, besides the robot's and the edge's own limits.
+    This holds for every kinematics (a differential robot slows down in a tight curve
+    too). The LIF `corridor` is not read: the robot follows the curve.
+  - **Three-wheel (car-like) robots (S70).** The factsheet has no field for a turning
+    radius, so these limits are the simulator's own choice:
+    - It **cannot turn on the spot**. An edge must start in the direction the robot
+      heads at that node (a little less than 1 degree, 0.02 rad, off counts as aligned
+      and is set right). If not, the order is refused (`NO_ROUTE_TO_TARGET`, with a
+      message that names the edge and the node). Rotation rules at nodes (S64) do not
+      matter for it. A robot standing on a node must therefore already face the way
+      its first edge starts.
+    - It **may drive backwards** (orientation π on the edge), but only if it already
+      heads that way: turning around is turning on the spot.
+    - A curve is refused if the speed limit above is lower than the **lowest speed
+      the robot can drive** (factsheet `minimumSpeed`): the smallest radius is
+      `minimumSpeed / maximumAngularSpeed`. With the factsheet's usual values this is
+      small (0.1 m/s and 1 rad/s give 0.1 m); a factsheet with a high minimum speed
+      and a low angular speed gives a larger radius.
+    - **The baseline plans around the turns** (S73, §9). What it does not know is
+      how tight a curve may be (the limit above): if the robot refuses an order
+      (the first one: the job is listed as rejected and not tried again) or an order
+      *update* (the baseline then sends `cancelOrder`, keeps what the robot holds
+      until it has stopped, it brakes to the next node, and lists the job as rejected
+      with the robot's error, `NO_ROUTE_TO_TARGET`), the job is given up. The same
+      happens if a robot refuses a changed route (re-routing, §9). With a message
+      delay a refused update is not seen (§1a). A layout for car-like robots needs
+      rounded corners (trajectories); where there is no route without a sharp turn,
+      the job waits in the queue.
+  - **No panic (project rule):** a robot refusing an order is a result of the
+    scenario, not a fault of the simulator; the controller must not stop the run
+    for it.
+  - **Fix found on the way (S70):** an order update that continued a curved edge
+    started from the *start* heading of that edge, not from the heading the curve ends
+    with, so the first edge of the update could be refused or turned for nothing.
+- Edges are straight lines (without a trajectory); their length is the distance
+  between the nodes.
 - **Robot types in the layout (S55).** The LIF lists, for every node and edge,
   the robot types (`manufacturer` + `seriesName`) that may use it
   (`mobileRobotTypeNodeProperties`, `mobileRobotTypeEdgeProperties`; "a robot
@@ -550,7 +667,17 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   layout), **per robot type** (**S55**): only over edges the robot's type may use
   (§2). The nearest free robot is chosen by the route length of its own type.
   The robot type comes from the robot's factsheet message (§1b). An edge's
-  speed limit is not part of the route cost (length only).
+  speed limit is not part of the route cost (length only). **The length of an
+  edge with a curve is the length of the curve** (S74), which can differ between
+  types (a type may have a trajectory on the edge, another a straight line).
+- **Turns (S73):** for a type that cannot make every turn (a three-wheel robot,
+  or a differential robot where the layout bars some rotation, §2) the route is
+  searched over edges: an edge may follow another only if `Graph::can_follow` says the
+  robot can. The first edge must suit the robot's heading from its state
+  (`Graph::can_start`), the second part of a job (pickup to drop) the edge it arrives
+  on at the pickup; re-routing (S53) does the same. Other types use the plain search
+  by node, as before (no change in speed). The choice of the nearest robot stays by
+  the node distance, as before; if that robot has no route, the next one is tried.
 - **Release window** (**S29**, changed to 2 by the user): the robot's node
   and the next **2** nodes are released; each time the robot reaches a node the
   base is extended by an order update.
@@ -636,6 +763,23 @@ The bundled controller talks to the robots only with VDA 5050 messages.
     64 → 121 jobs done, deadlocks 15 → 15. A one-way edge cannot be driven back,
     so a robot cannot "back off"; resolving the rest needs more (e.g. reserving
     more of the route ahead, or fewer robots per street).
+- **Known limit: a cycle around a block (S67).** In a dense one-way grid (300
+  robots on 40 × 40 nodes, 600 s) the baseline's deadlocks are all **cycles of four
+  robots around one block** (two of eight): each robot stands on a corner and waits
+  for the next robot's corner. Timeout re-routing is active (hundreds of
+  re-routes) but cannot break such a cycle when the other exits of the corners are
+  held too. Driving through nodes (§2) does not cause them; it only gets the
+  system there sooner and more often (14 against 5 deadlocks, 224 against 192 jobs
+  done). The baseline is "today's practice": it does not avoid them (an avoidance
+  rule would have to keep a free place in every cycle); they are what a better
+  controller is measured against. The result lists the re-routes (`jobs.rerouted`).
+- **Known limit: a swap on a dead-end spur (found by the viewer session).** A
+  robot in a bay on a two-way spur and a robot on the ring node in front of it, each
+  needing the other's place, **deadlock head-on** (seen with only 6 robots). Timeout
+  re-routing cannot help: there is no other way into a bay. Layouts avoid it with
+  **one-way sidings** (as with the lay-by rule for lifts, §7d). Resolving it in the
+  controller needs a **yield rule** (a robot steps aside to a free node and comes
+  back); not built.
 - Not yet: look-ahead beyond the window, robot types
   and per-type edge rules.
 
@@ -706,7 +850,8 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 - `zone_set` names the site's zone set file (§7c: the controller sends it to the
   robots).
 - Optional `deadlock_timeout` (seconds, default 30), `safety_stop` (default
-  true, §7a) and `message_delay` (seconds, default 0, §1a).
+  true, §7a), `drive_through_nodes` (default true, §2) and `message_delay`
+  (seconds, default 0, §1a).
 - **Debug option `stop_at_first_deadlock`** (**S59**, default `false`): the run
   ends in the step in which the first deadlock is reported (that is after the
   deadlock timeout, §10), so the situation can be looked at (who is in the
@@ -726,15 +871,19 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 
 ## 12. Known simplifications (not modelled yet)
 
-Stops at every node; differential and omnidirectional drive only (no three-wheel,
-no curved paths); straight edges only; per-robot-type
+Three-wheel limits are the simulator's own choice (no turning radius in the
+factsheet, §2), and the baseline does not know how tight a curve may be; a job
+that no route without a forbidden turn can serve waits for ever (and is searched
+for again every cycle); the nearest robot is chosen by route length by node, not
+counting turns; no blending through corners; route costs are distances, not
+travel times (a curve may be driven slower, §2); the LIF corridor; per-robot-type
 edge properties of the LIF (paths, speeds, corridors); rotation restrictions at
 nodes; node orientation and deviation; edge actions; other instant actions;
 operating modes; state message timing (the state is sent when the controller asks,
 not every 0.5 s, and a delay is the same for all messages, §1a); horizon actions;
 breakdowns; walls and people as obstacles of the safety stop (§7a); deadlock
 resolution beyond the baseline's re-routing (§9);
-station properties beyond the interaction nodes (§8); the other per-type LIF edge properties (§2); the viewer (the
+station properties beyond the interaction nodes (§8); the other per-type LIF edge properties (§2, rotation rules done, not planned around by the baseline); the viewer (the
 Rerun recording was dropped, U5). Lifts hold one robot and doors are tied to
 edges (§7g, §7h).
 

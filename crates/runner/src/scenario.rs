@@ -10,6 +10,7 @@
 //! lif = "layout.lif.json"        # paths are relative to this file
 //! deadlock_timeout = 30.0        # optional; seconds, default 30
 //! safety_stop = true             # optional, default true: robots brake for robots ahead
+//! drive_through_nodes = true     # optional, default true: no stop at nodes straight on
 //! message_delay = 0.0            # optional: seconds a message takes, each way (default 0)
 //! stop_at_first_deadlock = false # optional debug: end the run when a deadlock is reported
 //! zone_set = "zones.json"        # optional VDA 5050 zone set; loaded and checked only
@@ -137,6 +138,12 @@ pub struct Scenario {
     /// into each other (to test collision detection).
     #[serde(default = "yes")]
     pub safety_stop: bool,
+    /// Robots drive through nodes without stopping where they can (S66): straight
+    /// on, nothing to do at the node, the next edge released and free, not in
+    /// front of a door or a lift. Default `true`; `false` makes every robot stop at
+    /// every node (slower, as before S66).
+    #[serde(default = "yes")]
+    pub drive_through_nodes: bool,
     /// Without this section nothing is disturbed.
     #[serde(default)]
     pub disturbances: Option<DisturbancesConfig>,
@@ -512,6 +519,7 @@ impl Scenario {
             world.set_site_zones(z);
         }
         world.set_safety_stop(self.safety_stop);
+        world.set_pass_through(self.drive_through_nodes);
         if let Some(d) = self.message_delay {
             world.set_message_delay((d / self.time_step).round() as u64);
         }

@@ -114,6 +114,12 @@ fn main() {
     let rate = arg(4, 20.0);
     // simulated seconds between observer snapshots; 0 = no observer
     let observer_every = arg(5, 0.0);
+    // 1 = robots drive through nodes (the default of the scenario), 0 = they stop
+    // at every node
+    let drive_through = arg(6, 1.0) != 0.0;
+    // 1 = end the run when the first deadlock is reported and print where its
+    // robots stand
+    let stop_at_deadlock = arg(7, 0.0) != 0.0;
     assert!(side >= 2 && side.is_multiple_of(2), "side must be even");
     assert!(robots <= side * side, "more robots than nodes");
 
@@ -144,6 +150,8 @@ duration = {seconds}
 time_step = 0.05
 start_time = 2026-11-21T10:00:00Z
 lif = "grid.lif.json"
+drive_through_nodes = {drive_through}
+stop_at_first_deadlock = {stop_at_deadlock}
 
 [[robot]]
 manufacturer = "ACME"
@@ -215,4 +223,28 @@ nodes = [{job_nodes}]
         r.collision_count,
         r.deadlock_count
     );
+    println!("re-routes: {}", r.jobs.rerouted);
+    // how many robots are in each deadlock (2 = a swap, more = a longer cycle)
+    let mut sizes = std::collections::BTreeMap::new();
+    for d in &r.deadlocks {
+        *sizes.entry(d.robots.len()).or_insert(0_usize) += 1;
+    }
+    println!("deadlocks by number of robots in the cycle: {sizes:?}");
+    if stop_at_deadlock && let Some(d) = r.deadlocks.first() {
+        println!(
+            "the first deadlock, at {:.1} s: robots (x, y) and the node they last reached:",
+            d.detected_time
+        );
+        for name in &d.robots {
+            let robot = r
+                .robots
+                .iter()
+                .find(|b| format!("{}/{}", b.manufacturer, b.serial_number) == *name)
+                .expect("a robot of the deadlock");
+            println!(
+                "  {name}: ({:.1}, {:.1}) last node {}",
+                robot.x, robot.y, robot.last_node_id
+            );
+        }
+    }
 }

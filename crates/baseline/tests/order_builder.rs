@@ -1,4 +1,6 @@
-use botsim_baseline::order_builder::{OrderHeader, Plan, RELEASE_WINDOW, build_order};
+use botsim_baseline::order_builder::{
+    OrderHeader, Plan, RELEASE_WINDOW, build_order as try_build_order,
+};
 use botsim_baseline::route::shortest_path;
 use botsim_core::actions::ActionTimes;
 use botsim_core::graph::Graph;
@@ -166,13 +168,18 @@ fn a_short_route_has_no_horizon_and_a_one_node_order_is_valid() {
     assert!(o.edges.is_empty());
 }
 
+/// The order message; the tests build only valid ones.
+fn build_order(g: &Graph, h: &OrderHeader, p: &Plan, from: usize, through: usize) -> Order {
+    try_build_order(g, h, p, from, through).unwrap()
+}
+
 #[test]
-#[should_panic(expected = "first node must be released")]
 fn the_first_node_must_be_released() {
     let g = chain();
     let p = plan(&g, "N0", "N6");
     let r = robot();
-    build_order(&g, &header(&r, 1), &p, 4, 2);
+    // from node 4, released only through node 2: no message
+    assert!(try_build_order(&g, &header(&r, 1), &p, 4, 2).is_none());
 }
 
 #[test]

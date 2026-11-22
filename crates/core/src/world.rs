@@ -199,6 +199,8 @@ pub struct World {
     broad: AABB,
     /// The robots brake when another robot is in their protective field (S54).
     safety_stop: bool,
+    /// The robots drive through nodes where they can (S66).
+    pass_through: bool,
     /// `zones` were given to the robots already enabled (`set_zones`), not only
     /// set for the site (`set_site_zones`, S62).
     zones_on_robots: bool,
@@ -257,6 +259,7 @@ impl World {
             door_widths: HashMap::new(),
             broad: AABB::new(),
             safety_stop: false,
+            pass_through: false,
             inbox: VecDeque::new(),
             message_delay: 0,
             zones_on_robots: false,
@@ -282,7 +285,9 @@ impl World {
     /// Deliver the messages whose time has come, oldest first.
     fn deliver_due(&mut self) {
         while self.inbox.front().is_some_and(|(due, _)| *due <= self.tick) {
-            let (_, d) = self.inbox.pop_front().expect("checked just above");
+            let Some((_, d)) = self.inbox.pop_front() else {
+                break;
+            };
             match d {
                 Delivery::Order(o) => {
                     let _ = self.deliver_order(&o);
@@ -414,6 +419,8 @@ impl World {
         robot.set_time(self.now_ms());
         robot.set_rides(self.rides.clone());
         robot.set_door_widths(self.door_widths.clone());
+        robot.set_door_edges(self.door_edge_ids());
+        robot.set_pass_through(self.pass_through);
         if let (Some(zones), true) = (&self.zones, self.zones_on_robots) {
             robot.set_zones(zones.clone(), ZoneRequestTiming::default());
         }
@@ -426,7 +433,7 @@ impl World {
         let stops = match self.stops {
             Some((seed, spec)) => Some(
                 StopGenerator::new(seed, self.robots.len(), spec, self.dt)
-                    .expect("checked when the stops were enabled"),
+                    .map_err(WorldError::Disturbance)?,
             ),
             None => None,
         };
@@ -446,7 +453,8 @@ impl World {
         spec.check(self.dt).map_err(WorldError::Disturbance)?;
         self.stops = Some((seed, spec));
         for (i, e) in self.robots.iter_mut().enumerate() {
-            e.stops = Some(StopGenerator::new(seed, i, spec, self.dt).expect("checked just above"));
+            e.stops =
+                Some(StopGenerator::new(seed, i, spec, self.dt).map_err(WorldError::Disturbance)?);
         }
         Ok(())
     }
@@ -521,8 +529,9 @@ impl World {
     /// second call replaces the first observer. For big runs use
     /// [`World::set_observer_at`].
     pub fn set_observer(&mut self, observer: Box<dyn Observer>) {
-        self.set_observer_at(observer, self.dt)
-            .expect("the time step is a valid interval");
+        // (the time step is a valid interval, so this cannot fail; if it did, no
+        // observer would be attached)
+        let _ = self.set_observer_at(observer, self.dt);
     }
 
     /// Like [`World::set_observer`], but the observer gets a snapshot only every
@@ -574,11 +583,38 @@ impl World {
                 self.door_widths.insert(self.graph.edges[e].id.clone(), w);
             }
         }
+        let door_edges = self.door_edge_ids();
         for e in &mut self.robots {
             e.robot.set_door_widths(self.door_widths.clone());
+            e.robot.set_door_edges(door_edges.clone());
         }
         self.doors.push(door);
         Ok(())
+    }
+
+    /// The ids of all edges that have a door.
+    fn door_edge_ids(&self) -> HashSet<String> {
+        self.door_of_edge
+            .keys()
+            .map(|&e| self.graph.edges[e].id.clone())
+            .collect()
+    }
+
+    /// Let the robots drive **through** nodes without stopping where they can
+    /// (S66): straight on, nothing to do at the node, the next edge released and
+    /// free to be driven, and not in front of a door or a lift. Off by default in
+    /// the world (every robot stops at every node, as before); the scenario switches
+    /// it on. See `docs/rules.md` §2.
+    pub fn set_pass_through(&mut self, on: bool) {
+        self.pass_through = on;
+        for e in &mut self.robots {
+            e.robot.set_pass_through(on);
+        }
+    }
+
+    /// Do robots drive through nodes where they can?
+    pub fn pass_through(&self) -> bool {
+        self.pass_through
     }
 
     /// Move the doors one step and tell the robots which door edges they must

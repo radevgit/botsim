@@ -6,12 +6,24 @@ use botsim_record::{GeometryKind, StatusRecord};
 /// Red, green, blue.
 pub type Rgb = [u8; 3];
 
-pub const BACKGROUND: Rgb = [0xF7, 0xF7, 0xF4];
+pub const BACKGROUND: Rgb = [0xFF, 0xFF, 0xFF];
 
 /// Track graph: edges and the rim of the nodes.
 pub const GRAPH: Rgb = [0x9C, 0xA3, 0xAF];
+/// An edge that has several different curves (one per robot type), all drawn
+/// dimmed.
+pub const GRAPH_DIM: Rgb = [0xD1, 0xD5, 0xDB];
+/// The curve of the selected robot's type on such an edge.
+pub const GRAPH_SELECTED: Rgb = [0x37, 0x41, 0x51];
 /// The centre of a node.
 pub const NODE_CENTRE: Rgb = [0xFF, 0xFF, 0xFF];
+
+/// The arrow from a waiting robot to the robot that blocks it.
+pub const BLOCKING: Rgb = [0x9B, 0x1C, 0x1C];
+/// The ring around each robot of a deadlock.
+pub const DEADLOCK: Rgb = [0xB9, 0x1C, 0x1C];
+/// The ring around each robot of an overlap (collision).
+pub const OVERLAP: Rgb = [0xC0, 0x26, 0xD3];
 
 /// The fill colour of a robot in a status.
 pub fn status(s: StatusRecord) -> Rgb {

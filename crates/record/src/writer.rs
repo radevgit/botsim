@@ -9,7 +9,7 @@ use botsim_core::graph::Graph;
 use botsim_core::observer::{Observer, Snapshot};
 use serde::Serialize;
 
-use crate::{GeometryFile, LayoutLine, SnapshotLine};
+use crate::{GeometryFile, LayoutLine, LayoutRobot, SnapshotLine};
 
 struct Shared<W: Write> {
     out: BufWriter<W>,
@@ -39,6 +39,7 @@ impl<W: Write> Shared<W> {
 pub struct Recorder<W: Write> {
     shared: Rc<RefCell<Shared<W>>>,
     geometry: Option<GeometryFile>,
+    robots: Vec<LayoutRobot>,
 }
 
 /// Stays with the caller while the [`Recorder`] is inside the world.
@@ -68,9 +69,19 @@ impl<W: Write> Recorder<W> {
             Recorder {
                 shared: shared.clone(),
                 geometry,
+                robots: Vec::new(),
             },
             RecordHandle { shared },
         )
+    }
+}
+
+impl<W: Write> Recorder<W> {
+    /// The layout line also lists the type of each robot, so that a viewer can
+    /// tell which curve a robot follows on an edge.
+    pub fn with_robots(mut self, robots: Vec<LayoutRobot>) -> Recorder<W> {
+        self.robots = robots;
+        self
     }
 }
 
@@ -94,7 +105,7 @@ impl<W: Write> fmt::Debug for Recorder<W> {
 
 impl<W: Write> Observer for Recorder<W> {
     fn on_layout(&mut self, layout: &Graph) {
-        let line = LayoutLine::from_graph(layout);
+        let line = LayoutLine::from_graph(layout).with_robots(self.robots.clone());
         let mut shared = self.shared.borrow_mut();
         match &self.geometry {
             None => shared.write_line(&line),

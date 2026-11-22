@@ -95,6 +95,10 @@ pub struct Robot {
     door_widths: HashMap<String, f64>,
     /// The last update blocked an edge because of a closed door.
     door_blocked: bool,
+    /// Ids of all edges that have a door (set by the world).
+    door_edges: HashSet<String>,
+    /// Drive through nodes where possible (S66).
+    pass_through: bool,
 }
 
 impl Robot {
@@ -123,7 +127,22 @@ impl Robot {
             closed_door_edges: HashSet::new(),
             door_widths: HashMap::new(),
             door_blocked: false,
+            door_edges: HashSet::new(),
+            pass_through: false,
         })
+    }
+
+    /// Drive through nodes without stopping where it can (S66, see
+    /// [`Driver::set_pass_through`]); applies to this and the later orders.
+    pub fn set_pass_through(&mut self, on: bool) {
+        self.pass_through = on;
+        self.driver.set_pass_through(on);
+    }
+
+    /// Tell the robot which edges have a door (all of them, open or not): it does
+    /// not drive through the node in front of such an edge (S66).
+    pub fn set_door_edges(&mut self, edges: HashSet<String>) {
+        self.door_edges = edges;
     }
 
     /// Tell the robot the passage width of the doors, by edge id: it refuses
@@ -349,10 +368,23 @@ impl Robot {
     /// Bring the zone requests up to date with where the robot is and what is ahead.
     fn update_zone_requests(&mut self) {
         // nothing to keep up to date, nothing blocked before: skip the work
-        if self.zone_requests.is_none() && self.closed_door_edges.is_empty() && !self.door_blocked {
+        if self.zone_requests.is_none()
+            && self.closed_door_edges.is_empty()
+            && !self.door_blocked
+            && self.door_edges.is_empty()
+        {
             return;
         }
         let p = self.driver.progress();
+        // the robot stops before the edges of a door, never drives through the
+        // node in front of one (S66)
+        self.driver.set_stop_before_edges(
+            p.remaining_edges
+                .iter()
+                .filter(|e| self.door_edges.contains(&e.edge_id))
+                .map(|e| e.sequence_id)
+                .collect(),
+        );
         let mut blocked = HashSet::new();
         if let Some(zr) = self.zone_requests.as_mut() {
             zr.update(
@@ -577,7 +609,8 @@ impl Robot {
                 self.times.for_next_order(),
                 self.rides.clone(),
             ) {
-                Ok(d) => {
+                Ok(mut d) => {
+                    d.set_pass_through(self.pass_through);
                     self.driver = d;
                     self.errors.clear();
                     if let Some(zr) = self.zone_requests.as_mut() {
@@ -596,7 +629,14 @@ impl Robot {
         }
 
         // 3. an update of the current order
-        let (_, current_update) = current.expect("is_update implies a current order");
+        let Some((_, current_update)) = current else {
+            // (cannot happen: `is_update` means there is a current order)
+            return self.reject_order(
+                ErrorType::ValidationFailure,
+                order,
+                "there is no order to update",
+            );
+        };
         if order.order_update_id < current_update {
             return self.reject_order(
                 ErrorType::OutdatedOrderUpdate,

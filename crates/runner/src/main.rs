@@ -11,13 +11,15 @@
 //! `--record-interval` simulated seconds (default 0.1). The summary on stdout is
 //! the same with or without it. `--geometry` adds static geometry (walls, racks,
 //! ...; a `botsim-record` geometry file) to the recording's layout line; the
-//! file is checked against the scenario's maps before the run starts.
+//! file is checked against the scenario's maps before the run starts. The layout
+//! line also lists the type of every robot (`manufacturer/seriesName`), so that a
+//! viewer can pick the curve a robot follows on an edge.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use botsim_record::{GeometryFile, LayoutLine, Recorder};
+use botsim_record::{GeometryFile, LayoutLine, LayoutRobot, Recorder};
 use botsim_runner::scenario::Scenario;
 use botsim_runner::summary;
 
@@ -133,6 +135,19 @@ fn run(options: &Options) -> Result<String, String> {
                 Some(g) => Recorder::with_geometry(out, g),
                 None => Recorder::new(out),
             };
+            // the type of each robot, so that a viewer can pick the curve a robot
+            // follows on an edge (the ids are as in the snapshots)
+            let robots: Vec<LayoutRobot> = world
+                .robot_ids()
+                .filter_map(|id| {
+                    let spec = world.spec(id).ok()?;
+                    Some(LayoutRobot {
+                        id: format!("{}/{}", id.manufacturer, id.serial_number),
+                        robot_type: format!("{}/{}", spec.manufacturer, spec.series_name),
+                    })
+                })
+                .collect();
+            let recorder = recorder.with_robots(robots);
             world
                 .set_observer_at(Box::new(recorder), options.record_interval)
                 .map_err(|e| e.to_string())?;

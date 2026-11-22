@@ -58,6 +58,10 @@ pub struct RobotSpec {
     /// True if `limits.max_angular_speed` is the simulator default, not a factsheet value.
     /// Reported in the run summary.
     pub angular_speed_is_default: bool,
+    /// The lowest speed the robot can drive at continuously (factsheet
+    /// `minimumSpeed`, m/s); it can stop, but not creep slower. 0 if the factsheet
+    /// gives none or an unusable value.
+    pub min_speed: f64,
     pub shape: Shape,
     /// The factsheet this spec was made from; the robot sends it as its
     /// `factsheet` message ([`crate::world::World::factsheet`], S61).
@@ -176,6 +180,11 @@ impl RobotSpec {
             kinematics,
             limits,
             angular_speed_is_default,
+            min_speed: if p.minimum_speed.is_finite() && p.minimum_speed > 0.0 {
+                p.minimum_speed
+            } else {
+                0.0
+            },
             shape: body_shape(f)?,
             factsheet: f.clone(),
         })

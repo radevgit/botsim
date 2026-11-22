@@ -141,10 +141,11 @@ impl DoorDesk {
             };
             // passed (at the end node of the edge) or the job is over: let go
             if at[o.robot].is_none_or(|a| a > o.edge_index) {
-                world.release_door(&self.ids[d]).expect("the door exists");
+                // (the doors are the ones the controller found in the world)
+                let _ = world.release_door(&self.ids[d]);
                 self.owners[d] = None;
             } else {
-                world.open_door(&self.ids[d]).expect("the door exists");
+                let _ = world.open_door(&self.ids[d]);
             }
         }
     }

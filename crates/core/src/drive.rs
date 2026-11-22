@@ -9,12 +9,18 @@
 use std::collections::HashSet;
 use std::f64::consts::FRAC_PI_2;
 use std::fmt;
+use std::sync::Arc;
 
 use crate::actions::{ActionQueue, ActionSpec, ActionTimes, TIME_EPSILON};
-use crate::graph::{EdgeIdx, Graph, MapIdx, NodeIdx};
-use crate::motion::{Along, EdgeGoal, advance, angle_diff, normalize_angle, rotate};
+use crate::graph::{EdgeIdx, Graph, MapIdx, NodeIdx, Rotation};
+use crate::motion::{Along, EdgeGoal, advance, angle_diff, normalize_angle, rotate, rotate_in};
 use crate::order_route::{OrderRoute, PlanEdge, PlanNode};
 use crate::orientation::{OrientationError, edge_heading};
+use crate::path::Path;
+
+/// How far (rad) a car-like robot's heading may be off the direction an edge starts
+/// in and still count as aligned (S70): about 1 degree.
+pub const THREE_WHEEL_TOLERANCE: f64 = 0.02;
 use crate::spec::{Kinematics, Limits, RobotSpec};
 use vda5050::order::OrientationType;
 use vda5050::state::ActionStatus;
@@ -55,8 +61,6 @@ pub enum Phase {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DriveError {
-    /// Only differential robots are modelled so far.
-    UnsupportedKinematics(Kinematics),
     /// The edge does not start at the node where the previous one ended.
     NotConnected { edge: String },
     /// The edge has no usable length (start and end node coincide, or the length
@@ -67,6 +71,15 @@ pub enum DriveError {
     MapTransition { edge: String },
     /// The edge leads through a door that is narrower than the robot is wide.
     DoorTooNarrow { edge: String },
+    /// The edge needs the robot to turn at its start node, and the layout allows
+    /// no rotation there (S64).
+    RotationNotAllowed { edge: String, node: String },
+    /// A three-wheel (car-like) robot cannot turn on the spot, and the edge starts
+    /// in another direction than the robot is heading (S70).
+    CannotTurnOnTheSpot { edge: String, node: String },
+    /// The curve of the edge is so tight that even at the lowest speed the robot
+    /// can drive, it would have to turn faster than it can (S70).
+    CurveTooTight { edge: String },
     /// The layout does not allow this robot's type on the node or edge (`what`
     /// names it, e.g. `edge 'A-B'`).
     NotAllowedForType { what: String },
@@ -83,7 +96,6 @@ pub enum DriveError {
 impl fmt::Display for DriveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DriveError::UnsupportedKinematics(k) => write!(f, "kinematics {k:?} not supported yet"),
             DriveError::NotConnected { edge } => {
                 write!(
                     f,
@@ -97,6 +109,18 @@ impl fmt::Display for DriveError {
             DriveError::DoorTooNarrow { edge } => write!(
                 f,
                 "edge '{edge}' leads through a door that is narrower than the robot"
+            ),
+            DriveError::CannotTurnOnTheSpot { edge, node } => write!(
+                f,
+                "this robot cannot turn on the spot: edge '{edge}' starts at node '{node}' in another direction than the robot is heading"
+            ),
+            DriveError::CurveTooTight { edge } => write!(
+                f,
+                "the curve of edge '{edge}' is too tight for this robot: it would have to turn faster than it can at its lowest speed"
+            ),
+            DriveError::RotationNotAllowed { edge, node } => write!(
+                f,
+                "edge '{edge}' needs a turn at node '{node}' that the layout does not allow"
             ),
             DriveError::NotAllowedForType { what } => {
                 write!(f, "the layout does not allow this robot type on {what}")
@@ -187,26 +211,78 @@ pub struct Progress {
 }
 
 /// A straight edge copied out of the graph, so the driver needs no graph reference.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Segment {
-    ax: f64,
-    ay: f64,
-    bx: f64,
-    by: f64,
+    /// The path the robot follows on the edge: a straight line, or the curve of
+    /// the edge's trajectory for this robot's type (S69).
+    path: Arc<Path>,
+    /// The length of the path (m).
     length: f64,
     /// Heading the robot must have on this edge (edge direction, or + π when
     /// driving backwards; for an omnidirectional robot any orientation the order
     /// names). Travel is always along the edge. `None`: the robot keeps the
     /// heading it has (an omnidirectional robot, order without orientation, S63).
     heading: Option<f64>,
-    /// The direction of the edge (start to end), radians.
-    direction: f64,
+    /// The direction the path starts in and the direction it ends in (radians).
+    /// Equal on a straight edge.
+    start_dir: f64,
+    end_dir: f64,
+    /// On a curve the heading follows the direction of the path: the heading is
+    /// the direction plus this (0 forwards, π backwards, any value for an
+    /// omnidirectional robot with a tangential orientation). `None`: the heading
+    /// is fixed (straight edges, a global orientation, or kept).
+    follow: Option<f64>,
     /// The robot drives this edge backwards (its heading points against the travel direction).
     reversed: bool,
     /// A lift ride: no driving, the robot appears here when the ride is over.
     ride: Option<RideEnd>,
     /// The speed limit of the edge for this robot's type (LIF `maximumSpeed`).
     max_speed: Option<f64>,
+    /// The speed limit of the curve: where the heading follows the path the robot
+    /// turns at speed × curvature, which may not exceed its maximum angular
+    /// speed. One limit for the whole segment, from its sharpest turn (S70).
+    curve_speed: Option<f64>,
+    /// How the robot turns at the start node to get its heading: `Some(true)`
+    /// counter-clockwise, `Some(false)` clockwise — chosen when the layout allows
+    /// only one direction and it is not the shorter one (S64); `None`: the
+    /// shorter way (or no turn).
+    turn_ccw: Option<bool>,
+    /// The rotation the layout allows at the end node of this edge (`None` for a
+    /// lift ride), to be combined with the next edge's start node rule.
+    end_rotation: Option<Rotation>,
+}
+
+impl Driver {
+    /// How fast the robot turns while it drives along the segment (rad/s,
+    /// counter-clockwise positive): the speed times the curvature of the path where
+    /// the heading follows the path, else 0.
+    fn turning_rate(&self, s: &Segment) -> f64 {
+        if s.follow.is_some() {
+            self.along.v * s.path.curvature_at(self.along.s)
+        } else {
+            0.0
+        }
+    }
+}
+
+impl Segment {
+    /// The heading the robot has when it has driven the segment: the heading it
+    /// started with, or on a curve that follows the path the one at the end;
+    /// `None` if the robot keeps whatever heading it has.
+    fn end_heading(&self) -> Option<f64> {
+        match self.follow {
+            Some(offset) => Some(normalize_angle(self.end_dir + offset)),
+            None => self.heading,
+        }
+    }
+}
+
+/// What a route continues from: the heading the robot will have at its start node
+/// and the rotation the edge it comes in on allows there (`None` if unknown).
+#[derive(Debug, Clone, Copy)]
+struct Prev {
+    heading: f64,
+    end_rotation: Option<Rotation>,
 }
 
 /// Where a lift ride ends.
@@ -227,6 +303,7 @@ fn build_segments(
     start: NodeIdx,
     route: &[RouteEdge],
     rides: &HashSet<EdgeIdx>,
+    mut prev: Prev,
 ) -> Result<(Vec<Segment>, NodeIdx), DriveError> {
     let kinematics = spec.kinematics;
     let mut segments = Vec::with_capacity(route.len());
@@ -242,15 +319,17 @@ fn build_segments(
             }
             let (a, b) = (&graph.nodes[e.start], &graph.nodes[e.end]);
             segments.push(Segment {
-                ax: a.x,
-                ay: a.y,
-                bx: a.x,
-                by: a.y,
+                path: Arc::new(Path::straight((a.x, a.y), (a.x, a.y))),
                 length: 0.0,
                 heading: None, // the robot keeps its heading on a ride
-                direction: 0.0,
+                start_dir: 0.0,
+                end_dir: 0.0,
+                follow: None,
                 reversed: false,
                 max_speed: None,
+                curve_speed: None,
+                turn_ccw: None,
+                end_rotation: None,
                 ride: Some(RideEnd {
                     edge: re.edge,
                     map: b.map,
@@ -259,15 +338,19 @@ fn build_segments(
                 }),
             });
             at = e.end;
+            prev.end_rotation = None; // the rule of the edge before the ride does not carry over
             continue;
         }
-        // Also guards the division by the length when the pose is computed in `step`.
-        if !(e.length.is_finite() && e.length > 0.0) {
+        // The path: the trajectory of the edge for this robot's type, or the straight
+        // line (S69). Also guards the division by the length when the pose is
+        // computed in `step`.
+        let path = Arc::new(graph.edge_path(re.edge, &spec.manufacturer, &spec.series_name));
+        let length = path.length();
+        if !(e.length.is_finite() && e.length > 0.0 && length.is_finite() && length > 0.0) {
             return Err(DriveError::ZeroLengthEdge { edge: e.id.clone() });
         }
-        let (a, b) = (&graph.nodes[e.start], &graph.nodes[e.end]);
-        let direction = (b.y - a.y).atan2(b.x - a.x);
-        let heading = edge_heading(kinematics, direction, re.orientation, re.orientation_type)
+        let (start_dir, end_dir) = path.end_directions();
+        let heading = edge_heading(kinematics, start_dir, re.orientation, re.orientation_type)
             .map_err(|error| DriveError::Orientation {
                 edge: e.id.clone(),
                 error,
@@ -276,17 +359,80 @@ fn build_segments(
         // lets it choose, and it keeps its heading (S63). Differential robots
         // always drive forwards then (S13).
         let keeps_heading = kinematics == Kinematics::Omnidirectional && re.orientation.is_none();
+
+        // Turning at the start node (S64): the layout says which ways the robot may
+        // turn there — what the edge it came in on allows at its end node and what
+        // this edge allows at its start node, both (LIF §8.3.13.1). The shorter way
+        // is taken if allowed, else the other one; if neither, the edge cannot be
+        // driven after the edge before it, and the order is refused.
+        let (start_rotation, end_rotation) =
+            graph.edge_rotation(re.edge, &spec.manufacturer, &spec.series_name);
+        let mut turn_ccw = None;
+        let three_wheel = kinematics == Kinematics::ThreeWheel;
+        if !keeps_heading {
+            let diff = angle_diff(prev.heading, heading);
+            if three_wheel {
+                // a car-like robot cannot turn on the spot: it must already head the
+                // way the edge starts (a little off is taken as aligned, S70)
+                if diff.abs() > THREE_WHEEL_TOLERANCE {
+                    return Err(DriveError::CannotTurnOnTheSpot {
+                        edge: e.id.clone(),
+                        node: graph.nodes[e.start].id.clone(),
+                    });
+                }
+            } else if diff.abs() > 1e-9 {
+                let allowed = prev
+                    .end_rotation
+                    .map_or(start_rotation, |r| r.and(start_rotation));
+                let shortest_ccw = diff > 0.0;
+                if allowed.allows(shortest_ccw) {
+                    // the shorter way
+                } else if allowed.allows(!shortest_ccw) {
+                    turn_ccw = Some(!shortest_ccw);
+                } else {
+                    return Err(DriveError::RotationNotAllowed {
+                        edge: e.id.clone(),
+                        node: graph.nodes[e.start].id.clone(),
+                    });
+                }
+            }
+            prev.heading = heading;
+        }
+        // On a curve the heading follows the direction of the path (a differential
+        // robot drives it forwards or backwards; an omnidirectional robot with a
+        // tangential orientation keeps that angle to it); a global orientation or no
+        // orientation (kept) leaves the heading fixed.
+        let tangential = !matches!(re.orientation_type, Some(OrientationType::Global));
+        let follow = (!path.is_straight() && !keeps_heading && tangential)
+            .then(|| angle_diff(start_dir, heading));
+        if let Some(offset) = follow {
+            prev.heading = normalize_angle(end_dir + offset); // the heading it ends with
+        }
+        // Turning at speed × curvature may not be faster than the robot can turn
+        // (S70): the speed on the curve is limited, and a curve so tight that the
+        // limit is below the lowest speed the robot can drive at is refused for a
+        // car-like robot (a robot that can turn on the spot just goes slower).
+        let curve_speed = follow.and_then(|_| {
+            let k = path.max_curvature();
+            (k > 1e-9).then(|| spec.limits.max_angular_speed / k)
+        });
+        if three_wheel && curve_speed.is_some_and(|v| v < spec.min_speed) {
+            return Err(DriveError::CurveTooTight { edge: e.id.clone() });
+        }
+        prev.end_rotation = Some(end_rotation);
         segments.push(Segment {
-            ax: a.x,
-            ay: a.y,
-            bx: b.x,
-            by: b.y,
-            length: e.length,
+            path,
+            length,
             heading: (!keeps_heading).then_some(heading),
-            direction,
-            reversed: !keeps_heading && angle_diff(direction, heading).abs() > FRAC_PI_2,
+            start_dir,
+            end_dir,
+            follow,
+            reversed: !keeps_heading && angle_diff(start_dir, heading).abs() > FRAC_PI_2,
             ride: None,
             max_speed: graph.edge_max_speed(re.edge, &spec.manufacturer, &spec.series_name),
+            curve_speed,
+            turn_ccw,
+            end_rotation: Some(end_rotation),
         });
         at = e.end;
     }
@@ -327,6 +473,11 @@ pub struct Driver {
     rides: HashSet<EdgeIdx>,
     /// What the robot is like (its type picks the edge properties in the layout).
     spec: RobotSpec,
+    /// Drive through nodes where possible (S66).
+    pass_through: bool,
+    /// `sequenceId`s of edges the robot must stop before (see
+    /// [`Driver::set_stop_before_edges`]).
+    stop_before: HashSet<u32>,
 }
 
 impl Driver {
@@ -412,12 +563,11 @@ impl Driver {
         mut times: ActionTimes,
         rides: HashSet<EdgeIdx>,
     ) -> Result<Driver, DriveError> {
-        // differential and omnidirectional robots are modelled (S63); a car-like
-        // (three-wheel) robot needs curved paths, which are not
-        if spec.kinematics == Kinematics::ThreeWheel {
-            return Err(DriveError::UnsupportedKinematics(spec.kinematics));
-        }
-        let (segments, base_end) = build_segments(graph, spec, start, route, &rides)?;
+        let before = Prev {
+            heading: normalize_angle(heading),
+            end_rotation: None,
+        };
+        let (segments, base_end) = build_segments(graph, spec, start, route, &rides, before)?;
 
         let s = &graph.nodes[start];
         let mut queue = ActionQueue::new();
@@ -447,6 +597,8 @@ impl Driver {
             obstructed: false,
             rides,
             spec: spec.clone(),
+            pass_through: false,
+            stop_before: HashSet::new(),
         };
         d.at_node();
         Ok(d)
@@ -479,9 +631,9 @@ impl Driver {
         if self.phase != Phase::Riding {
             return false;
         }
-        let end = self.segments[self.current]
-            .ride
-            .expect("a riding robot is on a ride segment");
+        let Some(end) = self.segments.get(self.current).and_then(|s| s.ride) else {
+            return false; // (cannot happen: a riding robot is on a ride segment)
+        };
         self.pose.map = end.map;
         self.pose.x = end.x;
         self.pose.y = end.y;
@@ -522,6 +674,80 @@ impl Driver {
             .map(|e| e.edge_id.as_str())
     }
 
+    /// Let the robot drive **through** nodes without stopping where it can (S66).
+    /// Off by default: it stops at every node.
+    pub fn set_pass_through(&mut self, on: bool) {
+        self.pass_through = on;
+    }
+
+    /// The edges (by `sequenceId`) the robot must stop before even if they could
+    /// be driven on to (a door's edges: the door must be seen open from a
+    /// standstill). Set by the robot; replaces the previous set.
+    pub fn set_stop_before_edges(&mut self, edges: HashSet<u32>) {
+        self.stop_before = edges;
+    }
+
+    /// The speed the robot wants at the end of the edge it is driving: 0 to stop at
+    /// the node, more to drive through it (S66). It drives through when
+    /// - it is switched on, and the robot is not being stopped (hold, halt, safety
+    ///   stop, or a cancelled order);
+    /// - the next edge is part of the released route, is not a lift ride, and is
+    ///   not one it must not be started or stop before (not granted, a door);
+    /// - nothing is to be done at the node (no actions);
+    /// - it goes straight on: the same direction, and the heading the next edge
+    ///   needs is the heading the robot has (no turn, no wait for a turn);
+    ///
+    /// Then the speed is the lowest of the two edges' limits, and low enough to
+    /// stop at the end of the next edge.
+    fn speed_at_end(&self) -> f64 {
+        if !self.pass_through || self.canceled || self.is_stopping() {
+            return 0.0;
+        }
+        let (Some(cur), Some(next)) = (
+            self.segments.get(self.current),
+            self.segments.get(self.current + 1),
+        ) else {
+            return 0.0;
+        };
+        let next_seq = self
+            .plan
+            .as_ref()
+            .and_then(|p| p.edges.get(self.current + 1))
+            .map(|e| e.sequence_id);
+        let barred =
+            next_seq.is_some_and(|s| self.blocked.contains(&s) || self.stop_before.contains(&s));
+        if cur.ride.is_some()
+            || next.ride.is_some()
+            || barred
+            || !self.arrive_actions[self.current].is_empty()
+            // the curves join smoothly: the path ends in the direction the next one starts in
+            || angle_diff(cur.end_dir, next.start_dir).abs() > 1e-6
+            // and the heading the robot ends this edge with is the one the next needs
+            || next.heading.is_some_and(|h| {
+                let ends_with = cur.end_heading().unwrap_or(self.pose.heading);
+                angle_diff(ends_with, h).abs() > 1e-9
+            })
+        {
+            return 0.0;
+        }
+        let limit = |s: &Segment| self.segment_speed_limit(s);
+        let stoppable = (2.0 * self.limits.max_deceleration * next.length).sqrt();
+        limit(cur).min(limit(next)).min(stoppable)
+    }
+
+    /// The fastest the robot may drive on a segment: the lowest of its own maximum,
+    /// the edge's `maximumSpeed` for its type, and the speed the curve allows (S70).
+    fn segment_speed_limit(&self, s: &Segment) -> f64 {
+        let mut v = self.limits.max_speed;
+        if let Some(m) = s.max_speed {
+            v = v.min(m);
+        }
+        if let Some(c) = s.curve_speed {
+            v = v.min(c);
+        }
+        v
+    }
+
     /// Is the robot driving or turning (not standing at a node waiting or acting)?
     pub fn is_moving(&self) -> bool {
         matches!(self.phase, Phase::Driving | Phase::Rotating)
@@ -549,9 +775,9 @@ impl Driver {
     }
 
     /// The direction the robot travels in (unit vector in map coordinates), the
-    /// direction of the edge it is driving on; `None` unless it is driving a
-    /// real edge. Backwards driving travels along the edge too, against the
-    /// heading.
+    /// direction of the path where it is on the edge it is driving; `None` unless it
+    /// is driving a real edge. Backwards driving travels along the path too,
+    /// against the heading.
     pub fn travel_direction(&self) -> Option<(f64, f64)> {
         if self.phase != Phase::Driving {
             return None;
@@ -560,7 +786,8 @@ impl Driver {
         if s.ride.is_some() {
             return None;
         }
-        Some(((s.bx - s.ax) / s.length, (s.by - s.ay) / s.length))
+        let t = s.path.tangent_at(self.along.s);
+        Some((t.cos(), t.sin()))
     }
 
     /// Is the robot being stopped, by a hold, by `set_halted` or by its
@@ -650,8 +877,25 @@ impl Driver {
                 found: graph.nodes[route.start].id.clone(),
             });
         }
-        let (segments, base_end) =
-            build_segments(graph, &self.spec, route.start, &route.edges, &self.rides)?;
+        // the update goes on from the end of what is planned: the heading the robot
+        // will have there, and what the last edge allows at that node
+        let before = Prev {
+            heading: self
+                .segments
+                .iter()
+                .rev()
+                .find_map(|s| s.end_heading())
+                .unwrap_or(self.pose.heading),
+            end_rotation: self.segments.last().and_then(|s| s.end_rotation),
+        };
+        let (segments, base_end) = build_segments(
+            graph,
+            &self.spec,
+            route.start,
+            &route.edges,
+            &self.rides,
+            before,
+        )?;
         if let Some(plan) = &mut self.plan {
             // plan entry i is the node/edge at segment i: keep what came before the
             // decision point (index = segments so far), the update replaces the rest
@@ -712,8 +956,9 @@ impl Driver {
             // an omnidirectional robot moves sideways as well: the speed along the
             // edge, in the robot's frame (x forward, y left)
             (Phase::Driving, Some(s)) if self.spec.kinematics == Kinematics::Omnidirectional => {
-                let rel = s.direction - self.pose.heading;
-                (self.along.v * rel.cos(), self.along.v * rel.sin(), 0.0)
+                let rel = s.path.tangent_at(self.along.s) - self.pose.heading;
+                let omega = self.turning_rate(s);
+                (self.along.v * rel.cos(), self.along.v * rel.sin(), omega)
             }
             (Phase::Driving, Some(s)) => (
                 if s.reversed {
@@ -722,15 +967,22 @@ impl Driver {
                     self.along.v
                 },
                 0.0,
-                0.0,
+                self.turning_rate(s),
             ),
             (Phase::Rotating, Some(s)) => (
                 0.0,
                 0.0,
-                self.limits.max_angular_speed.copysign(angle_diff(
-                    self.pose.heading,
-                    s.heading.unwrap_or(self.pose.heading),
-                )),
+                match s.turn_ccw {
+                    Some(ccw) => {
+                        self.limits
+                            .max_angular_speed
+                            .copysign(if ccw { 1.0 } else { -1.0 })
+                    }
+                    None => self.limits.max_angular_speed.copysign(angle_diff(
+                        self.pose.heading,
+                        s.heading.unwrap_or(self.pose.heading),
+                    )),
+                },
             ),
             _ => (0.0, 0.0, 0.0),
         };
@@ -785,6 +1037,19 @@ impl Driver {
     ///   (horizon) or finish.
     fn at_node(&mut self) {
         self.along = Along { s: 0.0, v: 0.0 };
+        // a car-like robot never turns on the spot: a heading a little off (it was
+        // accepted when the order was taken) is taken as the one wanted (S70)
+        let tolerance = if self.spec.kinematics == Kinematics::ThreeWheel {
+            THREE_WHEEL_TOLERANCE
+        } else {
+            1e-9
+        };
+        if tolerance > 1e-9
+            && let Some(h) = self.segments.get(self.current).and_then(|s| s.heading)
+            && angle_diff(self.pose.heading, h).abs() <= tolerance
+        {
+            self.pose.heading = h;
+        }
         self.phase = if !self.queue.driving_allowed() {
             Phase::Acting
         } else {
@@ -794,7 +1059,7 @@ impl Driver {
                 Some(seg)
                     if seg
                         .heading
-                        .is_none_or(|h| angle_diff(self.pose.heading, h).abs() < 1e-9) =>
+                        .is_none_or(|h| angle_diff(self.pose.heading, h).abs() <= tolerance) =>
                 {
                     Phase::Driving
                 }
@@ -827,20 +1092,32 @@ impl Driver {
             // about to start an edge that must not be started: wait at its start node
             Phase::Driving if self.along.s == 0.0 && self.edge_blocked(self.current) => {
                 self.phase = Phase::WaitingForClearance;
+                self.along.v = 0.0; // (it was driving through the node: it stops)
             }
             Phase::Rotating if held => {} // stopped while turning
             Phase::Rotating => {
-                let seg = self.segments[self.current];
-                let target = seg.heading.expect("a robot turns only towards a heading");
-                let (h, done) =
-                    rotate(self.pose.heading, target, self.limits.max_angular_speed, dt);
+                let Some(seg) = self.segments.get(self.current).cloned() else {
+                    self.phase = Phase::Driving; // (cannot happen)
+                    return;
+                };
+                // (a robot turns only towards a heading; none: nothing to turn to)
+                let Some(target) = seg.heading else {
+                    self.phase = Phase::Driving;
+                    return;
+                };
+                let rate = self.limits.max_angular_speed;
+                let (h, done) = match seg.turn_ccw {
+                    // the layout allows only one direction, and it is the long way
+                    Some(ccw) => rotate_in(self.pose.heading, target, rate, dt, ccw),
+                    None => rotate(self.pose.heading, target, rate, dt),
+                };
                 self.pose.heading = h;
                 if done {
                     self.phase = Phase::Driving;
                 }
             }
             Phase::Driving => {
-                let seg = self.segments[self.current];
+                let seg = self.segments[self.current].clone();
                 let goal = EdgeGoal {
                     length: seg.length,
                     // held: a speed limit of 0 makes it brake and stay stopped; the
@@ -848,21 +1125,33 @@ impl Driver {
                     v_limit: if held {
                         0.0
                     } else {
-                        seg.max_speed
-                            .map_or(self.limits.max_speed, |m| m.min(self.limits.max_speed))
+                        self.segment_speed_limit(&seg)
                     },
-                    v_end: 0.0,
+                    // 0: stop at the node; more: drive through it (S66)
+                    v_end: self.speed_at_end(),
                 };
                 let (along, arrived) = advance(self.along, goal, &self.limits, dt);
                 self.along = along;
-                let f = along.s / seg.length;
-                self.pose.x = seg.ax + (seg.bx - seg.ax) * f;
-                self.pose.y = seg.ay + (seg.by - seg.ay) * f;
+                let (x, y) = seg.path.point_at(along.s);
+                self.pose.x = x;
+                self.pose.y = y;
+                // on a curve the heading follows the direction of the path
+                if let Some(offset) = seg.follow {
+                    self.pose.heading = normalize_angle(seg.path.tangent_at(along.s) + offset);
+                }
                 if arrived {
                     let actions = std::mem::take(&mut self.arrive_actions[self.current]);
                     self.queue.push(actions.iter().map(|a| self.times.plan(a)));
                     self.current += 1;
-                    self.at_node();
+                    if goal.v_end > 0.0 {
+                        // through the node: the next edge starts at its start, at speed
+                        self.along = Along {
+                            s: 0.0,
+                            v: goal.v_end,
+                        };
+                    } else {
+                        self.at_node();
+                    }
                 }
             }
         }

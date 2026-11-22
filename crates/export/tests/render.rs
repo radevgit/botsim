@@ -25,6 +25,7 @@ fn edge(id: &str, start: usize, end: usize) -> EdgeRecord {
         end,
         length: 10.0,
         map_transition: false,
+        paths: vec![],
     }
 }
 
@@ -51,6 +52,7 @@ fn corridor() -> LayoutLine {
             edge("C-B", 2, 1),
         ],
         geometry: Vec::new(),
+        robots: vec![],
     }
     .with_geometry(&geometry)
     .unwrap()
@@ -109,6 +111,21 @@ fn the_view_fits_the_floor_with_a_margin_and_one_scale() {
     let (left, _) = view.to_px(-3.0, 0.0);
     let (right, _) = view.to_px(23.0, 0.0);
     assert!(left >= 96.0 - 0.01 && right <= 1824.0 + 0.01);
+}
+
+#[test]
+fn a_pixel_maps_back_to_the_world_point() {
+    let view = View::fit(&corridor(), 0, W, H).unwrap();
+    for (x, y) in [(10.0, 0.0), (-3.0, 4.5), (23.0, -4.5), (0.37, 1.91)] {
+        let (px, py) = view.to_px(x, y);
+        let (wx, wy) = view.to_world(px, py);
+        // a pixel is 1 / scale metres; f32 pixels lose a little
+        assert!(
+            (wx - x).abs() < 1e-3 && (wy - y).abs() < 1e-3,
+            "{x},{y} -> {wx},{wy}"
+        );
+    }
+    assert_eq!(view.to_world(960.0, 540.0), (10.0, 0.0), "the middle");
 }
 
 #[test]
@@ -214,6 +231,7 @@ fn a_one_way_edge_has_an_arrowhead_and_a_two_way_pair_has_none() {
         nodes: vec![node("N1", 0, 0.0, 0.0), node("N2", 0, 10.0, 0.0)],
         edges: vec![edge("N1-N2", 0, 1)],
         geometry: vec![],
+        robots: vec![],
     };
     let r = Renderer::new(&one_way, 0, W, H).unwrap();
     let a = r.empty_frame();
@@ -226,6 +244,137 @@ fn a_one_way_edge_has_an_arrowhead_and_a_two_way_pair_has_none() {
         at(&r.empty_frame(), r.view(), 9.7, 0.055),
         palette::BACKGROUND
     );
+}
+
+/// Two robots facing each other, 4 m apart, both waiting.
+fn facing() -> Vec<RobotRecord> {
+    vec![
+        robot(0, 5.0, 0.0, 0.0, StatusRecord::WaitingForRelease),
+        robot(
+            0,
+            9.0,
+            0.0,
+            std::f64::consts::PI,
+            StatusRecord::WaitingForRelease,
+        ),
+    ]
+}
+
+#[test]
+fn a_blocking_arrow_runs_from_the_waiter_to_the_blocker() {
+    let layout = corridor();
+    let r = Renderer::new(&layout, 0, W, H).unwrap();
+    let view = *r.view();
+    let mut snap = snapshot(facing());
+    let without = r.frame(&snap);
+    assert_eq!(
+        at(&without, &view, 7.0, 0.0),
+        palette::GRAPH,
+        "only the track"
+    );
+
+    snap.blocking = vec![[0, 1]];
+    let with = r.frame(&snap);
+    assert_eq!(at(&with, &view, 7.0, 0.0), palette::BLOCKING);
+    // the arrowhead ends at the blocker's edge (8.4) and widens backwards: 0.35 m
+    // behind the tip it is 0.25 m wide, so 0.07 m off the line it is there at 8.15
+    assert_eq!(at(&without, &view, 8.15, 0.07), palette::BACKGROUND);
+    assert_eq!(at(&with, &view, 8.15, 0.07), palette::BLOCKING);
+    assert_eq!(
+        at(&with, &view, 8.35, 0.07),
+        palette::BACKGROUND,
+        "narrow near the tip"
+    );
+    // nothing is drawn over the bodies
+    assert_ne!(at(&with, &view, 5.5, 0.25), palette::BLOCKING);
+    assert_ne!(at(&with, &view, 8.5, 0.25), palette::BLOCKING);
+}
+
+#[test]
+fn the_arrow_starts_and_ends_at_the_edges_of_turned_bodies() {
+    let layout = corridor();
+    let r = Renderer::new(&layout, 0, W, H).unwrap();
+    let view = *r.view();
+    // the waiter points up: towards the blocker its body is only 0.4 m deep
+    let mut snap = snapshot(vec![
+        robot(0, 5.0, 0.0, std::f64::consts::FRAC_PI_2, StatusRecord::Idle),
+        robot(0, 9.0, 0.0, 0.0, StatusRecord::Idle),
+    ]);
+    snap.blocking = vec![[0, 1]];
+    let frame = r.frame(&snap);
+    assert_eq!(at(&frame, &view, 5.55, 0.0), palette::BLOCKING);
+    assert_ne!(at(&frame, &view, 5.3, 0.0), palette::BLOCKING);
+}
+
+#[test]
+fn no_arrow_when_the_bodies_touch_or_a_robot_is_not_on_the_floor() {
+    let layout = corridor();
+    let r = Renderer::new(&layout, 0, W, H).unwrap();
+    let plain = |robots: Vec<RobotRecord>| r.frame(&snapshot(robots));
+    let with_arrow = |robots: Vec<RobotRecord>, blocking: Vec<[usize; 2]>| {
+        let mut s = snapshot(robots);
+        s.blocking = blocking;
+        r.frame(&s)
+    };
+    // 1 m apart: the 0.6 m long bodies overlap
+    let close = vec![
+        robot(0, 5.0, 0.0, 0.0, StatusRecord::Idle),
+        robot(0, 6.0, 0.0, 0.0, StatusRecord::Idle),
+    ];
+    assert_eq!(
+        with_arrow(close.clone(), vec![[0, 1]]).data(),
+        plain(close).data()
+    );
+    // the blocker is on another floor; a number that is no robot
+    let mut away = facing();
+    away[1].map = 1;
+    assert_eq!(
+        with_arrow(away.clone(), vec![[0, 1]]).data(),
+        plain(away).data()
+    );
+    assert_eq!(
+        with_arrow(facing(), vec![[0, 7]]).data(),
+        plain(facing()).data()
+    );
+}
+
+#[test]
+fn rings_mark_a_deadlock_and_an_overlap_and_both_show_when_they_meet() {
+    let layout = corridor();
+    let r = Renderer::new(&layout, 0, W, H).unwrap();
+    let view = *r.view();
+    let robots = vec![
+        robot(0, 5.0, 0.0, 0.0, StatusRecord::WaitingForRelease),
+        robot(0, 15.0, 0.0, 0.0, StatusRecord::WaitingForRelease),
+    ];
+    // the front of robot 0 is at x = 5.6; the deadlock ring is 0.15 … 0.27 m
+    // beyond it, the overlap ring 0.32 … 0.44 m
+    let (deadlock_x, overlap_x) = (5.8, 5.98);
+    let plain = r.frame(&snapshot(robots.clone()));
+    assert_eq!(at(&plain, &view, deadlock_x, 0.2), palette::BACKGROUND);
+    assert_eq!(at(&plain, &view, overlap_x, 0.2), palette::BACKGROUND);
+
+    let mut snap = snapshot(robots);
+    snap.deadlocks = vec![vec![0, 1]];
+    let frame = r.frame(&snap);
+    assert_eq!(at(&frame, &view, deadlock_x, 0.2), palette::DEADLOCK);
+    assert_eq!(
+        at(&frame, &view, 15.8, 0.2),
+        palette::DEADLOCK,
+        "robot 1 too"
+    );
+    assert_eq!(at(&frame, &view, overlap_x, 0.2), palette::BACKGROUND);
+
+    snap.deadlocks = vec![];
+    snap.overlapping = vec![[0, 1]];
+    let frame = r.frame(&snap);
+    assert_eq!(at(&frame, &view, overlap_x, 0.2), palette::OVERLAP);
+    assert_eq!(at(&frame, &view, deadlock_x, 0.2), palette::BACKGROUND);
+
+    snap.deadlocks = vec![vec![0]];
+    let frame = r.frame(&snap);
+    assert_eq!(at(&frame, &view, deadlock_x, 0.2), palette::DEADLOCK);
+    assert_eq!(at(&frame, &view, overlap_x, 0.2), palette::OVERLAP);
 }
 
 #[test]
