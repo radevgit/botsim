@@ -129,6 +129,41 @@ fn a_pixel_maps_back_to_the_world_point() {
 }
 
 #[test]
+fn zooming_keeps_the_point_under_the_pointer_and_a_drag_moves_the_picture() {
+    let view = View::fit(&corridor(), 0, W, H).unwrap();
+    let anchor = (500.0_f32, 300.0_f32);
+    let (wx, wy) = view.to_world(anchor.0, anchor.1);
+    let zoomed = view.zoomed(4.0, anchor);
+    assert!((zoomed.scale - 4.0 * view.scale).abs() < 1e-9);
+    let (px, py) = zoomed.to_px(wx, wy);
+    assert!((px - anchor.0).abs() < 1e-3 && (py - anchor.1).abs() < 1e-3);
+    // zooming out again is the same view
+    let back = zoomed.zoomed(0.25, anchor);
+    assert!((back.centre.0 - view.centre.0).abs() < 1e-9);
+    assert!((back.centre.1 - view.centre.1).abs() < 1e-9);
+    // a drag to the right and down moves what is shown with it
+    let moved = zoomed.panned(30.0, -20.0);
+    let (qx, qy) = moved.to_px(wx, wy);
+    assert!((qx - (px + 30.0)).abs() < 1e-3 && (qy - (py - 20.0)).abs() < 1e-3);
+}
+
+#[test]
+fn a_renderer_can_be_made_for_a_zoomed_view() {
+    let layout = corridor();
+    let view = View::fit(&layout, 0, W, H)
+        .unwrap()
+        .zoomed(5.0, (960.0, 540.0));
+    let renderer = Renderer::with_view(&layout, 0, view).unwrap();
+    assert_eq!(renderer.view(), &view);
+    let frame = renderer.empty_frame();
+    assert_eq!((frame.width(), frame.height()), (W, H));
+    assert!(matches!(
+        Renderer::with_view(&layout, 7, view),
+        Err(ViewError::NoSuchMap(7))
+    ));
+}
+
+#[test]
 fn the_view_reports_what_cannot_be_shown() {
     let layout = corridor();
     assert_eq!(View::fit(&layout, 5, W, H), Err(ViewError::NoSuchMap(5)));

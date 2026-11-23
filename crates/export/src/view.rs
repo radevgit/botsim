@@ -129,6 +129,32 @@ impl View {
         )
     }
 
+    /// This view zoomed in by `factor` (zoomed out if below 1) round the image pixel
+    /// `anchor`: the world point under it stays under it.
+    pub fn zoomed(&self, factor: f64, anchor: (f32, f32)) -> View {
+        let (wx, wy) = self.to_world(anchor.0, anchor.1);
+        let scale = self.scale * factor;
+        View {
+            scale,
+            centre: (
+                wx - (anchor.0 as f64 - self.width as f64 / 2.0) / scale,
+                wy + (anchor.1 as f64 - self.height as f64 / 2.0) / scale,
+            ),
+            ..*self
+        }
+    }
+
+    /// This view with the content moved by `(dx, dy)` image pixels (a drag).
+    pub fn panned(&self, dx: f32, dy: f32) -> View {
+        View {
+            centre: (
+                self.centre.0 - dx as f64 / self.scale,
+                self.centre.1 + dy as f64 / self.scale,
+            ),
+            ..*self
+        }
+    }
+
     /// A length in metres as pixels.
     pub fn px(&self, metres: f64) -> f32 {
         (metres * self.scale) as f32

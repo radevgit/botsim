@@ -42,12 +42,13 @@
 
 use std::collections::VecDeque;
 
+use botsim_core::collision::{overlap, place};
 use botsim_core::errors::ErrorType;
 use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_core::jobs::Job;
 use botsim_core::metrics::{Metrics, is_waiting, summarize};
 use botsim_core::robot::Reception;
-use botsim_core::spec::Kinematics;
+use botsim_core::spec::{Kinematics, Shape};
 use botsim_core::world::{RobotId, World};
 use vda5050::order::Order;
 use vda5050::state::{ActionStatus, State};
@@ -65,6 +66,13 @@ use vda5050::responses::Responses;
 /// other robots gets a new route around them (S53, my choice: well before the
 /// 30 s a deadlock needs to be reported).
 pub const REROUTE_AFTER_SECONDS: f64 = 10.0;
+
+/// A robot that has been held this long at the end of its released route by a
+/// robot that is stuck behind it goes first (S77, my choice: before the re-route).
+/// Extra distance (m) kept between the body swept by a turn on the spot and a stopped robot.
+const TURN_CLEARANCE: f64 = 0.05;
+
+pub const GIVE_WAY_AFTER_SECONDS: f64 = 5.0;
 
 /// How close (metres) a robot must be to a node to count as standing on it.
 pub const NODE_TOLERANCE: f64 = 0.1;
@@ -142,6 +150,10 @@ struct Slot {
     /// Index into `Controller::types`.
     type_idx: usize,
     work: Option<Work>,
+    /// The robot's body outline (to check that a turn on the spot is clear).
+    shape: Shape,
+    /// The series name of the robot's type (with the manufacturer in `id`).
+    series: String,
     header_id: u32,
     /// `headerId` of the next `responses` message to this robot.
     response_header_id: u32,
@@ -184,6 +196,9 @@ pub struct Controller {
     unserviceable: std::collections::HashSet<(u64, usize)>,
     /// How many times a route was changed because the way was held (S53).
     reroutes: usize,
+    /// How many times a robot was let go first, ahead of the robot stuck behind it
+    /// (S77).
+    give_ways: usize,
 }
 
 impl Controller {
@@ -199,7 +214,9 @@ impl Controller {
                 // the robot's type comes from its factsheet message (S61); a robot
                 // that has none cannot be read and gets no jobs
                 let f = world.factsheet(id).ok()?;
-                let kinematics = world.spec(id).ok()?.kinematics;
+                let spec = world.spec(id).ok()?;
+                let (kinematics, shape) = (spec.kinematics, spec.shape);
+                let series = f.type_specification.series_name.clone();
                 let key = (f.manufacturer, f.type_specification.series_name);
                 let type_idx = keys.iter().position(|k| *k == key).unwrap_or_else(|| {
                     keys.push(key);
@@ -210,6 +227,8 @@ impl Controller {
                     id: id.clone(),
                     type_idx,
                     work: None,
+                    shape,
+                    series,
                     header_id: 0,
                     response_header_id: 0,
                     zone_set_sent: false,
@@ -255,6 +274,7 @@ impl Controller {
             types,
             unserviceable: std::collections::HashSet::new(),
             reroutes: 0,
+            give_ways: 0,
         }
     }
 
@@ -262,6 +282,12 @@ impl Controller {
     /// way for longer than [`REROUTE_AFTER_SECONDS`].
     pub fn reroutes(&self) -> usize {
         self.reroutes
+    }
+
+    /// How many times a robot went first, ahead of the robot stuck behind it
+    /// (S77, [`GIVE_WAY_AFTER_SECONDS`]).
+    pub fn give_ways(&self) -> usize {
+        self.give_ways
     }
 
     /// Who holds which node and edge.
@@ -318,6 +344,7 @@ impl Controller {
         for (i, state) in states.iter().enumerate() {
             self.update_work(world, i, state, tick, elapsed);
         }
+        self.go_first(&states);
         self.update_lifts(world, &states);
         // a robot without a job holds the node it stands on (S34)
         for (i, state) in states.iter().enumerate() {
@@ -423,11 +450,14 @@ impl Controller {
         let ahead_nodes = &work.plan.nodes[at..=work.released_through];
         let ahead_edges = &work.plan.edges[at..work.released_through];
         for j in 0..at {
-            if !ahead_nodes.contains(&work.plan.nodes[j]) {
-                self.reservations.release_node(work.plan.nodes[j], i);
+            // a node taken over from a robot in the way (S77) is held before it is
+            // released; it is not given back when the route passed it earlier
+            let (n, e) = (work.plan.nodes[j], work.plan.edges[j]);
+            if !ahead_nodes.contains(&n) && !self.reservations.is_taken_over_node(n, i) {
+                self.reservations.release_node(n, i);
             }
-            if !ahead_edges.contains(&work.plan.edges[j]) {
-                self.reservations.release_edge(work.plan.edges[j], i);
+            if !ahead_edges.contains(&e) && !self.reservations.is_taken_over_edge(e, i) {
+                self.reservations.release_edge(e, i);
             }
         }
 
@@ -783,6 +813,146 @@ impl Controller {
         }
     }
 
+    /// Deadlocks with a safety link (S77): robot X stands at the end of its released
+    /// route and waits for the next node, which robot H has released; H is stopped
+    /// (its protective field sees X) and X is right in front of it, heading the same
+    /// way. H cannot move until X does, so X goes first: it takes the node over (H
+    /// gets it back when X lets go of it) and its release goes on as usual. Not
+    /// done head-on (X heading against H): there both would run into each other.
+    fn go_first(&mut self, states: &[State]) {
+        for i in 0..self.robots.len() {
+            let Some(work) = self.robots[i].work.as_ref() else {
+                continue;
+            };
+            if work.blocked_seconds < GIVE_WAY_AFTER_SECONDS || work.cancelling.is_some() {
+                continue;
+            }
+            let from = work.released_through;
+            let (Some(&node), Some(&edge)) =
+                (work.plan.nodes.get(from + 1), work.plan.edges.get(from))
+            else {
+                continue;
+            };
+            let Some(h) = self.reservations.node_holder(node).filter(|&h| h != i) else {
+                continue;
+            };
+            // H must be on its way through the node (it has released it as part of
+            // its route and does not stand on it); a robot that is parked there
+            // holds it because it stands on it, and cannot be gone around
+            let on_its_way = self.robots[h].work.as_ref().is_some_and(|w| {
+                w.plan
+                    .nodes
+                    .iter()
+                    .take(w.released_through + 1)
+                    .any(|&n| n == node)
+            }) && self.node_of(&states[h]) != Some(node);
+            if !on_its_way {
+                continue;
+            }
+            // the edge must be free, or held by the same robot
+            if !self
+                .reservations
+                .edge_holder(edge)
+                .is_none_or(|e| e == i || e == h)
+            {
+                continue;
+            }
+            let (Some(px), Some(ph)) = (
+                states[i].mobile_robot_position.as_ref(),
+                states[h].mobile_robot_position.as_ref(),
+            ) else {
+                continue;
+            };
+            let stopped = states[h]
+                .velocity
+                .as_ref()
+                .is_none_or(|v| v.vx.unwrap_or(0.0).abs() < 0.05);
+            if !stopped || px.map_id != ph.map_id {
+                continue;
+            }
+            // X is ahead of H, within 4 m and 60° of H's heading, and heads the same
+            // way (within 45°)
+            let (dx, dy) = (px.x - ph.x, px.y - ph.y);
+            let off_heading = angle_between(dy.atan2(dx), ph.theta);
+            // or its route after the node is the one H takes after it (a lane change
+            // or merge: X stands on H's curve and both go on to the same node); then
+            // X may also be beside H's curve (up to 100° off its heading, 5 m away).
+            // The same holds if X stands on a node that H has released (H's way
+            // goes through X).
+            let same_route = self.same_route_after(i, h, node);
+            // (not by who holds the node: X may have taken it over earlier)
+            let on_h_way = self.node_of(&states[i]).is_some_and(|n| {
+                self.robots[h].work.as_ref().is_some_and(|w| {
+                    w.plan
+                        .nodes
+                        .iter()
+                        .take(w.released_through + 1)
+                        .any(|&m| m == n)
+                })
+            });
+            let wide = same_route || on_h_way;
+            let near = dx.hypot(dy) <= if wide { 5.0 } else { 4.0 };
+            // X standing on H's way may head any way as long as it does not face H
+            let faces_away = angle_between(px.theta, (-dy).atan2(-dx)) >= 90f64.to_radians();
+            let same_way = angle_between(px.theta, ph.theta) <= 45f64.to_radians()
+                || same_route
+                || (on_h_way && faces_away);
+            let limit = if wide { 100.0 } else { 60.0 };
+            let ahead = off_heading <= f64::to_radians(limit);
+            // X may have to turn on the spot to drive off; its body then sweeps
+            // through the angles to the start of the edge and must not touch H (a
+            // forklift turning 1.7 m from a stopped robot hit it, warehouse 4, 309 s)
+            let start = self
+                .graph
+                .edge_directions(
+                    edge,
+                    &self.robots[i].id.manufacturer,
+                    &self.robots[i].series,
+                )
+                .0;
+            let turns = angle_between(px.theta, start) > 15f64.to_radians();
+            let clear = !turns
+                || turn_is_clear(
+                    &self.robots[i].shape,
+                    (px.x, px.y, px.theta),
+                    start,
+                    &self.robots[h].shape,
+                    (ph.x, ph.y, ph.theta),
+                );
+            if near
+                && ahead
+                && same_way
+                && clear
+                && self.reservations.take_over_node(node, i).is_some()
+            {
+                self.reservations.take_over_edge(edge, i);
+                self.give_ways += 1;
+            }
+        }
+    }
+
+    /// Do robots `a` and `b` both go on from `node` to the same next node? `a`
+    /// has `node` next in its plan; `b` has it somewhere ahead in its own.
+    fn same_route_after(&self, a: usize, b: usize, node: NodeIdx) -> bool {
+        let (Some(wa), Some(wb)) = (self.robots[a].work.as_ref(), self.robots[b].work.as_ref())
+        else {
+            return false;
+        };
+        let after_a = wa.plan.nodes.get(wa.released_through + 2);
+        let after_b = wb
+            .plan
+            .nodes
+            .iter()
+            .skip(wb.released_through.saturating_sub(1))
+            .position(|&n| n == node)
+            .and_then(|k| {
+                wb.plan
+                    .nodes
+                    .get(wb.released_through.saturating_sub(1) + k + 1)
+            });
+        after_a.is_some() && after_a == after_b
+    }
+
     /// The layout node a robot stands on, from its reported position.
     fn node_of(&self, state: &State) -> Option<NodeIdx> {
         let p = state.mobile_robot_position.as_ref()?;
@@ -806,6 +976,55 @@ fn give_back(
     for j in 1..=released_through {
         reservations.release_node(plan.nodes[j], robot);
         reservations.release_edge(plan.edges[j - 1], robot);
+    }
+}
+
+/// Can a robot at `x` (x, y, heading) turn on the spot to the heading `to` without
+/// touching the robot `h` (standing still)? The bodies are placed like the world
+/// does; `h` is grown by `TURN_CLEARANCE`, and the turn is checked every 5°.
+fn turn_is_clear(
+    shape: &Shape,
+    x: (f64, f64, f64),
+    to: f64,
+    h_shape: &Shape,
+    h: (f64, f64, f64),
+) -> bool {
+    let grown = match *h_shape {
+        Shape::Rect {
+            cx,
+            cy,
+            half_length,
+            half_width,
+        } => Shape::Rect {
+            cx,
+            cy,
+            half_length: half_length + TURN_CLEARANCE,
+            half_width: half_width + TURN_CLEARANCE,
+        },
+        Shape::Circle { cx, cy, radius } => Shape::Circle {
+            cx,
+            cy,
+            radius: radius + TURN_CLEARANCE,
+        },
+    };
+    let body_h = place(&grown, h.0, h.1, h.2);
+    // the shortest way round, from -π to π
+    let turn =
+        (to - x.2 + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+    let steps = ((turn.abs() / 5f64.to_radians()).ceil() as usize).max(1);
+    (0..=steps).all(|k| {
+        let heading = x.2 + turn * k as f64 / steps as f64;
+        !overlap(&place(shape, x.0, x.1, heading), &body_h)
+    })
+}
+
+/// The angle between two directions, 0..π.
+fn angle_between(a: f64, b: f64) -> f64 {
+    let d = (a - b).rem_euclid(std::f64::consts::TAU);
+    if d > std::f64::consts::PI {
+        std::f64::consts::TAU - d
+    } else {
+        d
     }
 }
 

@@ -1,6 +1,6 @@
-//! Adapters around the simulator core: scenario files (TOML), later the CLI,
-//! the JSON summary and the Rerun recorder. The core itself knows nothing
-//! about files.
+//! Adapters around the simulator core: the CLI and the JSON summary. The scenario
+//! file types live in the `botsim-scenario` crate (shared with the checker) and
+//! are re-exported here as `scenario`. The core itself knows nothing about files.
 
-pub mod scenario;
+pub use botsim_scenario as scenario;
 pub mod summary;

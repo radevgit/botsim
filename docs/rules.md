@@ -763,6 +763,58 @@ The bundled controller talks to the robots only with VDA 5050 messages.
     64 → 121 jobs done, deadlocks 15 → 15. A one-way edge cannot be driven back,
     so a robot cannot "back off"; resolving the rest needs more (e.g. reserving
     more of the route ahead, or fewer robots per street).
+- **Going first (S77, brief `baseline_deadlocks.md`, item 2).** A deadlock with a
+  safety link: robot X stands at the end of its released route and waits for the
+  next node, which robot H has released; H is stopped (speed under 0.05 m/s) and
+  X is right in front of it: within 4 m and 60° of H's heading, heading the same
+  way (within 45°). H cannot move until X does. After `GIVE_WAY_AFTER_SECONDS`
+  (5 s, my choice, before the 10 s re-route) X **takes the node and the edge over**
+  (`Reservations::take_over_node/edge`): X holds them, its release goes on as
+  usual, and H gets them back when X lets go of them (and not if H gave them up
+  itself). `Controller::give_ways()` counts it. **Not done head-on** (X heading
+  against H): there both would run into each other; that needs a back-off to
+  another node (not built). **Lane change / merge (brief update, X-011/O-018):**
+  "same way" also holds when X's route after the node is the one H takes after it
+  (`same_route_after`), so X on H's curve, heading across it, still goes first
+  (warehouse 4 pair `[34,76]`; no unit test for the crossing geometry yet, and the
+  other six pairs are not checked). With the same route X may stand up to 100°
+  (not 60°) off H's heading: X-008 on node 137 beside O-015's curve is at 77°
+  (warehouse 4, second example). The wider limits (100°, 5 m) also apply when X
+  stands on a node H has released (`on_h_way`). Checked by hand against the
+  4 deadlocks of the final snapshot of `data/warehouse4.jsonl` (the earlier 7 were
+  from another run): X-008/O-015, X-011/O-018, O-014/O-001 (X on a node O-001
+  holds) and Y-001/O-013 (the cycle behind Y-011; Y-011 itself is behind O-013 and
+  correctly does not go first) are covered. **Turning clearance:** if X has to
+  turn on the spot to drive off (its heading is more than 15° off the bearing to
+  the node), it goes first only if its distance to H is larger than the sum of the
+  two bodies' reach plus 0.1 m. **(Replaced in S86: the circle was too coarse;
+  now `turn_is_clear` places both bodies like the world does, turns X in 5°
+  steps by the shortest way to the start of the edge, and H is grown by 0.05 m;
+  any overlap means no take-over. `Shape::reach` is gone.)** Reason: warehouse 4, 309 s, forklift Y-020 (2.4 × 1.4 m)
+  turned 1.7 m from the stopped O-015 and hit it (the recording shape is
+  `[cx, cy, half_length, half_width]`, so those are half sizes; there was no
+  simulator bug). Where there is no clearance the stand-off stays (needs the
+  back-off, not built). **H must be on its way (S84):** the node is in H's released
+  route and H does not stand on it; a robot parked on a node (an idle robot holds
+  its node) is never gone around, there X would drive into it. The turn is judged
+  by the edge's start direction (`Graph::edge_directions`), not the bearing to
+  the node, because a curve starts in another direction. **Heading (S86):** if X
+  stands on a node H holds, it may head any way as long as it does not face H
+  (90° or more off the bearing to H); the 46° case Y-015/Y-005 (limit 45°) was
+  stuck on that. "X stands on H's way" means X's node is in H's released route,
+  not that H holds it (X may have taken it over earlier; then H no longer held it
+  and Y-015/Y-005 stayed stuck). Still unresolved, by design: Y-024/O-009
+  (warehouse 4, 380 s on): O-009 must turn toward the edge, and the turn sweeps
+  into the forklift's body 1.9 m away (the exact test says overlap); only H
+  backing off would help (not built). **A node taken over is
+  not released again** when X's route passed it earlier
+  (`Reservations::is_taken_over_node/edge`); before, the release of the old visit
+  gave the node back every tick and X took it over again every tick (170 take-overs
+  in 400 s, now 12). Old text continues: a back-off to
+  another node (not built). Test `give_way.rs`: O has a long edge released past the
+  node where X stands and waits; both jobs are done, no deadlock, no collision. The
+  rule is for the case of the brief; whether it frees the warehouse recordings is
+  not measured yet.
 - **Known limit: a cycle around a block (S67).** In a dense one-way grid (300
   robots on 40 × 40 nodes, 600 s) the baseline's deadlocks are all **cycles of four
   robots around one block** (two of eight): each robot stands on a corner and waits
@@ -792,15 +844,24 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   counted.
 - **Collisions**: see section 7.
 - **Deadlocks** (**S35**): the simulator only observes and reports; resolving
-  them is the controller's job. Robot A *waits for* robot B when A stands
-  still with part of its order still ahead, is not busy with an action, and B
-  stands on A's next node (within 0.1 m). A deadlock is a cycle of such waits
-  (two robots head-on, or a longer ring) that lasts at least the timeout —
-  30 s, or `deadlock_timeout` in the scenario. Each deadlock is reported once
+  them is the controller's job. Robot A *waits for* robot B when
+  - (**reservation wait**) A stands still with part of its order still ahead, is
+    not busy with an action, and B stands on A's next node (within 0.1 m) **or has
+    that node released ahead of it** (reserved, though B is not there yet, **S76**);
+  - (**safety wait**, **S76**) A is stopped by its protective field and B is the
+    robot in the field (the lowest index if several).
+
+  A deadlock is a cycle of such waits (two robots head-on, a longer ring, with
+  either kind of link) that lasts at least the timeout — 30 s, or
+  `deadlock_timeout` in the scenario. Each deadlock is reported once
   with its robots, when it formed, when it was reported, when it ended (if it
-  did) and its duration. Limits: cycles through a node that is reserved but
-  empty are not seen, and a robot waiting for a robot that is not itself
-  waiting (e.g. one idle for ever) is not a deadlock by this rule.
+  did) and its duration. Before S76 only "B stands on the next node" was seen,
+  and the freezes of the big layouts (a robot on a node waiting for nodes another
+  robot has reserved, that robot stopped by the first one's body) were not
+  reported (`deadlock_count` 0 with 80–105 of 112 robots frozen). Limits: one wait
+  per robot (the first next node, or the robot in the field), and a robot waiting
+  for a robot that is not itself waiting (e.g. one idle for ever) is not a
+  deadlock by this rule.
 - **Controller time per step** (**S39**): the real (wall-clock) time of every
   controller step: number of steps, total, mean and maximum. It differs from
   run to run, so it is reported **only with `--timing`**; without the flag the

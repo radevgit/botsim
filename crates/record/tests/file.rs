@@ -99,6 +99,43 @@ fn the_reader_streams_the_snapshots() {
     assert_eq!(reader.count(), 49);
 }
 
+const SNAP: &str = r#"{"type":"snapshot","tick":1,"time":0.1,"robots":[],"reservations":[],"blocking":[],"overlapping":[],"deadlocks":[],"lifts":[],"doors":[]}"#;
+
+#[test]
+fn a_stopped_run_is_read_up_to_the_cut_off_line() {
+    use botsim_record::read_recording_partial;
+    let partial = |text: &str| read_recording_partial(text.as_bytes());
+    // whole file: nothing cut off
+    let (rec, cut) = partial(&format!("{LAYOUT}\n{SNAP}\n{SNAP}\n")).unwrap();
+    assert_eq!((rec.snapshots.len(), cut), (2, false));
+    // the last line ends in the middle (several places), with or without a newline
+    for keep in [10, 60, SNAP.len() - 1] {
+        let text = format!("{LAYOUT}\n{SNAP}\n{SNAP}\n{}", &SNAP[..keep]);
+        let (rec, cut) = partial(&text).unwrap();
+        assert_eq!((rec.snapshots.len(), cut), (2, true), "cut at {keep}");
+        let (rec, cut) = partial(&format!("{text}\n\n")).unwrap();
+        assert_eq!((rec.snapshots.len(), cut), (2, true));
+    }
+    // only the layout and a cut-off line: no snapshots, but not an error
+    let (rec, cut) = partial(&format!("{LAYOUT}\n{}", &SNAP[..20])).unwrap();
+    assert_eq!((rec.snapshots.len(), cut), (0, true));
+    // a bad line in the middle is still an error, with its line number
+    let text = format!("{LAYOUT}\n{SNAP}\n{}\n{SNAP}\n", &SNAP[..20]);
+    assert!(matches!(
+        partial(&text),
+        Err(ReadError::Line { line: 3, .. })
+    ));
+    // so is a last line that is complete but wrong (not just cut off)
+    let text = format!("{LAYOUT}\n{SNAP}\n{{\"type\":\"snapshot\",\"tick\":1}}\n");
+    assert!(matches!(
+        partial(&text),
+        Err(ReadError::Line { line: 3, .. })
+    ));
+    // the whole-file reader stays strict
+    let text = format!("{LAYOUT}\n{SNAP}\n{}", &SNAP[..20]);
+    assert!(read_recording(text.as_bytes()).is_err());
+}
+
 fn read_text(text: &str) -> Result<botsim_record::Recording, ReadError> {
     read_recording(text.as_bytes())
 }

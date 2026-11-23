@@ -2,15 +2,20 @@
 //! reports; resolving a deadlock is the controller's job.
 //!
 //! **Wait-for rule** (the world builds it from the robots' state messages): robot
-//! A *waits for* robot B if A stands still with an order still ahead of it, is
-//! not busy with an action, and B stands on A's next node. A **deadlock** is a
-//! cycle of such waits (A waits for B, B waits for A, or a longer ring) that
-//! lasts at least the timeout (default 30 s).
+//! A *waits for* robot B if
+//! - A is stopped by its protective field and B is the robot in the field (a
+//!   *safety wait*, S76); or
+//! - A stands still with an order still ahead of it, is not busy with an action,
+//!   and B stands on A's next node, or has A's next node released ahead of it
+//!   (a *reservation wait*: the node is reserved though B is not there yet, S76).
 //!
-//! Limits: it sees only robots standing on the next node. A cycle through a node
-//! that is reserved but empty is not seen. A robot that waits for a robot that
-//! is not itself waiting (e.g. one standing idle for ever) is not a deadlock
-//! by this rule.
+//! A **deadlock** is a cycle of such waits (A waits for B, B waits for A, or a
+//! longer ring, with either kind of link) that lasts at least the timeout
+//! (default 30 s).
+//!
+//! Limits: one wait per robot (the first next node; the robot in the field). A
+//! robot that waits for a robot that is not itself waiting (e.g. one standing idle
+//! for ever) is not a deadlock by this rule.
 
 use std::collections::HashMap;
 

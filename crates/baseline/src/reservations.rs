@@ -4,7 +4,7 @@
 //! controller reserves them when it releases them to a robot and gives them back
 //! when the robot has driven on. Nothing here knows about routes or messages.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_core::observer::Reservation;
@@ -13,6 +13,12 @@ use botsim_core::observer::Reservation;
 pub struct Reservations {
     nodes: Vec<Option<usize>>,
     edges: Vec<Option<usize>>,
+    /// Nodes that a robot took over from another robot that is stuck behind it
+    /// (S77): the robot that held the node before. It gets the node back when the
+    /// taker lets go of it.
+    displaced: HashMap<NodeIdx, usize>,
+    /// The same for edges.
+    displaced_edges: HashMap<EdgeIdx, usize>,
 }
 
 impl Reservations {
@@ -21,7 +27,38 @@ impl Reservations {
         Reservations {
             nodes: vec![None; graph.nodes.len()],
             edges: vec![None; graph.edges.len()],
+            displaced: HashMap::new(),
+            displaced_edges: HashMap::new(),
         }
+    }
+
+    /// Like [`Reservations::take_over_node`], for an edge.
+    pub fn take_over_edge(&mut self, e: EdgeIdx, robot: usize) -> Option<usize> {
+        let previous = self.edges[e].filter(|&h| h != robot)?;
+        self.edges[e] = Some(robot);
+        self.displaced_edges.insert(e, previous);
+        Some(previous)
+    }
+
+    /// `robot` takes the node over from its holder (S77): the holder is stuck
+    /// behind `robot`, so `robot` has to go first. Returns the robot that held it;
+    /// `None` (and nothing changes) if nobody else held it.
+    pub fn take_over_node(&mut self, n: NodeIdx, robot: usize) -> Option<usize> {
+        let previous = self.nodes[n].filter(|&h| h != robot)?;
+        self.nodes[n] = Some(robot);
+        self.displaced.insert(n, previous);
+        Some(previous)
+    }
+
+    /// Did `robot` take the node over (and not yet let go of it)?
+    pub fn is_taken_over_node(&self, n: NodeIdx, robot: usize) -> bool {
+        self.nodes[n] == Some(robot) && self.displaced.contains_key(&n)
+    }
+
+    /// The same for an edge. An edge that was free when taken over has no
+    /// displaced holder and is not marked, but nobody else wants it back.
+    pub fn is_taken_over_edge(&self, e: EdgeIdx, robot: usize) -> bool {
+        self.edges[e] == Some(robot) && self.displaced_edges.contains_key(&e)
     }
 
     pub fn node_holder(&self, n: NodeIdx) -> Option<usize> {
@@ -65,13 +102,19 @@ impl Reservations {
     /// Give the node back, if `robot` holds it.
     pub fn release_node(&mut self, n: NodeIdx, robot: usize) {
         if self.nodes[n] == Some(robot) {
-            self.nodes[n] = None;
+            // a node taken over goes back to the robot it was taken from
+            self.nodes[n] = self.displaced.remove(&n);
+        } else if self.displaced.get(&n) == Some(&robot) {
+            // the robot it was taken from has given it up itself
+            self.displaced.remove(&n);
         }
     }
 
     pub fn release_edge(&mut self, e: EdgeIdx, robot: usize) {
         if self.edges[e] == Some(robot) {
-            self.edges[e] = None;
+            self.edges[e] = self.displaced_edges.remove(&e);
+        } else if self.displaced_edges.get(&e) == Some(&robot) {
+            self.displaced_edges.remove(&e);
         }
     }
 

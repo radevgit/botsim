@@ -16,7 +16,7 @@ pub use geometry::{
     StaticShape, Vertex,
 };
 pub use layout::{EdgePath, EdgeRecord, LayoutLine, LayoutRobot, NodeRecord};
-pub use reader::{ReadError, Reader, Recording, read_recording};
+pub use reader::{ReadError, Reader, Recording, read_recording, read_recording_partial};
 pub use snapshot::{
     CallRecord, DoorRecord, DoorStateRecord, LiftRecord, ReservationRecord, RobotRecord,
     RouteRecord, ShapeRecord, SnapshotLine, StatusRecord,

@@ -25,11 +25,13 @@
 //! forklift, `T3` three-wheel, `O4` omnidirectional, `C5` small round robot); who
 //! may use what comes in a later step.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use botsim_core::graph::Graph;
+use botsim_core::spec::Kinematics;
 use botsim_export::Renderer;
 use botsim_record::{
     GEOMETRY_VERSION, GeometryFile, GeometryKind, GeometryShape, LayoutLine, Outline, SnapshotLine,
@@ -58,11 +60,43 @@ const EAST_X: [f64; 4] = [140.0, 160.0, 184.0, 206.0];
 const EAST_ROWS: [(f64, bool); 6] = [
     (28.0, true),
     (46.0, false),
-    (58.0, true),
+    (58.0, false),
     (66.0, true),  // the boulevard, east lane
     (74.0, false), // the boulevard, west lane
     (84.0, false),
 ];
+
+/// Where the sidings of the goods-in bays on the west side begin (y); each is 8 m
+/// long and runs south (the left side of the ring road runs south).
+const WEST_BAYS: [f64; 5] = [110.0, 93.0, 76.0, 58.0, 42.0];
+/// The sidings of the goods-out bays on the east side: where they begin (y) and how
+/// long they are (they run north).
+const EAST_BAYS: [(f64, f64); 3] = [(33.0, 8.0), (89.0, 8.0), (103.0, 8.0)];
+
+/// Where the narrow lanes along the south and north wall branch off the ring road (x).
+const LANES_X: [f64; 2] = [40.0, 200.0];
+
+/// Are there turn arcs (for the three-wheel robots) at the crossings of two roads? Without
+/// them nobody drives past the corner node of a crossing at the same time as a robot on
+/// an arc, but a three-wheel robot cannot turn at a crossing.
+const CROSSING_ARCS: bool = true;
+
+/// The longest straight edge (m): longer roads get nodes in between, so that more
+/// than one robot can be on a road (the baseline gives an edge to one robot).
+const MAX_EDGE: f64 = 6.0;
+
+/// The radii (m) a turn arc may have, biggest first; an arc gets the biggest one that the
+/// roads have room for, and `TURN_RADIUS` if none. A 90 degree arc passes r (sqrt(2) - 1) from
+/// the corner node: 2.5 m for 6 m (1.45 m for `TURN_RADIUS`).
+const ARC_RADII: [f64; 3] = [6.0, 5.0, 4.2];
+
+/// The shortest tangent (m) of a turn arc: the arc starts and ends at least this far
+/// from the corner node (a forklift is 2.4 m long).
+const MIN_TANGENT: f64 = 3.2;
+
+/// The smallest arc (m) at a corner of a narrow road, where the roads are too short for
+/// the arcs of `TURN_RADIUS`; only the small robots drive there.
+const NARROW_RADIUS: f64 = 1.8;
 
 /// The radius of the arcs at the junctions (m): about what a forklift needs.
 const TURN_RADIUS: f64 = 3.5;
@@ -188,9 +222,18 @@ fn shortcut_x(k: usize) -> f64 {
 struct Edge {
     a: usize,
     b: usize,
-    /// For a curve: the point where the tangents at the two ends meet, and the
-    /// weight of that control point (a circular arc).
-    curve: Option<(P, f64)>,
+    curve: Option<Curve>,
+}
+
+/// The shape of a curved edge.
+#[derive(Clone, Copy)]
+enum Curve {
+    /// A circular arc: the point where the tangents at the two ends meet, and the
+    /// weight of that control point.
+    Arc(P, f64),
+    /// An S-shaped cubic from one end to the other (both ends in the same direction):
+    /// its two inner control points.
+    Cubic(P, P),
 }
 
 /// A station (LIF): a place where robots pick up and drop loads, with the points
@@ -208,6 +251,29 @@ struct Net {
     index: HashMap<(i64, i64), usize>,
     edges: Vec<Edge>,
     stations: Vec<Station>,
+    /// Corner nodes where every turn got an arc and at most one road goes straight on:
+    /// the corner node is not needed (see `remove_corner_nodes`).
+    corners: Vec<usize>,
+    /// Pieces of road (from, to) between two loading lanes that replace the road: the
+    /// road piece itself is taken out (`remove_shared_roads`).
+    shared_roads: Vec<(P, P)>,
+    /// Every turn arc made: where it starts, its corner, where it ends.
+    arc_log: Vec<(P, P, P)>,
+    /// The arcs (start and end, in cm) at a junction that keeps its corner node: only
+    /// the robots that cannot turn on the spot use them; the others turn at the corner,
+    /// so that they hold the node, and the arc is not next to a robot that waits on it.
+    crossing_arcs: HashSet<(i64, i64, i64, i64)>,
+}
+
+/// A point in whole centimetres.
+fn cm(p: P) -> (i64, i64) {
+    ((p.0 * 100.0).round() as i64, (p.1 * 100.0).round() as i64)
+}
+
+/// The key of an arc edge in `Net::crossing_arcs`.
+fn arc_key(start: P, end: P) -> (i64, i64, i64, i64) {
+    let (a, b) = (cm(start), cm(end));
+    (a.0, a.1, b.0, b.1)
 }
 
 impl Net {
@@ -258,51 +324,116 @@ impl Net {
         self.edges.push(Edge {
             a,
             b,
-            curve: Some((corner, (turn / 2.0).cos())),
+            curve: Some(Curve::Arc(corner, (turn / 2.0).cos())),
         });
     }
 
-    /// An S-shaped link of two equal arcs from `a` to `b`, both driving in the
-    /// direction `d` (a unit vector) at `a` and at `b`; `b` is ahead of `a` and to
-    /// one side. (Two arcs that each turn by the same angle, one way and then back.)
+    /// An S-shaped link from `a` to `b`, driving in the direction `d` (a unit vector)
+    /// at `a` and at `b`; `b` is ahead of `a` and to one side. One edge (a cubic
+    /// curve), so that there is no node in the middle: the nodes of a siding are far
+    /// enough apart (a forklift is 2.4 m long) for the robots not to overlap.
     fn s_link(&mut self, a: P, b: P, d: P) {
-        let left = (-d.1, d.0);
-        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let along = dx * d.0 + dy * d.1;
-        let across = dx * left.0 + dy * left.1;
-        let turn = 2.0 * (across.abs() / along).atan();
-        // the tangent length of each arc: half the distance along, over 2 cos^2(turn/2)
-        let t = along / (4.0 * (turn / 2.0).cos().powi(2));
-        let side = across.signum();
-        let d2 = (
-            turn.cos() * d.0 + side * turn.sin() * left.0,
-            turn.cos() * d.1 + side * turn.sin() * left.1,
-        );
-        let k1 = (a.0 + t * d.0, a.1 + t * d.1);
-        let m = (k1.0 + t * d2.0, k1.1 + t * d2.1);
-        let k2 = (m.0 + t * d2.0, m.1 + t * d2.1);
-        self.arc(a, k1, m);
-        self.arc(m, k2, b);
+        let along = (b.0 - a.0) * d.0 + (b.1 - a.1) * d.1;
+        let s = 0.5 * along;
+        let c1 = (a.0 + d.0 * s, a.1 + d.1 * s);
+        let c2 = (b.0 - d.0 * s, b.1 - d.1 * s);
+        let (a, b) = (self.node(a), self.node(b));
+        self.edges.push(Edge {
+            a,
+            b,
+            curve: Some(Curve::Cubic(c1, c2)),
+        });
     }
 
-    /// A siding that bows out from a straight road: from `a` to `b` through the
-    /// apex `m`, where the robot drives parallel to the road (two arcs).
-    fn bow(&mut self, a: P, m: P, b: P) {
-        // the apex is beside the middle of the road between a and b; the tangents at
-        // a and b meet the line through the apex (parallel to the road) at the
-        // distance that makes the two tangents of an arc equally long
+    /// Take out the pieces of road that two loading lanes replace (one on each side of
+    /// the road, see `shared_roads`): between two rows of racks there are then two lanes
+    /// that run the same way, not the road and a lane on each side.
+    fn remove_shared_roads(&mut self) {
+        for (a, b) in std::mem::take(&mut self.shared_roads) {
+            if let (Some(ia), Some(ib)) = (self.find(a), self.find(b)) {
+                self.edges
+                    .retain(|e| !(e.curve.is_none() && e.a == ia && e.b == ib));
+            }
+        }
+    }
+
+    /// A loading lane beside a straight road: from `a` it leaves the road (an S-curve),
+    /// runs through the `stops` (straight, parallel to the road) and rejoins the road at
+    /// `b` (an S-curve). With one stop it is a `bow`.
+    fn loading_lane(&mut self, a: P, stops: &[P], b: P) {
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
         let length = dx.hypot(dy);
         let u = (dx / length, dy / length);
-        let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
-        let off = (m.0 - mid.0, m.1 - mid.1);
-        let side = off.0.hypot(off.1);
-        let half = length / 2.0;
-        let d = (half * half - side * side) / (2.0 * half);
-        let k1 = (a.0 + u.0 * d + off.0, a.1 + u.1 * d + off.1);
-        let k2 = (b.0 - u.0 * d + off.0, b.1 - u.1 * d + off.1);
-        self.arc(a, k1, m);
-        self.arc(m, k2, b);
+        self.s_link(a, stops[0], u);
+        for pair in stops.windows(2) {
+            self.line(pair[0], pair[1]);
+        }
+        self.s_link(stops[stops.len() - 1], b, u);
+    }
+
+    /// A siding that bows out from a straight road: from `a` to `b` through the
+    /// apex `m`, where the robot drives parallel to the road. Two S-shaped links, so
+    /// that the siding leaves the road and rejoins it in the direction of the road:
+    /// there is no corner, and a robot that cannot turn on the spot can drive it.
+    fn bow(&mut self, a: P, m: P, b: P) {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let length = dx.hypot(dy);
+        let u = (dx / length, dy / length);
+        self.s_link(a, m, u);
+        self.s_link(m, b, u);
+    }
+
+    /// Cut every straight edge longer than `max` into equal pieces with a node
+    /// between them. The baseline gives an edge to one robot at a time, so a long edge
+    /// is one robot long: with shorter edges the robots can follow each other.
+    ///
+    /// No new node is put within `MIN_TANGENT` of the corner of an arc (also one
+    /// whose corner node was taken out): a robot that waits on it would be next to the
+    /// arc.
+    fn split_long_edges(&mut self, max: f64) {
+        // the corner of every arc there is (the arcs of the layout, the turn arcs, also
+        // those whose corner node was taken out)
+        let corners: Vec<P> = self
+            .edges
+            .iter()
+            .filter_map(|e| match e.curve {
+                Some(Curve::Arc(corner, _)) => Some(corner),
+                _ => None,
+            })
+            .collect();
+        let edges = std::mem::take(&mut self.edges);
+        for e in edges {
+            let (a, b) = (self.nodes[e.a], self.nodes[e.b]);
+            let length = (b.0 - a.0).hypot(b.1 - a.1);
+            if e.curve.is_some() || length <= max {
+                self.edges.push(e);
+                continue;
+            }
+            let pieces = (length / max).ceil() as usize;
+            let mut from = e.a;
+            for k in 1..pieces {
+                let f = k as f64 / pieces as f64;
+                let at = (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f);
+                if corners
+                    .iter()
+                    .any(|c| (c.0 - at.0).hypot(c.1 - at.1) < MIN_TANGENT)
+                {
+                    continue;
+                }
+                let to = self.node(at);
+                self.edges.push(Edge {
+                    a: from,
+                    b: to,
+                    curve: None,
+                });
+                from = to;
+            }
+            self.edges.push(Edge {
+                a: from,
+                b: e.b,
+                curve: None,
+            });
+        }
     }
 
     /// At every turn between two straight roads (a road that ends on another, a
@@ -318,7 +449,29 @@ impl Net {
             outs[e.a].push(e.b);
             ins[e.b].push(e.a);
         }
+        // does a turn (that gets an arc) happen at this node? A road piece needs room
+        // for the arc at its far end only if it does
+        let turns_at = |n: usize| {
+            let p = self.nodes[n];
+            ins[n].iter().any(|&a| {
+                outs[n].iter().any(|&b| {
+                    let (pa, pb) = (self.nodes[a], self.nodes[b]);
+                    let (li, lo) = (
+                        (p.0 - pa.0).hypot(p.1 - pa.1),
+                        (pb.0 - p.0).hypot(pb.1 - p.1),
+                    );
+                    if li < 1e-9 || lo < 1e-9 {
+                        return false;
+                    }
+                    let c = ((p.0 - pa.0) * (pb.0 - p.0) + (p.1 - pa.1) * (pb.1 - p.1)) / (li * lo);
+                    (25f64.to_radians()..=100f64.to_radians()).contains(&c.clamp(-1.0, 1.0).acos())
+                })
+            })
+        };
+        let turning: Vec<bool> = (0..self.nodes.len()).map(turns_at).collect();
         let mut arcs: Vec<(P, P, P)> = Vec::new();
+        // (corner node, the node a road comes from, the node it goes on to) for every arc
+        let mut arced: HashSet<(usize, usize, usize)> = HashSet::new();
         for n in 0..self.nodes.len() {
             let p = self.nodes[n];
             for &a in &ins[n] {
@@ -341,10 +494,38 @@ impl Net {
                     if !(25f64.to_radians()..=100f64.to_radians()).contains(&turn) {
                         continue;
                     }
-                    let t = radius * (turn / 2.0).tan();
-                    if len_in < 2.0 * t + 0.5 || len_out < 2.0 * t + 0.5 {
-                        continue;
+                    // (a shallow turn gets a bigger radius: the arc starts at least
+                    // `MIN_TANGENT` from the corner, so that a robot that waits at the
+                    // node where the arc starts is not in the junction)
+                    let mut t = (radius * (turn / 2.0).tan()).max(MIN_TANGENT);
+                    // the biggest arc the roads have room for (`ARC_RADII`, biggest first):
+                    // it passes further from the corner node, where robots wait
+                    for r in ARC_RADII {
+                        let wide = (r * (turn / 2.0).tan()).max(MIN_TANGENT);
+                        let far = |on: bool| if on { wide } else { 0.0 };
+                        if len_in >= wide + far(turning[a]) + 0.5
+                            && len_out >= wide + far(turning[b]) + 0.5
+                        {
+                            t = wide;
+                            break;
+                        }
                     }
+                    // (room for this arc, and for one of about the same size at the
+                    // far end if there is a turn there)
+                    let far = |on: bool| if on { t } else { 0.0 };
+                    if len_in < t + far(turning[a]) + 0.5 || len_out < t + far(turning[b]) + 0.5 {
+                        // on a narrow road (used by the small robots only) the arc may
+                        // be smaller, down to `NARROW_RADIUS`, to fit between two turns
+                        let room = |len: f64, turns: bool| {
+                            if turns { (len - 0.5) / 2.0 } else { len - 0.5 }
+                        };
+                        let fit = room(len_in, turning[a]).min(room(len_out, turning[b]));
+                        if !narrow(p) || fit / (turn / 2.0).tan() < NARROW_RADIUS {
+                            continue;
+                        }
+                        t = fit;
+                    }
+                    arced.insert((n, a, b));
                     arcs.push((
                         (p.0 - d_in.0 * t, p.1 - d_in.1 * t),
                         p,
@@ -353,10 +534,140 @@ impl Net {
                 }
             }
         }
+        // the nodes whose corner is not needed: every pair of a road in and a road
+        // out is either straight on (at most one) or has an arc
+        self.corners.clear();
+        for n in 0..self.nodes.len() {
+            let p = self.nodes[n];
+            let (mut straight, mut missing) = (0, 0);
+            for &a in &ins[n] {
+                for &b in &outs[n] {
+                    let (pa, pb) = (self.nodes[a], self.nodes[b]);
+                    let (li, lo) = (
+                        (p.0 - pa.0).hypot(p.1 - pa.1),
+                        (pb.0 - p.0).hypot(pb.1 - p.1),
+                    );
+                    let cos =
+                        ((p.0 - pa.0) * (pb.0 - p.0) + (p.1 - pa.1) * (pb.1 - p.1)) / (li * lo);
+                    if cos > 0.9999 {
+                        straight += 1;
+                    } else if !arced.contains(&(n, a, b)) {
+                        missing += 1;
+                    }
+                }
+            }
+            if straight <= 1 && missing == 0 && arced.iter().any(|&(m, _, _)| m == n) {
+                self.corners.push(n);
+            }
+        }
+        self.arc_log = arcs.clone();
         for (a, corner, b) in arcs {
             self.arc(a, corner, b);
         }
         self.split_at_nodes();
+    }
+
+    /// Take out the corner node of every junction in `corners`: the road that goes
+    /// straight on becomes one edge past the corner and the corner paths go; only the
+    /// arcs are left for the turns. A robot that waits for the next node then waits
+    /// before the junction, not on the corner next to the arcs. (A crossing of two
+    /// roads keeps its node: it is where they exclude each other.)
+    fn remove_corner_nodes(&mut self) {
+        let mut gone = vec![false; self.edges.len()];
+        let mut added: Vec<Edge> = Vec::new();
+        for &j in &self.corners {
+            let touching: Vec<usize> = (0..self.edges.len())
+                .filter(|&i| self.edges[i].a == j || self.edges[i].b == j)
+                .collect();
+            // only straight roads meet at the corner
+            if touching
+                .iter()
+                .any(|&i| self.edges[i].curve.is_some() || gone[i])
+            {
+                continue;
+            }
+            let dir = |i: usize| {
+                let e = &self.edges[i];
+                let (a, b) = (self.nodes[e.a], self.nodes[e.b]);
+                let l = (b.0 - a.0).hypot(b.1 - a.1);
+                ((b.0 - a.0) / l, (b.1 - a.1) / l)
+            };
+            let ins: Vec<usize> = touching
+                .iter()
+                .copied()
+                .filter(|&i| self.edges[i].b == j)
+                .collect();
+            let outs: Vec<usize> = touching
+                .iter()
+                .copied()
+                .filter(|&i| self.edges[i].a == j)
+                .collect();
+            for &i in &touching {
+                gone[i] = true;
+            }
+            for &i in &ins {
+                for &o in &outs {
+                    let (di, d_o) = (dir(i), dir(o));
+                    if di.0 * d_o.0 + di.1 * d_o.1 > 0.9999 {
+                        added.push(Edge {
+                            a: self.edges[i].a,
+                            b: self.edges[o].b,
+                            curve: None,
+                        });
+                    }
+                }
+            }
+        }
+        let old = std::mem::take(&mut self.edges);
+        self.edges = old
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !gone[*i])
+            .map(|(_, e)| e)
+            .chain(added)
+            .collect();
+        self.compact();
+        // the arcs at the junctions that kept their corner node
+        let kept: Vec<(P, P)> = self
+            .arc_log
+            .iter()
+            .filter(|&&(_, corner, _)| self.find(corner).is_some())
+            .map(|&(start, _, end)| (start, end))
+            .collect();
+        self.crossing_arcs = kept.into_iter().map(|(s, e)| arc_key(s, e)).collect();
+    }
+
+    /// Drop the nodes that no edge uses, and renumber the rest.
+    fn compact(&mut self) {
+        let mut used = vec![false; self.nodes.len()];
+        for e in &self.edges {
+            used[e.a] = true;
+            used[e.b] = true;
+        }
+        let mut new_index = vec![usize::MAX; self.nodes.len()];
+        let mut nodes = Vec::new();
+        for (i, p) in self.nodes.iter().enumerate() {
+            if used[i] {
+                new_index[i] = nodes.len();
+                nodes.push(*p);
+            }
+        }
+        for e in &mut self.edges {
+            e.a = new_index[e.a];
+            e.b = new_index[e.b];
+        }
+        self.index = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                (
+                    ((p.0 * 100.0).round() as i64, (p.1 * 100.0).round() as i64),
+                    i,
+                )
+            })
+            .collect();
+        self.nodes = nodes;
+        self.corners.clear();
     }
 
     /// Cut every straight edge at the nodes that lie on it (where another road
@@ -415,9 +726,14 @@ fn edge_middle(net: &Net, e: &Edge) -> P {
     let (a, b) = (net.nodes[e.a], net.nodes[e.b]);
     match e.curve {
         // a rational quadratic Bezier at t = 1/2
-        Some((c, w)) => (
+        Some(Curve::Arc(c, w)) => (
             (a.0 + 2.0 * w * c.0 + b.0) / (2.0 + 2.0 * w),
             (a.1 + 2.0 * w * c.1 + b.1) / (2.0 + 2.0 * w),
+        ),
+        // a cubic Bezier at t = 1/2
+        Some(Curve::Cubic(c1, c2)) => (
+            (a.0 + 3.0 * c1.0 + 3.0 * c2.0 + b.0) / 8.0,
+            (a.1 + 3.0 * c1.1 + 3.0 * c2.1 + b.1) / 8.0,
         ),
         None => ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0),
     }
@@ -436,11 +752,319 @@ fn narrow(p: P) -> bool {
 /// The robot types that may drive an edge.
 fn edge_types(net: &Net, e: &Edge) -> Vec<Value> {
     let narrow = narrow(edge_middle(net, e));
+    // an arc at a crossing is for the three-wheel robots only
+    let crossing = net
+        .crossing_arcs
+        .contains(&arc_key(net.nodes[e.a], net.nodes[e.b]));
     TYPES
         .iter()
         .filter(|t| !(narrow && WIDE.contains(t)))
+        .filter(|t| !crossing || **t == "T3")
         .map(|s| json!({"manufacturer": "ACME", "seriesName": s}))
         .collect()
+}
+
+/// The fleet: serial prefix, factsheet, seconds to pick or drop, number of robots,
+/// and whether it may use the narrow roads (the order is the order in the scenario).
+const FLEET: [(&str, &str, f64, usize); 5] = [
+    ("Y", "forklift.factsheet.json", 8.0, 30),
+    ("X", "diff_robot.factsheet.json", 5.0, 30),
+    ("T", "three_wheel.factsheet.json", 6.0, 14),
+    ("O", "omni_robot.factsheet.json", 4.0, 24),
+    ("C", "small_robot.factsheet.json", 3.0, 14),
+];
+
+/// The robots start at least this far apart (m).
+const START_GAP: f64 = 6.0;
+
+/// Where each group of the fleet starts (node numbers): at least `START_GAP` apart,
+/// not at a station, spread over the hall. A robot starts heading east; the
+/// three-wheel robots cannot turn on the spot, so they start only where every road
+/// leaving the node runs east. The forklifts and the three-wheel robots do not
+/// start on the narrow roads.
+fn start_nodes(net: &Net) -> Vec<Vec<usize>> {
+    // the stops in pockets, bays and stalls (off the road) and the stops on the
+    // aisles of the labyrinths (on the road)
+    let nodes_of = |on_aisle: bool| -> HashSet<usize> {
+        net.stations
+            .iter()
+            .filter(|s| (s.id.starts_with("LN") || s.id.starts_with("LV")) == on_aisle)
+            .flat_map(|s| s.points.iter().filter_map(|&p| net.find(p)))
+            .collect()
+    };
+    let (pockets, aisle_stops) = (nodes_of(false), nodes_of(true));
+    // the direction in which each road leaves each node
+    let mut leaving: Vec<Vec<f64>> = vec![Vec::new(); net.nodes.len()];
+    for e in &net.edges {
+        let a = net.nodes[e.a];
+        let towards = match e.curve {
+            Some(Curve::Arc(c, _)) | Some(Curve::Cubic(c, _)) => c,
+            None => net.nodes[e.b],
+        };
+        leaving[e.a].push((towards.1 - a.1).atan2(towards.0 - a.0));
+    }
+    // a fixed shuffle, so that the robots are spread and the result does not change
+    let mut order: Vec<usize> = (0..net.nodes.len()).collect();
+    order.sort_by_key(|&n| (n as u64).wrapping_mul(2_654_435_761) % 4_294_967_296);
+
+    let mut taken: Vec<P> = Vec::new();
+    let mut result = vec![Vec::new(); FLEET.len()];
+    // the three-wheel robots first: they have the fewest places
+    for k in [2, 0, 1, 3, 4] {
+        let (prefix, _, _, count) = FLEET[k];
+        let wide = prefix == "Y" || prefix == "T";
+        // first the places off the road (so that a robot that waits for its first job
+        // does not block a road), then the roads
+        for (pass, &n) in [true, false]
+            .iter()
+            .flat_map(|&pass| order.iter().map(move |n| (pass, n)))
+        {
+            if result[k].len() == count {
+                break;
+            }
+            let p = net.nodes[n];
+            let east = leaving[n].iter().all(|a| a.abs() < 0.44);
+            let fits = !leaving[n].is_empty()
+                && pockets.contains(&n) == pass
+                && !aisle_stops.contains(&n)
+                && !(wide && narrow(p))
+                && (prefix != "T" || east)
+                && taken
+                    .iter()
+                    .all(|q| (q.0 - p.0).hypot(q.1 - p.1) >= START_GAP);
+            if fits {
+                taken.push(p);
+                result[k].push(n);
+            }
+        }
+        assert_eq!(
+            result[k].len(),
+            count,
+            "not enough start nodes for {prefix}"
+        );
+    }
+    result
+}
+
+/// The scenario file `warehouse2.toml`: the fleet, jobs between all the stations but
+/// the parking, and the commands that make the video.
+fn scenario(net: &Net) -> String {
+    let starts = start_nodes(net);
+    let robots: usize = FLEET.iter().map(|f| f.3).sum();
+    let mut s = String::new();
+    let _ = write!(
+        s,
+        "# The big warehouse (240 m x 140 m): {robots} robots of five types, jobs between\n\
+         # shelf, rack and bay stations. THIS FILE IS GENERATED (with the layout and the\n\
+         # geometry) by\n\
+         #   cargo run --release -p botsim-export --example gen_warehouse2\n\
+         # so change the fleet there (the node numbers change with the layout).\n\
+         #\n\
+         # Robot types (see the factsheets): X1 carrier, Y2 forklift, T3 three-wheel,\n\
+         # O4 omnidirectional, C5 small. The forklift and the three-wheel robot may not use\n\
+         # the narrow roads (the labyrinths and the lanes along the walls); the others may.\n\
+         # The three-wheel robots cannot turn on the spot: they start where the road runs east.\n\
+         #\n\
+         # A 10 minute video (1920x1080, 30 fps, 18000 frames) from the repository root; the\n\
+         # run is 6000 simulated seconds, shown at speed 10: bash scenarios/warehouse2_video.sh\n\
+         name = \"warehouse2\"\n\
+         seed = 29\n\
+         duration = 6000.0\n\
+         time_step = 0.05\n\
+         start_time = 2026-11-22T10:00:00Z\n\
+         lif = \"warehouse2.lif.json\"\n\
+         deadlock_timeout = 20.0\n"
+    );
+    for (k, (prefix, factsheet, action, _)) in FLEET.iter().enumerate() {
+        let _ = write!(
+            s,
+            "\n[[robot]]\nmanufacturer = \"ACME\"\nserial_prefix = \"{prefix}\"\n\
+             factsheet = \"{factsheet}\"\nstart_nodes = [\n"
+        );
+        for row in starts[k].chunks(8) {
+            let line: Vec<String> = row.iter().map(|&n| format!("\"{}\"", id(n))).collect();
+            let _ = writeln!(s, "    {},", line.join(", "));
+        }
+        let _ = write!(
+            s,
+            "]\naction_time = 1.0\n\n[robot.action_times]\npick = {action:?}\ndrop = {action:?}\n"
+        );
+    }
+    let stations: Vec<String> = net
+        .stations
+        .iter()
+        .filter(|st| st.id != "PARK")
+        .map(|st| format!("\"{}\"", st.id))
+        .collect();
+    let _ = write!(
+        s,
+        "\n[jobs]\nrate_per_hour = {:?}\n# every station but the parking\nstations = [\n",
+        robots as f64 * 10.0
+    );
+    for row in stations.chunks(8) {
+        let _ = writeln!(s, "    {},", row.join(", "));
+    }
+    s.push_str(
+        "]\n\n[disturbances]\nenabled = true\nspeed_variation = 0.05\naction_variation = 0.2\n\
+         stops_per_hour = 12.0\nstop_seconds_min = 5.0\nstop_seconds_max = 15.0\n",
+    );
+    s
+}
+
+/// What a three-wheel robot (it cannot turn on the spot: the next road must start in
+/// the direction the last one ended) can reach from each of its start nodes,
+/// starting east: the number of nodes and stations, and where the roads do not join
+/// smoothly (the places where it gets stuck).
+fn three_wheel_report(graph: &Graph, net: &Net, starts: &[usize]) {
+    let (m, s) = ("ACME", "T3");
+    let kin = Kinematics::ThreeWheel;
+    let mut reached_edges: HashSet<usize> = HashSet::new();
+    let mut todo: Vec<usize> = Vec::new();
+    for &n in starts {
+        let Some(idx) = graph.node_idx(&id(n)) else {
+            continue;
+        };
+        for &e in graph.out_edges(idx) {
+            if graph.edges[e].props_for(m, s).is_some()
+                && graph.can_start(0.0, None, e, kin, m, s)
+                && reached_edges.insert(e)
+            {
+                todo.push(e);
+            }
+        }
+    }
+    let mut stuck: HashMap<usize, usize> = HashMap::new();
+    while let Some(e) = todo.pop() {
+        let end = graph.edges[e].end;
+        let mut any = false;
+        for &next in graph.out_edges(end) {
+            if graph.edges[next].props_for(m, s).is_none() {
+                continue;
+            }
+            if graph.can_follow(e, next, kin, m, s) {
+                any = true;
+                if reached_edges.insert(next) {
+                    todo.push(next);
+                }
+            }
+        }
+        if !any {
+            *stuck.entry(end).or_default() += 1;
+        }
+    }
+    let nodes: HashSet<usize> = reached_edges
+        .iter()
+        .flat_map(|&e| [graph.edges[e].start, graph.edges[e].end])
+        .collect();
+    let served = net
+        .stations
+        .iter()
+        .filter(|st| {
+            st.points
+                .iter()
+                .filter_map(|&p| net.find(p))
+                .filter_map(|n| graph.node_idx(&id(n)))
+                .any(|n| nodes.contains(&n))
+        })
+        .count();
+    // where it can also come back from: the biggest strongly connected set of edges
+    // (an edge leads on to another edge only if the robot can follow it)
+    let edges: Vec<usize> = reached_edges.iter().copied().collect();
+    let pos: HashMap<usize, usize> = edges.iter().enumerate().map(|(i, &e)| (e, i)).collect();
+    let mut succ: Vec<Vec<usize>> = vec![Vec::new(); edges.len()];
+    let mut pred: Vec<Vec<usize>> = vec![Vec::new(); edges.len()];
+    for (i, &e) in edges.iter().enumerate() {
+        for &next in graph.out_edges(graph.edges[e].end) {
+            if let Some(&j) = pos.get(&next)
+                && graph.can_follow(e, next, kin, m, s)
+            {
+                succ[i].push(j);
+                pred[j].push(i);
+            }
+        }
+    }
+    // Kosaraju, without recursion
+    let mut order: Vec<usize> = Vec::new();
+    let mut seen = vec![false; edges.len()];
+    for root in 0..edges.len() {
+        if seen[root] {
+            continue;
+        }
+        seen[root] = true;
+        let mut stack = vec![(root, 0usize)];
+        while let Some((v, k)) = stack.pop() {
+            if k < succ[v].len() {
+                stack.push((v, k + 1));
+                let w = succ[v][k];
+                if !seen[w] {
+                    seen[w] = true;
+                    stack.push((w, 0));
+                }
+            } else {
+                order.push(v);
+            }
+        }
+    }
+    let mut component = vec![usize::MAX; edges.len()];
+    let mut sizes: Vec<usize> = Vec::new();
+    for &root in order.iter().rev() {
+        if component[root] != usize::MAX {
+            continue;
+        }
+        let id = sizes.len();
+        sizes.push(0);
+        let mut stack = vec![root];
+        component[root] = id;
+        while let Some(v) = stack.pop() {
+            sizes[id] += 1;
+            for &w in &pred[v] {
+                if component[w] == usize::MAX {
+                    component[w] = id;
+                    stack.push(w);
+                }
+            }
+        }
+    }
+    let main = (0..sizes.len()).max_by_key(|&c| sizes[c]).unwrap_or(0);
+    let main_nodes: HashSet<usize> = (0..edges.len())
+        .filter(|&i| component[i] == main)
+        .flat_map(|i| [graph.edges[edges[i]].start, graph.edges[edges[i]].end])
+        .collect();
+    let back = net
+        .stations
+        .iter()
+        .filter(|st| {
+            st.points
+                .iter()
+                .filter_map(|&p| net.find(p))
+                .filter_map(|n| graph.node_idx(&id(n)))
+                .any(|n| main_nodes.contains(&n))
+        })
+        .count();
+    println!(
+        "three-wheel robots can also come back from {} of {} edges (biggest loop: {} edges, {} stations in it)",
+        sizes.get(main).copied().unwrap_or(0),
+        edges.len(),
+        sizes.get(main).copied().unwrap_or(0),
+        back
+    );
+    let mut dead: Vec<(usize, usize)> = stuck.into_iter().collect();
+    dead.sort_by_key(|&(n, c)| (std::cmp::Reverse(c), n));
+    println!(
+        "three-wheel robots: {} of {} edges, {} of {} stations reachable; stuck at {} nodes, e.g. {:?}",
+        reached_edges.len(),
+        graph.edges.len(),
+        served,
+        net.stations.len(),
+        dead.len(),
+        dead.iter()
+            .take(6)
+            .map(|&(n, _)| {
+                let node = &graph.nodes[n];
+                (node.id.clone(), node.x.round(), node.y.round())
+            })
+            .collect::<Vec<_>>()
+    );
 }
 
 /// The stations that a robot type can serve: those with an interaction node that it
@@ -666,7 +1290,15 @@ fn west_row_runs_east(y: f64) -> bool {
     WEST_Y
         .iter()
         .position(|&row| (row - y).abs() < 1e-9)
-        .is_some_and(|i| i.is_multiple_of(2))
+        .is_some_and(lane_east)
+}
+
+/// The direction of road number `i` of a grid, counted from the ring: the roads run in
+/// pairs (east, east, west, west, ...), so that not every block of the grid is a closed
+/// loop (a block is a loop if the roads on its two sides run opposite ways). For the
+/// columns: north, north, south, south, ... (`lane_east` is then "north").
+fn lane_east(i: usize) -> bool {
+    (i / 2).is_multiple_of(2)
 }
 
 /// The cells of the west grid are between these lines (the ring at the sides).
@@ -715,10 +1347,28 @@ struct Pocket {
     /// What the station is called, and what it is (`rack`, `shelf`).
     label: &'static str,
     kind: &'static str,
+    /// Where the loading lane leaves the road and where it rejoins it.
     a: P,
     b: P,
-    apex: P,
+    /// The stops along the lane (parallel to the road, 1.8 m beside it), in the order the
+    /// robots drive; at least one. Any of them serves the whole station.
+    stops: Vec<P>,
 }
+
+/// Are the two loading lanes between two rows of racks the road (joined at both ends and by
+/// crossovers), instead of a road with a lane on each side (three ways side by side)?
+const SHARED_LANES: bool = true;
+
+/// The shortest distance between two stops (m) for a crossover between the lanes: the
+/// lanes are 3.6 m apart, a shorter S-curve would be too sharp.
+const CROSSOVER_MIN_GAP: f64 = 5.5;
+
+/// How far from the junctions at the ends of a cell a loading lane begins and ends (m): room
+/// for the turn arcs.
+const LANE_MARGIN: f64 = 5.0;
+
+/// The distance between the stops of a loading lane (m): a forklift is 2.4 m long.
+const STOP_GAP: f64 = 4.0;
 
 /// Where along the shelving of the lanes at the south and north walls the stops are (x).
 const WALL_STOPS_X: [f64; 3] = [70.0, 110.0, 150.0];
@@ -743,7 +1393,7 @@ fn shelf_pockets() -> Vec<Pocket> {
                 kind: "shelf",
                 a,
                 b,
-                apex: (xc, y + bulge),
+                stops: vec![(xc, y + bulge)],
             });
         }
     }
@@ -765,25 +1415,48 @@ fn cell_pockets(
     runs_east: fn(f64) -> bool,
 ) {
     let cx = (xl + xr) / 2.0;
+    // the loading lane runs along the rack face between the two junctions (5 m clear of
+    // each, for the arcs); in a short cell it is only the one stop in the middle
+    let (lo, hi) = if xr - xl - 2.0 * LANE_MARGIN >= 8.0 {
+        (xl + LANE_MARGIN, xr - LANE_MARGIN)
+    } else {
+        (cx - 4.0, cx + 4.0)
+    };
+    // the stops, STOP_GAP apart, evenly between the two S-curves (4 m long each)
+    let room = hi - lo - 8.0;
+    let n = (room / STOP_GAP).floor() as usize + 1;
+    let xs: Vec<f64> = if n == 1 {
+        vec![cx]
+    } else {
+        (0..n)
+            .map(|k| lo + 4.0 + room * k as f64 / (n - 1) as f64)
+            .collect()
+    };
     for (y, bulge) in [(yb, 1.8), (yt, -1.8)] {
         let ring = (y - RING).abs() < 1e-9 || (y - (H - RING)).abs() < 1e-9;
-        let (lo, hi) = (cx - 4.0, cx + 4.0);
-        // not in the corners of the ring road
-        if ring && (lo < RING + CORNER + 1.0 || hi > W - RING - CORNER - 1.0) {
+        // not in the corners of the ring road, and not where a lane along the wall
+        // branches off it (4 m clear of the branch, for the arc)
+        let at_lane = LANES_X.iter().any(|&x| x > lo - 4.0 && x < hi + 4.0);
+        if ring && (lo < RING + CORNER + 1.0 || hi > W - RING - CORNER - 1.0 || at_lane) {
             continue;
         }
-        let (a, b) = if runs_east(y) {
+        let east = runs_east(y);
+        let (a, b) = if east {
             ((lo, y), (hi, y))
         } else {
             ((hi, y), (lo, y))
         };
+        let mut stops: Vec<P> = xs.iter().map(|&x| (x, y + bulge)).collect();
+        if !east {
+            stops.reverse();
+        }
         out.push(Pocket {
             station: station.into(),
             label: "Rack",
             kind: "rack",
             a,
             b,
-            apex: (cx, y + bulge),
+            stops,
         });
     }
 }
@@ -860,10 +1533,11 @@ fn build_net() -> Net {
     // the west grid: rows from the ring to the column at x = 100, east and west in
     // turns; columns from the bottom ring to the top ring, north and south in turns
     for (i, &y) in WEST_Y.iter().enumerate() {
-        road(&mut net, (x0, y), (100.0, y), i % 2 == 0);
+        road(&mut net, (x0, y), (100.0, y), lane_east(i));
     }
     for (i, &x) in WEST_X.iter().enumerate() {
-        road(&mut net, (x, y1), (x, y0), i % 2 == 1);
+        // (south = from the top ring to the bottom ring)
+        road(&mut net, (x, y1), (x, y0), !lane_east(i));
         for &y in &WEST_Y {
             net.node((x, y));
         }
@@ -888,7 +1562,7 @@ fn build_net() -> Net {
         road(&mut net, (from, y), (x1, y), east);
     }
     for (i, &x) in EAST_X.iter().enumerate() {
-        road(&mut net, (x, 84.0), (x, y0), i % 2 == 1);
+        road(&mut net, (x, 84.0), (x, y0), !lane_east(i));
         for &(y, _) in &EAST_ROWS {
             net.node((x, y));
         }
@@ -968,22 +1642,20 @@ fn build_net() -> Net {
     }
 
     // bays on curved one-way sidings that rejoin the ring further on: west (the left
-    // side runs south) from `a` down to `a - 10`, east (it runs north) up to `a + 10`
-    for (n, a) in [111.0, 95.0, 77.0, 59.0, 43.0].into_iter().enumerate() {
-        net.bow((x0, a), (x0 - 3.0, a - 5.0), (x0, a - 10.0));
+    // side runs south) from `a` down to `a - 8`, east (it runs north) up to `a + 8`;
+    // both ends are at least 4 m from the roads that meet the ring, so that the arcs
+    // of 3.5 m fit there
+    for (n, a) in WEST_BAYS.into_iter().enumerate() {
+        net.bow((x0, a), (x0 - 3.0, a - 4.0), (x0, a - 8.0));
         let name = format!("Goods in {}", n + 1);
         net.add_station(
             &format!("GOODS-IN-{}", n + 1),
             &name,
             "bay",
-            (x0 - 3.0, a - 5.0),
+            (x0 - 3.0, a - 4.0),
         );
     }
-    // (the upper two are 8 m long: the straight part of the ring ends at y = 120)
-    for (n, (a, length)) in [(33.0, 10.0), (100.0, 8.0), (110.0, 8.0)]
-        .into_iter()
-        .enumerate()
-    {
+    for (n, (a, length)) in EAST_BAYS.into_iter().enumerate() {
         net.bow((x1, a), (x1 + 3.0, a + length / 2.0), (x1, a + length));
         let name = format!("Goods out {}", n + 1);
         let apex = (x1 + 3.0, a + length / 2.0);
@@ -992,23 +1664,71 @@ fn build_net() -> Net {
 
     // a stop in front of every rack block and every row of shelving, in a pocket off
     // the road (see `rack_pockets` and `shelf_pockets`)
-    for p in all_pockets() {
-        net.bow(p.a, p.apex, p.b);
+    let pockets = all_pockets();
+    for p in &pockets {
+        net.loading_lane(p.a, &p.stops, p.b);
         let name = format!("{} {}", p.label, p.station);
-        net.add_station(&p.station, &name, p.kind, p.apex);
+        for &stop in &p.stops {
+            net.add_station(&p.station, &name, p.kind, stop);
+        }
+    }
+    // where the racks on both sides of a road have a loading lane, the two lanes are the
+    // road: no road piece between them, and crossovers from one lane to the other (a zigzag,
+    // so that no two cross) wherever the stops are far enough apart for a gentle S-curve
+    if SHARED_LANES {
+        let key = |p: &Pocket| {
+            (
+                cm(p.a).1,
+                cm(p.a).0.min(cm(p.b).0),
+                cm(p.a).0.max(cm(p.b).0),
+            )
+        };
+        for p in &pockets {
+            let Some(q) = pockets.iter().find(|q| {
+                key(q) == key(p) && (q.stops[0].1 - q.a.1) * (p.stops[0].1 - p.a.1) < 0.0
+            }) else {
+                continue;
+            };
+            // handle each pair once: from the lane on the side of the road with y above it
+            if p.stops[0].1 < p.a.1 || p.stops.len() != q.stops.len() {
+                continue;
+            }
+            net.shared_roads.push((p.a, p.b));
+            let (dx, dy) = (p.b.0 - p.a.0, p.b.1 - p.a.1);
+            let length = dx.hypot(dy);
+            let u = (dx / length, dy / length);
+            let n = p.stops.len();
+            let gap = (p.stops[1.min(n - 1)].0 - p.stops[0].0)
+                .hypot(p.stops[1.min(n - 1)].1 - p.stops[0].1);
+            if n >= 2 && gap >= CROSSOVER_MIN_GAP {
+                for k in 0..n - 1 {
+                    let (from, to) = if k % 2 == 0 {
+                        (q.stops[k], p.stops[k + 1])
+                    } else {
+                        (p.stops[k], q.stops[k + 1])
+                    };
+                    net.s_link(from, to, u);
+                }
+            }
+        }
     }
 
     // narrow lanes along the south wall (east) and the north wall (west)
-    net.line((40.0, y0), (40.0, 4.0));
-    net.line((40.0, 4.0), (200.0, 4.0));
-    net.line((200.0, 4.0), (200.0, y0));
-    net.line((200.0, y1), (200.0, H - 4.0));
-    net.line((200.0, H - 4.0), (40.0, H - 4.0));
-    net.line((40.0, H - 4.0), (40.0, y1));
+    let [lw, le] = LANES_X;
+    net.line((lw, y0), (lw, 4.0));
+    net.line((lw, 4.0), (le, 4.0));
+    net.line((le, 4.0), (le, y0));
+    net.line((le, y1), (le, H - 4.0));
+    net.line((le, H - 4.0), (lw, H - 4.0));
+    net.line((lw, H - 4.0), (lw, y1));
 
     net.split_at_nodes();
+    net.remove_shared_roads();
     // every turn between straight roads gets an arc of 3.5 m radius
     net.add_turn_arcs(TURN_RADIUS);
+    net.remove_corner_nodes();
+    // and no edge is longer than `MAX_EDGE`
+    net.split_long_edges(MAX_EDGE);
     net
 }
 
@@ -1053,22 +1773,42 @@ fn lif(net: &Net) -> Value {
     let edges: Vec<Value> = net
         .edges
         .iter()
+        .filter(|e| {
+            CROSSING_ARCS
+                || !net
+                    .crossing_arcs
+                    .contains(&arc_key(net.nodes[e.a], net.nodes[e.b]))
+        })
         .map(|e| {
             let mut props = json!({
                 "mobileRobotTypes": edge_types(net, e),
                 "orientationType": "TANGENTIAL",
                 "mobileRobotOrientations": [0.0],
             });
-            if let Some((corner, weight)) = e.curve {
-                let (a, b) = (net.nodes[e.a], net.nodes[e.b]);
-                props["trajectory"] = json!({
-                    "degree": 2,
-                    "controlPoints": [
-                        {"x": a.0, "y": a.1},
-                        {"x": corner.0, "y": corner.1, "weight": weight},
-                        {"x": b.0, "y": b.1},
-                    ],
-                });
+            let (a, b) = (net.nodes[e.a], net.nodes[e.b]);
+            match e.curve {
+                Some(Curve::Arc(corner, weight)) => {
+                    props["trajectory"] = json!({
+                        "degree": 2,
+                        "controlPoints": [
+                            {"x": a.0, "y": a.1},
+                            {"x": corner.0, "y": corner.1, "weight": weight},
+                            {"x": b.0, "y": b.1},
+                        ],
+                    });
+                }
+                Some(Curve::Cubic(c1, c2)) => {
+                    props["trajectory"] = json!({
+                        "degree": 3,
+                        "controlPoints": [
+                            {"x": a.0, "y": a.1},
+                            {"x": c1.0, "y": c1.1},
+                            {"x": c2.0, "y": c2.1},
+                            {"x": b.0, "y": b.1},
+                        ],
+                    });
+                }
+                None => {}
             }
             json!({
                 "edgeId": format!("{}-{}", id(e.a), id(e.b)),
@@ -1245,8 +1985,12 @@ fn build_geometry() -> GeometryFile {
 
     // bays: stations at the apex of each siding
     for (name, x, ys) in [
-        ("W", RING - 3.0, vec![106.0, 90.0, 72.0, 54.0, 38.0]),
-        ("E", W - RING + 3.0, vec![38.0, 104.0, 114.0]),
+        ("W", RING - 3.0, WEST_BAYS.map(|a| a - 4.0).to_vec()),
+        (
+            "E",
+            W - RING + 3.0,
+            EAST_BAYS.map(|(a, l)| a + l / 2.0).to_vec(),
+        ),
     ] {
         for (i, y) in ys.iter().enumerate() {
             s.polygon(
@@ -1274,16 +2018,15 @@ fn build_geometry() -> GeometryFile {
 
     // the stops in front of the rack blocks and the shelving: a small station square
     // at each
-    for (k, p) in all_pockets().iter().enumerate() {
+    let stops: Vec<(String, P)> = all_pockets()
+        .into_iter()
+        .flat_map(|p| p.stops.into_iter().map(move |s| (p.station.clone(), s)))
+        .collect();
+    for (k, (station, stop)) in stops.iter().enumerate() {
         s.polygon(
-            format!("stop-{}-{k}", p.station),
+            format!("stop-{station}-{k}"),
             GeometryKind::Station,
-            (
-                p.apex.0 - 0.7,
-                p.apex.1 - 0.7,
-                p.apex.0 + 0.7,
-                p.apex.1 + 0.7,
-            ),
+            (stop.0 - 0.7, stop.1 - 0.7, stop.0 + 0.7, stop.1 + 0.7),
         );
     }
 
@@ -1434,8 +2177,8 @@ fn stops_without_shelving(geometry: &GeometryFile, reach: f64) -> Vec<(String, P
     };
     all_pockets()
         .into_iter()
-        .filter(|p| distance(p.apex) > reach)
-        .map(|p| (p.station, p.apex))
+        .flat_map(|p| p.stops.into_iter().map(move |s| (p.station.clone(), s)))
+        .filter(|&(_, stop)| distance(stop) > reach)
         .collect()
 }
 
@@ -1456,6 +2199,8 @@ fn main() {
     let far = stops_without_shelving(&geometry, 2.5);
     assert!(far.is_empty(), "stops with no shelving close: {far:?}");
 
+    std::fs::write(root.join("scenarios/warehouse2.toml"), scenario(&net))
+        .expect("write the scenario");
     write(&root.join("scenarios/warehouse2.lif.json"), &lif_json);
     let geometry_json = serde_json::to_value(&geometry).expect("serializes");
     write(
@@ -1466,6 +2211,7 @@ fn main() {
     // the preview: the layout and the geometry, drawn the way the exporter does
     let lif: vdma_lif::Lif = serde_json::from_value(lif_json).expect("a valid LIF");
     let graph = Graph::from_lif(&lif).expect("a valid graph");
+    three_wheel_report(&graph, &net, &start_nodes(&net)[2]);
     let layout = LayoutLine::from_graph(&graph)
         .with_geometry(&geometry)
         .expect("the geometry fits the layout");

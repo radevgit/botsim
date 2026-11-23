@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+botsim-check = { path = "../check" }
 botsim-export = { path = "../export" }
 botsim-record = { path = "../record" }
 eframe = "0.37.0"

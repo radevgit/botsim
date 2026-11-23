@@ -179,6 +179,9 @@ pub struct World {
     deadlocks: DeadlockDetector,
     /// Who waited for whom after the last step.
     waits_for: Vec<Option<usize>>,
+    /// For a robot stopped by its protective field after the last step: the robot
+    /// in the field (the one with the lowest index if there are several).
+    field_blocker: Vec<Option<usize>>,
     /// What the controller has published for the observer.
     reservations: Vec<Reservation>,
     observer: Option<Box<dyn Observer>>,
@@ -248,6 +251,7 @@ impl World {
             stops_started: 0,
             duration_variation: None,
             waits_for: Vec::new(),
+            field_blocker: Vec::new(),
             reservations: Vec::new(),
             observer: None,
             observer_every: 1,
@@ -1061,22 +1065,40 @@ impl World {
                 .or_default()
                 .push(j);
         }
+        let states: Vec<_> = self
+            .robots
+            .iter()
+            .map(|e| e.robot.state(&self.graph, &header))
+            .collect();
+        // Who holds a node: the robot that has it released ahead of it (a reserved
+        // node, S73). The lowest index if several do.
+        let mut released_by: HashMap<&str, usize> = HashMap::new();
+        for (j, s) in states.iter().enumerate().rev() {
+            for n in s.node_states.iter().filter(|n| n.released) {
+                released_by.insert(n.node_id.as_str(), j);
+            }
+        }
         let waits_for: Vec<Option<usize>> = self
             .robots
             .iter()
             .enumerate()
             .map(|(i, e)| {
-                let state = e.robot.state(&self.graph, &header);
+                let state = &states[i];
+                // a robot stopped by its protective field waits for the robot in the
+                // field (S54, S76)
+                if e.robot.is_obstructed()
+                    && let Some(j) = self.field_blocker.get(i).copied().flatten()
+                {
+                    return Some(j);
+                }
                 let next = state.node_states.first()?;
-                // a robot stopped by its protective field because of another robot
-                // waits for that robot (S54), though its state says field violation
-                if !(is_waiting(&state) || e.robot.is_obstructed()) {
+                if !(is_waiting(state) || e.robot.is_obstructed()) {
                     return None;
                 }
                 let node = &self.graph.nodes[self.graph.node_idx(&next.node_id)?];
                 // the robot with the lowest index on the node (within the tolerance)
                 let (cx, cy) = (cell(node.x), cell(node.y));
-                (-1..=1)
+                let standing = (-1..=1)
                     .flat_map(|dx| (-1..=1).map(move |dy| (dx, dy)))
                     .flat_map(|(dx, dy)| {
                         by_cell
@@ -1090,7 +1112,14 @@ impl World {
                             && (poses[j].x - node.x).hypot(poses[j].y - node.y)
                                 <= START_NODE_TOLERANCE
                     })
-                    .min()
+                    .min();
+                // else the node is reserved, though empty: its holder has it released
+                standing.or_else(|| {
+                    released_by
+                        .get(next.node_id.as_str())
+                        .copied()
+                        .filter(|&j| j != i)
+                })
             })
             .collect();
         self.deadlocks.observe(self.tick, &waits_for);
@@ -1179,10 +1208,11 @@ impl World {
 
         // Protective fields (S54), with the same index and bodies: a robot whose
         // field meets another robot's body brakes in the next step.
+        self.field_blocker = vec![None; self.robots.len()];
         if self.safety_stop {
             for i in 0..self.robots.len() {
                 let field = self.robots[i].robot.protective_field(self.dt);
-                let blocked = match (field, &bodies[i]) {
+                let blocker = match (field, &bodies[i]) {
                     (Some(f), Some((map, _))) => {
                         let r = orect_bounding_rect(&f);
                         self.broad.query_intersecting(
@@ -1193,16 +1223,20 @@ impl World {
                             &mut hits,
                         );
                         let field = Body::Rect(f);
-                        hits.iter().map(|&h| robot_of[h]).any(|j| {
-                            j != i
-                                && bodies[j]
-                                    .as_ref()
-                                    .is_some_and(|(m, b)| m == map && overlap(&field, b))
-                        })
+                        hits.iter()
+                            .map(|&h| robot_of[h])
+                            .filter(|&j| {
+                                j != i
+                                    && bodies[j]
+                                        .as_ref()
+                                        .is_some_and(|(m, b)| m == map && overlap(&field, b))
+                            })
+                            .min()
                     }
-                    _ => false,
+                    _ => None,
                 };
-                self.robots[i].robot.set_obstructed(blocked);
+                self.field_blocker[i] = blocker;
+                self.robots[i].robot.set_obstructed(blocker.is_some());
             }
         }
     }

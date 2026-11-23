@@ -81,18 +81,19 @@ impl Clock {
         Ok(Clock { font })
     }
 
-    /// The words: `t = 100.0 s`.
+    /// The words: `100.0 s`.
     pub fn text(seconds: f64) -> String {
-        format!("t = {seconds:.1} s")
+        format!("{seconds:.1} s")
     }
 
     /// The plate of the clock for an image of this height: `(x, y, width,
-    /// height)` in pixels, in the top-left corner.
-    pub fn area(&self, image_height: u32, seconds: f64) -> (f32, f32, f32, f32) {
+    /// height)` in pixels, at the top, its left edge at `left` (pixels from the left
+    /// of the image; not nearer to the image edge than the margin).
+    pub fn area(&self, left: f32, image_height: u32, seconds: f64) -> (f32, f32, f32, f32) {
         let size = (image_height as f32 * TEXT_SIZE).max(6.0);
         let (w, h) = self.plate_size(&Clock::text(seconds), size);
         let margin = image_height as f32 * MARGIN;
-        (margin, margin, w, h)
+        (left.max(margin), margin, w, h)
     }
 
     /// The plate of the botsim name for an image of this height: at the bottom, its
@@ -115,10 +116,10 @@ impl Clock {
         (text_width + 2.0 * pad, scaled.height() + 2.0 * pad)
     }
 
-    /// Draw the clock for `seconds` in the top-left corner of the picture.
-    pub fn draw(&self, pixmap: &mut Pixmap, seconds: f64) {
+    /// Draw the clock for `seconds` at the top of the picture, its left edge at `left`.
+    pub fn draw(&self, pixmap: &mut Pixmap, left: f32, seconds: f64) {
         let size = (pixmap.height() as f32 * TEXT_SIZE).max(6.0);
-        let (x, y, ..) = self.area(pixmap.height(), seconds);
+        let (x, y, ..) = self.area(left, pixmap.height(), seconds);
         self.draw_text(pixmap, &Clock::text(seconds), (x, y), size, TEXT);
     }
 

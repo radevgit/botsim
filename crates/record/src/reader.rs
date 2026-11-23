@@ -143,3 +143,32 @@ pub fn read_recording<R: BufRead>(input: R) -> Result<Recording, ReadError> {
     let snapshots = reader.collect::<Result<Vec<_>, _>>()?;
     Ok(Recording { layout, snapshots })
 }
+
+/// Read a recording of a run that may have been stopped while it was written: if the
+/// **last** line is cut off (the file ends in the middle of it), that line is left out
+/// and the result says so (`true`). Any other bad line is an error, as in
+/// [`read_recording`]; so is a last line that is complete but wrong.
+pub fn read_recording_partial<R: BufRead>(input: R) -> Result<(Recording, bool), ReadError> {
+    let mut reader = Reader::new(input)?;
+    let layout = reader.layout.clone();
+    let mut snapshots = Vec::new();
+    while let Some(text) = next_line(&mut reader.lines, &mut reader.line_no)? {
+        match serde_json::from_str::<SnapshotLine>(&text) {
+            Ok(snapshot) => snapshots.push(snapshot),
+            Err(e) => {
+                let bad = ReadError::Line {
+                    line: reader.line_no,
+                    message: e.to_string(),
+                };
+                // a line that ends too early is the end of a stopped run, if nothing
+                // follows it
+                let is_last = next_line(&mut reader.lines, &mut reader.line_no)?.is_none();
+                if e.is_eof() && is_last {
+                    return Ok((Recording { layout, snapshots }, true));
+                }
+                return Err(bad);
+            }
+        }
+    }
+    Ok((Recording { layout, snapshots }, false))
+}

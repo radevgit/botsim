@@ -57,10 +57,13 @@ pub struct Renderer {
     /// Where the right edge of the name `botsim` is (pixels from the left): a few
     /// metres inside the right wall of the building.
     brand_right: f32,
+    /// Where the left edge of the clock is (pixels from the left): a few metres
+    /// inside the left wall of the building.
+    clock_left: f32,
 }
 
-/// How far inside the right wall of the building the name ends (metres), at most
-/// 5% of the width of the image.
+/// How far inside the right wall of the building the name ends, and inside the left
+/// wall the clock begins (metres), at most 5% of the width of the image.
 const BRAND_INSET_M: f64 = 3.0;
 
 impl Renderer {
@@ -73,6 +76,16 @@ impl Renderer {
         height: u32,
     ) -> Result<Renderer, ViewError> {
         let view = View::fit(layout, map, width, height)?;
+        Renderer::with_view(layout, map, view)
+    }
+
+    /// A renderer for floor `map` with a given view (the image has the size of the
+    /// view): for a picture that is zoomed in on a part of the floor.
+    pub fn with_view(layout: &LayoutLine, map: usize, view: View) -> Result<Renderer, ViewError> {
+        if map >= layout.maps.len() {
+            return Err(ViewError::NoSuchMap(map));
+        }
+        let (width, height) = (view.width, view.height);
         let mut base = Pixmap::new(width, height).ok_or(ViewError::NoPixels)?;
         base.fill(color(palette::BACKGROUND));
         draw_geometry(&mut base, layout, &view, map);
@@ -83,7 +96,17 @@ impl Renderer {
             let inset = (BRAND_INSET_M * view.scale).min(0.05 * width as f64);
             view.to_px(b.2, 0.0).0 as f64 - inset
         });
-        let brand_right = right_wall.min(width as f64 - 0.03 * height as f64) as f32;
+        // (zoomed in, the walls can be out of the image: the text stays in it)
+        let brand_right = right_wall
+            .min(width as f64 - 0.03 * height as f64)
+            .max(width as f64 / 2.0) as f32;
+        // the clock begins a few metres inside the left wall
+        let clock_left = View::content_bounds(layout, map)
+            .map_or(0.0, |b| {
+                let inset = (BRAND_INSET_M * view.scale).min(0.05 * width as f64);
+                view.to_px(b.0, 0.0).0 as f64 + inset
+            })
+            .clamp(0.0, width as f64 / 2.0) as f32;
         Ok(Renderer {
             layout: layout.clone(),
             view,
@@ -93,7 +116,15 @@ impl Renderer {
             show_clock: false,
             show_brand: false,
             brand_right,
+            clock_left,
         })
+    }
+
+    /// The plate of the clock `(x, y, width, height)` in pixels for a time, if the
+    /// clock is on (see [`Renderer::with_clock`]).
+    pub fn clock_area(&self, seconds: f64) -> Option<(f32, f32, f32, f32)> {
+        let text = self.clock.as_ref().filter(|_| self.show_clock)?;
+        Some(text.area(self.clock_left, self.view.height, seconds))
     }
 
     /// The plate of the name `botsim` `(x, y, width, height)` in pixels, if the name
@@ -199,7 +230,7 @@ impl Renderer {
         }
         if let Some(text) = &self.clock {
             if self.show_clock {
-                text.draw(&mut pixmap, snapshot.time);
+                text.draw(&mut pixmap, self.clock_left, snapshot.time);
             }
             if self.show_brand {
                 text.draw_brand(&mut pixmap, self.brand_right);

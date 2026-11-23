@@ -62,9 +62,9 @@ fn inside(area: (f32, f32, f32, f32), (x, y): (u32, u32)) -> bool {
 
 #[test]
 fn the_text_is_the_simulated_time() {
-    assert_eq!(Clock::text(100.0), "t = 100.0 s");
-    assert_eq!(Clock::text(0.0), "t = 0.0 s");
-    assert_eq!(Clock::text(1234.56), "t = 1234.6 s");
+    assert_eq!(Clock::text(100.0), "100.0 s");
+    assert_eq!(Clock::text(0.0), "0.0 s");
+    assert_eq!(Clock::text(1234.56), "1234.6 s");
 }
 
 #[test]
@@ -78,15 +78,26 @@ fn the_label_changes_only_its_own_corner() {
     let snap = at_time(100.0);
     let (a, b) = (plain.frame(&snap), with.frame(&snap));
 
-    let area = Clock::new().unwrap().area(1080, 100.0);
+    let area = with.clock_area(100.0).unwrap();
     let changed = differing(&a, &b);
     assert!(changed.len() > 1000, "a plate and text: {}", changed.len());
     assert!(
         changed.iter().all(|&p| inside(area, p)),
         "outside the label area"
     );
-    // the corner is top-left, away from the very edge
-    assert!(area.0 > 10.0 && area.1 > 10.0 && area.0 < 100.0);
+    // it is at the top, away from the very edge, and begins 3 m inside the left wall
+    // of the building (the test layout's nodes are at x = 0 and x = 20 m), but never
+    // more than 5% of the width of the image inside it
+    assert!(area.1 > 10.0);
+    let left_wall = with.view().to_px(0.0, 0.0).0;
+    let inset = (3.0 * with.view().scale).min(0.05 * 1920.0) as f32;
+    assert!(
+        (area.0 - left_wall as f32 - inset).abs() < 0.5,
+        "begins {} px inside the wall, expected {inset}",
+        area.0 - left_wall as f32
+    );
+    // no clock, no area
+    assert_eq!(plain.clock_area(100.0), None);
     // some pixels are dark text colour (the plate itself is light)
     let dark = changed
         .iter()
@@ -106,7 +117,8 @@ fn the_label_follows_the_time_and_never_the_empty_frame() {
         .with_clock(true)
         .unwrap();
     let (a, b) = (r.frame(&at_time(100.0)), r.frame(&at_time(200.0)));
-    let area = Clock::new().unwrap().area(1080, 100.0);
+    // the plate is as wide as the longer text, so it is the area of the later time
+    let area = r.clock_area(200.0).unwrap();
     let changed = differing(&a, &b);
     assert!(!changed.is_empty());
     assert!(changed.iter().all(|&p| inside(area, p)));
@@ -129,10 +141,10 @@ fn the_label_follows_the_time_and_never_the_empty_frame() {
 fn the_label_grows_with_the_text_and_with_the_image() {
     // whatever font the system has: more characters, a wider plate
     let clock = Clock::new().unwrap();
-    let w = |t: f64| clock.area(1080, t).2;
+    let w = |t: f64| clock.area(0.0, 1080, t).2;
     assert!(w(1.0) < w(10.0) && w(10.0) < w(100.0));
     // it grows with the image
-    assert!(clock.area(2160, 1.0).2 > 1.9 * clock.area(1080, 1.0).2);
+    assert!(clock.area(0.0, 2160, 1.0).2 > 1.9 * clock.area(0.0, 1080, 1.0).2);
 }
 
 #[test]
@@ -187,7 +199,12 @@ fn the_export_has_the_clock_unless_told_not_to() {
     let b = Pixmap::load_png(without.join("frame_000001.png")).unwrap();
     let changed = differing(&a, &b);
     assert!(!changed.is_empty());
-    let area = Clock::new().unwrap().area(360, 0.0);
+    let area = Renderer::new(&layout(), 0, 640, 360)
+        .unwrap()
+        .with_clock(true)
+        .unwrap()
+        .clock_area(0.0)
+        .unwrap();
     assert!(changed.iter().all(|&p| inside(area, p)));
 }
 
@@ -216,7 +233,12 @@ fn the_command_line_has_no_clock() {
     let a = Pixmap::load_png(with.join("frame_000001.png")).unwrap();
     let b = Pixmap::load_png(without.join("frame_000001.png")).unwrap();
     // only the clock differs: the name is there in both
-    let clock_area = Clock::new().unwrap().area(180, 3.0);
+    let clock_area = Renderer::new(&layout(), 0, 320, 180)
+        .unwrap()
+        .with_clock(true)
+        .unwrap()
+        .clock_area(3.0)
+        .unwrap();
     let changed = differing(&a, &b);
     assert!(!changed.is_empty());
     assert!(changed.iter().all(|&p| inside(clock_area, p)));
@@ -290,14 +312,13 @@ fn the_clock_and_the_name_are_independent() {
         .with_clock(true)
         .unwrap();
     let snap = at_time(42.0);
-    let clock = Clock::new().unwrap();
     let name = both.brand_area().unwrap();
     // both = clock only + the name
     let changed = differing(&both.frame(&snap), &clock_only.frame(&snap));
     assert!(!changed.is_empty());
     assert!(changed.iter().all(|&p| inside(name, p)));
     // the two plates do not meet: the clock is at the top, the name at the bottom
-    let c = clock.area(h, 42.0);
+    let c = both.clock_area(42.0).unwrap();
     assert!(c.1 + c.3 < name.1);
 }
 
