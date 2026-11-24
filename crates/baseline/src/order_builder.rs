@@ -16,9 +16,10 @@
 //! the decision node with its actions, as the standard describes; the robot
 //! does not run them again.
 //!
-//! Not yet: edge orientation, `maximumSpeed`.
+//! **Edge orientation** ([`build_order_with`]): for omnidirectional robots each edge
+//! carries the LIF's orientation for the type. Not yet: `maximumSpeed`.
 
-use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_core::graph::{EdgeIdx, EdgeOrientation, Graph, NodeIdx};
 use botsim_core::jobs::Job;
 use botsim_core::world::{PROTOCOL_VERSION, RobotId};
 use serde_json::json;
@@ -123,6 +124,22 @@ pub fn build_order(
     from: usize,
     released_through: usize,
 ) -> Option<Order> {
+    build_order_with(graph, h, plan, from, released_through, None)
+}
+
+/// Like [`build_order`]; with `orient` (manufacturer and series of the robot) every
+/// edge carries the orientation the LIF gives that type on it (`orientationType`,
+/// `orientation`), so that an omnidirectional robot faces as the layout says (along
+/// the road for `TANGENTIAL` 0) instead of keeping its heading. An edge for which
+/// the LIF gives none is sent without.
+pub fn build_order_with(
+    graph: &Graph,
+    h: &OrderHeader,
+    plan: &Plan,
+    from: usize,
+    released_through: usize,
+    orient: Option<(&str, &str)>,
+) -> Option<Order> {
     let released_through = released_through.min(plan.last());
     if from > released_through {
         return None; // the first node must be released
@@ -147,13 +164,23 @@ pub fn build_order(
         .collect();
     let edges: Vec<_> = (from..plan.last())
         .map(|i| {
-            json!({
+            let mut edge = json!({
                 "edgeId": graph.edges[plan.edges[i]].id,
                 "sequenceId": 2 * i + 1,
                 // an edge is released together with the node it leads to
                 "released": i < released_through,
                 "actions": [],
-            })
+            });
+            let given = orient.and_then(|(m, s)| graph.edge_orientation(plan.edges[i], m, s));
+            if let Some(o) = given {
+                let (kind, angle) = match o {
+                    EdgeOrientation::Tangential(a) => ("TANGENTIAL", a),
+                    EdgeOrientation::Global(a) => ("GLOBAL", a),
+                };
+                edge["orientationType"] = json!(kind);
+                edge["orientation"] = json!(angle);
+            }
+            edge
         })
         .collect();
 

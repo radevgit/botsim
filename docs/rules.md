@@ -140,6 +140,14 @@ Lift and door commands are not VDA 5050; they have their own ports (§7f, §7h).
   - With **no orientation** in the order it **keeps its heading** (the standard
     lets the robot choose; for a differential robot S13 says "forwards"). A robot
     that never turns is faster than a differential robot on a route with corners.
+  - **The baseline sends the layout's orientation (S98):** for an omnidirectional
+    robot every edge of an order carries `orientationType` and `orientation` from
+    the LIF (the first of `mobileRobotOrientations` for the type; the graph keeps
+    it as `EdgeTypeProps::orientation`, `Graph::edge_orientation`). With the usual
+    `TANGENTIAL` 0 the robot faces along its road, turning on the spot at the node.
+    Before, no order named one and the robot kept its start heading across its road
+    (72 % of the time more than 40° off its travel in warehouse 4). Other robot
+    types get no orientation (they drive forwards).
   - With an orientation: `TANGENTIAL` is relative to the edge direction (any
     value, not only 0 and π); `GLOBAL` is relative to the map (valid for
     omnidirectional robots only). The robot **reaches the orientation before it
@@ -670,6 +678,31 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   speed limit is not part of the route cost (length only). **The length of an
   edge with a curve is the length of the curve** (S74), which can differ between
   types (a type may have a trajectory on the edge, another a straight line).
+- **Swept-area reservation (S102, setting `conflict_reservation`, default true):**
+  two edges that cross, merge or run close have no node in common, so the node
+  and edge reservations let two robots use them at the same time. The layout
+  checker (`botsim-check`) makes the **conflict map**: per pair of robot types, the
+  pairs of edges whose swept outlines (factsheet body, sampled every 0.25 m) overlap
+  by at least 5 cm. The runner reads the scenario's layout and factsheets again,
+  takes the pairs that have **no node in common and are near a junction** (merge or
+  diverge; parallel conflicts, which are layout faults, are left out) and gives them
+  to the controller (`Controller::set_conflicts`, `botsim_baseline::conflicts`). A
+  robot is then released onto an edge (as for the nodes, in order, up to the window)
+  only if no other robot **holds** an edge that conflicts with it for that pair of
+  types; it waits at the end of its released route as for a held node. The whole
+  edge is reserved, not the overlapping stretch. A scenario read from text (no
+  file) has no map and no swept-area reservation.
+  - **Go-first covers it (S77):** X that waits for a conflicting edge, not a node,
+    and has H, the holder, stopped and in front of it, goes first under the same
+    conditions; X is then released onto its edge although H still holds the other
+    (`waived`, until it has been released). Without that a robot waiting before a
+    merge and a robot on the merge curve that its field stops froze each other
+    (warehouse 4, 1100 s: 4 robots moving, 76 waiting).
+  - Result on warehouse 4, first 1100 s (weight 5): collisions 21 to 6, jobs done 91
+    to 86, 61 robots moving at 1000 s, no stand-off left at 1100 s. Not covered:
+    robots standing on a node against an edge (`node_pairs` of the map), the turn on
+    the spot, the protective field, driving backwards; the deadlock detector of the
+    core does not see waits for a conflicting edge.
 - **Route with load (S91, brief request of 2026-11-23):** the shortest route is
   the same every time, so an equally long parallel lane was never chosen. With
   the scenario setting `route_load_weight` (metres, default 0 = off, same routes as
@@ -816,14 +849,27 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   (90° or more off the bearing to H); the 46° case Y-015/Y-005 (limit 45°) was
   stuck on that. "X stands on H's way" means X's node is in H's released route,
   not that H holds it (X may have taken it over earlier; then H no longer held it
-  and Y-015/Y-005 stayed stuck). Still unresolved, by design: Y-024/O-009
+  and Y-015/Y-005 stayed stuck). **X's direction (S97, viewer session's finding
+  on O-008/T-008):** the 45° test and "does not face H" use the way X will head
+  once released, the start direction of its next edge, not its present heading (a
+  robot standing on a node has not turned to the edge). **Omnidirectional X does
+  not turn** (it drives off the way it faces), so the turn clearance is not tested
+  for it. In the first 1100 s of `warehouse4` (weight 5) this took the stand-offs
+  from 3 to 1 (T-010/O-009 and O-001/C-003 resolved), jobs done 53 to 59. Still unresolved, by design: Y-024/O-009
   (warehouse 4, 380 s on): O-009 must turn toward the edge, and the turn sweeps
   into the forklift's body 1.9 m away (the exact test says overlap); only H
   backing off would help (not built). **A node taken over is
-  not released again** when X's route passed it earlier
+  not released again** while it is the next node of X's route (up to the first node
+  after the released ones) even if the route passed it earlier
   (`Reservations::is_taken_over_node/edge`); before, the release of the old visit
   gave the node back every tick and X took it over again every tick (170 take-overs
-  in 400 s, now 12). Old text continues: a back-off to
+  in 400 s, now 12). **Not for ever (S100):** the first version kept a taken-over
+  node as long as the robot lived: after the take-over the robot drove on, but the
+  node stayed reserved to it, and a route that has the node again a lap later (116
+  nodes on) kept it for the whole lap: in warehouse 4 four nodes 50-158 m from
+  their holders (Y-007: N724, N744; T-001: N737, N905) froze the two ring junctions
+  of the viewer session's stand-offs X-019/T-009 and Y-015/X-018. Now it is given
+  back (to the robot it was taken from) as soon as the robot has driven past. Old text continues: a back-off to
   another node (not built). Test `give_way.rs`: O has a long edge released past the
   node where X stands and waits; both jobs are done, no deadlock, no collision. The
   rule is for the case of the brief; whether it frees the warehouse recordings is
@@ -933,6 +979,7 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   east). `start_headings = [...]` gives one heading for each start node instead
   (the count must match `start_nodes`). `botsim_scenario::road_heading` gives the
   heading for a node, for the checker.
+- Optional `conflict_reservation` (default true, §9 "Swept-area reservation").
 - Optional `route_load_weight` and `route_wait_weight` (metres, default 0, §9
   "Route with load").
 - **Debug option `stop_at_first_deadlock`** (**S59**, default `false`): the run

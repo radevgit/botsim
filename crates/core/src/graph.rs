@@ -106,6 +106,19 @@ pub struct EdgeTypeProps {
     /// The curve the robot follows between the two nodes (LIF `trajectory`, S69);
     /// a straight line if `None`.
     pub trajectory: Option<Nurbs>,
+    /// The orientation a robot should have on the edge: the first of the LIF's
+    /// `mobileRobotOrientations`, read as `orientationType` says (default
+    /// `TANGENTIAL`); `None` if the LIF lists none.
+    pub orientation: Option<EdgeOrientation>,
+}
+
+/// An orientation (radians) of a robot on an edge, as the LIF gives it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EdgeOrientation {
+    /// Relative to the direction of the edge (0 forwards, π backwards).
+    Tangential(f64),
+    /// Relative to the map.
+    Global(f64),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -339,6 +352,16 @@ impl Graph {
                         .map(|t| (t.manufacturer.clone(), t.series_name.clone()))
                         .collect(),
                     maximum_speed: p.maximum_speed,
+                    orientation: p
+                        .mobile_robot_orientations
+                        .as_ref()
+                        .and_then(|o| o.first().copied())
+                        .map(|a| match p.orientation_type {
+                            Some(vdma_lif::edge::OrientationType::Global) => {
+                                EdgeOrientation::Global(a)
+                            }
+                            _ => EdgeOrientation::Tangential(a),
+                        }),
                     rotation_at_start: p
                         .rotation_at_start_node_allowed
                         .map_or(Rotation::Both, Rotation::from),
@@ -409,6 +432,18 @@ impl Graph {
     /// May a robot of this type stand on the node?
     pub fn node_allows(&self, node: NodeIdx, manufacturer: &str, series: &str) -> bool {
         lists_type(&self.nodes[node].robot_types, manufacturer, series)
+    }
+
+    /// The orientation the LIF gives robots of this type on the edge (see
+    /// [`EdgeTypeProps::orientation`]); `None` if it gives none or the type may not
+    /// use the edge.
+    pub fn edge_orientation(
+        &self,
+        edge: EdgeIdx,
+        manufacturer: &str,
+        series: &str,
+    ) -> Option<EdgeOrientation> {
+        self.edges[edge].props_for(manufacturer, series)?.orientation
     }
 
     /// May a robot of this type drive the edge? The edge must list the type, and

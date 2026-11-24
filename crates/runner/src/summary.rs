@@ -9,6 +9,7 @@
 //!
 //! Not yet: deadlocks, controller time per step.
 
+use botsim_baseline::conflicts::ConflictInput;
 use botsim_baseline::controller::Controller;
 use botsim_core::jobs::Job;
 use botsim_core::lift::DoorState;
@@ -238,6 +239,10 @@ pub fn run(scenario: &Scenario, world: World) -> Result<Summary, ScenarioError> 
 
 /// Like [`run`]; with `measure_time` the real time of every controller step is
 /// measured and reported in `timing` (S39).
+///
+/// Unless the scenario says `conflict_reservation = false`, a scenario read from a
+/// file also gets swept-area reservation: the conflict map of `botsim-check` (made
+/// from the layout and the factsheets) goes to the controller.
 pub fn run_with(
     scenario: &Scenario,
     mut world: World,
@@ -249,6 +254,11 @@ pub fn run_with(
         let mut c = Controller::new(&world);
         c.set_load_weight(scenario.route_load_weight);
         c.set_wait_weight(scenario.route_wait_weight);
+        if scenario.conflict_reservation
+            && let Some(path) = &scenario.source
+        {
+            c.set_conflicts(&conflict_input(path));
+        }
         c
     });
     let mut created = 0;
@@ -410,4 +420,30 @@ pub fn run_with(
         stopped_at_first_deadlock,
         robots,
     })
+}
+
+/// The edge pairs whose swept outlines overlap and that have no node in common (the
+/// node reservation covers the others), from the layout checker; empty if the
+/// scenario's files cannot be read again or the layout is not a graph.
+fn conflict_input(scenario_file: &std::path::Path) -> Vec<ConflictInput> {
+    let Ok(inputs) = botsim_check::load(scenario_file) else {
+        return Vec::new();
+    };
+    let (_, map) = botsim_check::check_all(&inputs);
+    let Some(map) = map else {
+        return Vec::new();
+    };
+    map.pairs
+        .into_iter()
+        .map(|p| ConflictInput {
+            type_a: p.type_a,
+            type_b: p.type_b,
+            edges: p
+                .conflicts
+                .into_iter()
+                .filter(|c| !c.shares_node && c.junction_nodes.is_some())
+                .map(|c| (c.edge_a, c.edge_b))
+                .collect(),
+        })
+        .collect()
 }

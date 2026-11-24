@@ -54,7 +54,9 @@ const TYPES: [&str; 5] = ["X1", "Y2", "T3", "O4", "C5"];
 const W: f64 = 240.0;
 const H: f64 = 140.0;
 /// The ring road: its distance from the wall and the radius of its corners.
-const RING: f64 = 10.0;
+/// (12 m, it was 10: the ring road at the bottom and the top, where the queues form, was too
+/// close to the road along the wall; the bridges between them are now 8 m wide, user 2026-11-24.)
+const RING: f64 = 12.0;
 const CORNER: f64 = 10.0;
 
 /// Lines of the west grid: columns (x) and rows (y), irregularly spaced.
@@ -173,7 +175,7 @@ const V_XCOL: f64 = 140.0;
 const V_STEP: f64 = (V_XCOL - V_X0) / V_AISLES as f64;
 /// The aisles start at the height where the 45 degree link from the ring corner
 /// (100, 10) turns into the first one with an arc as wide as the half circles.
-const V_BOTTOM: f64 = 15.0 + V_STEP / 2.0;
+const V_BOTTOM: f64 = 17.0 + V_STEP / 2.0;
 const V_TOP: f64 = 58.5;
 
 /// The labyrinth in the north (x = 118 to 190): seven aisles that run east and west
@@ -242,8 +244,20 @@ fn v_row_parts(k: usize) -> Vec<(f64, f64)> {
 fn aisle_stops() -> Vec<(String, P)> {
     let mut out = Vec::new();
     for k in 0..H_AISLES {
+        // the shortcuts that end on this aisle: its own (to the next aisle) and the one from the
+        // aisle before; the stop is not within 3.5 m of either (as for the vertical aisles)
+        let mut avoid = vec![shortcut_x(k)];
+        if k >= 1 {
+            avoid.push(shortcut_x(k - 1));
+        }
         for (a, b) in h_row_parts(k) {
-            out.push((format!("LN{k}"), ((a + b) / 2.0, h_y(k))));
+            let mid = (a + b) / 2.0;
+            let clear = |x: f64| avoid.iter().all(|s| (x - s).abs() >= 3.5);
+            let x = (0..=((b - a) * 5.0) as usize)
+                .flat_map(|i| [mid - i as f64 * 0.1, mid + i as f64 * 0.1])
+                .find(|&x| x >= a + 1.0 && x <= b - 1.0 && clear(x))
+                .unwrap_or(mid);
+            out.push((format!("LN{k}"), (x, h_y(k))));
         }
     }
     for k in 0..V_AISLES {

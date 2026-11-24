@@ -53,10 +53,11 @@ use botsim_core::world::{RobotId, World};
 use vda5050::order::Order;
 use vda5050::state::{ActionStatus, State};
 
+use crate::conflicts::{ConflictInput, ConflictTable};
 use crate::doors::DoorDesk;
 use crate::lifts::{LiftDesk, LiftRobot};
 use crate::node_grid::NodeGrid;
-use crate::order_builder::{OrderHeader, Plan, RELEASE_WINDOW, build_order};
+use crate::order_builder::{OrderHeader, Plan, RELEASE_WINDOW, build_order_with};
 use crate::reservations::Reservations;
 use crate::route::{Arrival, Mover, Turns, distances_to, in_edges, plan_path, travel_lengths};
 use crate::zone_grants::{RobotView, ZoneGrants};
@@ -126,6 +127,8 @@ struct Work {
 /// each node and edge.
 #[derive(Debug)]
 struct TypeRouting {
+    /// An omnidirectional type drives off in any direction without turning.
+    omnidirectional: bool,
     /// `ok[e]`: the type may drive edge `e` (the edge and both its nodes allow it).
     ok: Vec<bool>,
     /// The turns the type cannot make (S73); `None` if it can make them all.
@@ -222,6 +225,15 @@ pub struct Controller {
     /// For each node, how many robots stood waiting on it, as a moving average over
     /// [`WAIT_AVERAGE_SECONDS`] (1.0 = one robot waiting all the time).
     node_wait: Vec<f64>,
+    /// The robot types as `manufacturer/seriesName`, by `Slot::type_idx`.
+    type_names: Vec<String>,
+    /// The type of each robot (`Slot::type_idx`), by robot index.
+    robot_types: Vec<usize>,
+    /// Edges whose swept outlines overlap; `None` reserves nodes and edges only.
+    conflicts: Option<ConflictTable>,
+    /// Robot → the edge it may be released onto although it conflicts with an edge
+    /// another robot holds (go-first, S77); cleared when it has been released.
+    waived: std::collections::HashMap<usize, EdgeIdx>,
 }
 
 impl Controller {
@@ -269,6 +281,7 @@ impl Controller {
                     .map(|e| graph.edge_allows(e, m, s))
                     .collect();
                 TypeRouting {
+                    omnidirectional: kinematics == Kinematics::Omnidirectional,
                     into: in_edges(graph, &ok),
                     turns: Turns::for_type(graph, kinematics, m, s),
                     cost: travel_lengths(graph, m, s),
@@ -276,6 +289,7 @@ impl Controller {
                 }
             })
             .collect();
+        let robot_types: Vec<usize> = robots.iter().map(|s| s.type_idx).collect();
         Controller {
             graph: world.graph().clone(),
             pending: VecDeque::new(),
@@ -301,7 +315,21 @@ impl Controller {
             load_weight: 0.0,
             wait_weight: 0.0,
             node_wait: vec![0.0; world.graph().nodes.len()],
+            type_names: keys.iter().map(|(m, s)| format!("{m}/{s}")).collect(),
+            robot_types,
+            conflicts: None,
+            waived: std::collections::HashMap::new(),
         }
+    }
+
+    /// Swept-area reservation (see [`crate::conflicts`]): from now on a robot is
+    /// released onto an edge only if no other robot holds an edge that conflicts with
+    /// it. Returns the number of conflicting edge pairs read.
+    pub fn set_conflicts(&mut self, input: &[ConflictInput]) -> usize {
+        let table = ConflictTable::new(&self.graph, &self.type_names, input);
+        let n = table.pairs();
+        self.conflicts = Some(table);
+        n
     }
 
     /// Route with load, second part: every edge also costs `weight` metres for each
@@ -530,14 +558,25 @@ impl Controller {
         // what is still ahead stays reserved)
         let ahead_nodes = &work.plan.nodes[at..=work.released_through];
         let ahead_edges = &work.plan.edges[at..work.released_through];
+        // A node taken over from a robot in the way (S77) is held before it is
+        // released: it is the next node after the released ones. It is not given
+        // back while the route has it there, even if the route passed it earlier;
+        // but it is once the robot has driven on, also if the route has it again
+        // much later (a lap of a ring: it then held the node for the whole lap,
+        // warehouse 4, Y-007 held two nodes 158 m away).
+        let last = work.plan.last();
+        let next_nodes = &work.plan.nodes[at..=(work.released_through + 1).min(last)];
+        let next_edges = &work.plan.edges[at..(work.released_through + 1).min(last)];
         for j in 0..at {
-            // a node taken over from a robot in the way (S77) is held before it is
-            // released; it is not given back when the route passed it earlier
             let (n, e) = (work.plan.nodes[j], work.plan.edges[j]);
-            if !ahead_nodes.contains(&n) && !self.reservations.is_taken_over_node(n, i) {
+            if !ahead_nodes.contains(&n)
+                && !(self.reservations.is_taken_over_node(n, i) && next_nodes.contains(&n))
+            {
                 self.reservations.release_node(n, i);
             }
-            if !ahead_edges.contains(&e) && !self.reservations.is_taken_over_edge(e, i) {
+            if !ahead_edges.contains(&e)
+                && !(self.reservations.is_taken_over_edge(e, i) && next_edges.contains(&e))
+            {
                 self.reservations.release_edge(e, i);
             }
         }
@@ -549,7 +588,12 @@ impl Controller {
         let wanted = self.lifts.window(i, &work.plan, at, from, wanted);
         // so does an edge through a door (S51)
         let wanted = self.doors.window(i, &work.plan, at, from, wanted);
-        let rt = reserve_up_to(&mut self.reservations, &work.plan, i, from, wanted);
+        let swept = self.conflicts.as_ref().map(|c| (c, self.robot_types.as_slice()));
+        let waived = self.waived.get(&i).copied();
+        let rt = reserve_up_to(&mut self.reservations, &work.plan, i, from, wanted, swept, waived);
+        if rt > from {
+            self.waived.remove(&i);
+        }
         self.doors.settle(i, rt);
 
         // Timeout re-routing (S53): the robot stands at the end of its released
@@ -594,7 +638,11 @@ impl Controller {
                     order_update_id: work.update_id,
                 };
                 // nothing new is released; the unreleased part of the route changes
-                let msg = build_order(&self.graph, &header, &work.plan, from, from);
+                let orient = self.types[slot.type_idx]
+                    .omnidirectional
+                    .then_some((slot.id.manufacturer.as_str(), slot.series.as_str()));
+                let msg =
+                    build_order_with(&self.graph, &header, &work.plan, from, from, orient);
                 slot.header_id += 1;
                 match deliver(world, msg) {
                     Ok(_) => self.reroutes += 1,
@@ -616,7 +664,10 @@ impl Controller {
                 order_id: &work.order_id,
                 order_update_id: work.update_id,
             };
-            let msg = build_order(&self.graph, &header, &work.plan, from, rt);
+            let orient = self.types[slot.type_idx]
+                .omnidirectional
+                .then_some((slot.id.manufacturer.as_str(), slot.series.as_str()));
+            let msg = build_order_with(&self.graph, &header, &work.plan, from, rt, orient);
             slot.header_id += 1;
             match deliver(world, msg) {
                 Ok(_) => work.released_through = rt,
@@ -866,7 +917,9 @@ impl Controller {
             .lifts
             .window(i, &plan, 0, 0, plan.released_through(0, RELEASE_WINDOW));
         let wanted = self.doors.window(i, &plan, 0, 0, wanted);
-        let released_through = reserve_up_to(&mut self.reservations, &plan, i, 0, wanted);
+        let swept = self.conflicts.as_ref().map(|c| (c, self.robot_types.as_slice()));
+        let released_through =
+            reserve_up_to(&mut self.reservations, &plan, i, 0, wanted, swept, None);
         self.doors.settle(i, released_through);
         let header = OrderHeader {
             robot: &slot.id,
@@ -875,7 +928,10 @@ impl Controller {
             order_id: &order_id,
             order_update_id: 0,
         };
-        let msg = build_order(&self.graph, &header, &plan, 0, released_through);
+        let orient = self.types[slot.type_idx]
+            .omnidirectional
+            .then_some((slot.id.manufacturer.as_str(), slot.series.as_str()));
+        let msg = build_order_with(&self.graph, &header, &plan, 0, released_through, orient);
         slot.header_id += 1;
         match deliver(world, msg) {
             Ok(reception) => {
@@ -930,19 +986,34 @@ impl Controller {
             else {
                 continue;
             };
-            let Some(h) = self.reservations.node_holder(node).filter(|&h| h != i) else {
+            // X waits for the node, or for an edge whose swept area overlaps the one
+            // of its next edge (swept-area reservation): the holder is H
+            let node_holder = self.reservations.node_holder(node).filter(|&h| h != i);
+            let swept = self.conflicts.as_ref().and_then(|c| {
+                c.blocker(&self.reservations, &self.robot_types, i, edge)
+            });
+            let Some(h) = node_holder.or(swept.map(|(h, _)| h)) else {
                 continue;
             };
             // H must be on its way through the node (it has released it as part of
             // its route and does not stand on it); a robot that is parked there
-            // holds it because it stands on it, and cannot be gone around
-            let on_its_way = self.robots[h].work.as_ref().is_some_and(|w| {
-                w.plan
-                    .nodes
-                    .iter()
-                    .take(w.released_through + 1)
-                    .any(|&n| n == node)
-            }) && self.node_of(&states[h]) != Some(node);
+            // holds it because it stands on it, and cannot be gone around. For a
+            // conflicting edge: H has released it as part of its route.
+            let on_its_way = match (node_holder, swept) {
+                (Some(_), _) => {
+                    self.robots[h].work.as_ref().is_some_and(|w| {
+                        w.plan
+                            .nodes
+                            .iter()
+                            .take(w.released_through + 1)
+                            .any(|&n| n == node)
+                    }) && self.node_of(&states[h]) != Some(node)
+                }
+                (None, Some((_, f))) => self.robots[h].work.as_ref().is_some_and(|w| {
+                    w.plan.edges.iter().take(w.released_through).any(|&e| e == f)
+                }),
+                (None, None) => false,
+            };
             if !on_its_way {
                 continue;
             }
@@ -1010,7 +1081,10 @@ impl Controller {
             // X may have to turn on the spot to drive off; its body then sweeps
             // through the angles to the start of the edge and must not touch H (a
             // forklift turning 1.7 m from a stopped robot hit it, warehouse 4, 309 s)
-            let turns = angle_between(px.theta, start) > 15f64.to_radians();
+            // (an omnidirectional robot does not turn: it drives off the way it is
+            // facing)
+            let turns = !self.types[self.robots[i].type_idx].omnidirectional
+                && angle_between(px.theta, start) > 15f64.to_radians();
             let clear = !turns
                 || turn_is_clear(
                     &self.robots[i].shape,
@@ -1019,15 +1093,21 @@ impl Controller {
                     &self.robots[h].shape,
                     (ph.x, ph.y, ph.theta),
                 );
-            if near
-                && ahead
-                && same_way
-                && clear
-                && self.reservations.take_over_node(node, i).is_some()
-            {
-                self.reservations.take_over_edge(edge, i);
-                self.give_ways += 1;
+            if !(near && ahead && same_way && clear) {
+                continue;
             }
+            if node_holder.is_some() {
+                if self.reservations.take_over_node(node, i).is_none() {
+                    continue;
+                }
+                self.reservations.take_over_edge(edge, i);
+            }
+            // the edge conflicts with one H holds: X may be released onto its edge
+            // although H still holds the other (until X has been released)
+            if swept.is_some_and(|(sh, _)| sh == h) {
+                self.waived.insert(i, edge);
+            }
+            self.give_ways += 1;
         }
     }
 
@@ -1276,17 +1356,30 @@ fn reroute(
 }
 
 /// Reserve plan nodes `from + 1 ..= wanted` for `robot`, in order, each together
-/// with the edge leading to it; stop at the first one somebody else holds.
-/// Returns the index of the last node now released (`from` if none).
+/// with the edge leading to it; stop at the first one somebody else holds, or whose
+/// edge conflicts with an edge another robot holds (`swept`: the conflict table and
+/// the type of each robot). Returns the index of the last node now released (`from`
+/// if none).
 fn reserve_up_to(
     reservations: &mut Reservations,
     plan: &Plan,
     robot: usize,
     from: usize,
     wanted: usize,
+    swept: Option<(&ConflictTable, &[usize])>,
+    waived: Option<EdgeIdx>,
 ) -> usize {
     let mut rt = from;
-    while rt < wanted && reservations.reserve_step(plan.edges[rt], plan.nodes[rt + 1], robot) {
+    while rt < wanted {
+        let e = plan.edges[rt];
+        if waived != Some(e)
+            && swept.is_some_and(|(table, types)| table.blocks(reservations, types, robot, e))
+        {
+            break;
+        }
+        if !reservations.reserve_step(e, plan.nodes[rt + 1], robot) {
+            break;
+        }
         rt += 1;
     }
     rt

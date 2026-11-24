@@ -1,5 +1,5 @@
-//! The baseline controller with an omnidirectional robot (S63): its orders name no
-//! orientation, so the robot keeps its heading all the way round.
+//! The baseline controller with an omnidirectional robot (S63, S98): its orders carry
+//! the orientation the layout gives each edge, so the robot faces along its road.
 
 use botsim_baseline::controller::Controller;
 use botsim_core::actions::ActionTimes;
@@ -64,18 +64,15 @@ fn run(kinematics: &str) -> (u64, Vec<f64>) {
 }
 
 #[test]
-fn an_omnidirectional_robot_does_the_job_without_ever_turning() {
-    let (omni_tick, headings) = run("OMNIDIRECTIONAL");
-    assert!(headings.iter().all(|&h| h == 0.0), "it kept facing east");
-    let (diff_tick, diff_headings) = run("DIFFERENTIAL");
+fn an_omnidirectional_robot_faces_along_its_road_when_the_layout_says_tangential() {
+    // the layout gives TANGENTIAL 0 on every edge, and the order carries it: the
+    // robot faces north on N1 → N2 and west on N2 → N3 (it used to keep facing east,
+    // across its road, when the order named no orientation)
+    let (_, headings) = run("OMNIDIRECTIONAL");
+    let near = |a: f64| headings.iter().any(|&h| (h - a).abs() < 0.01);
+    assert!(near(std::f64::consts::FRAC_PI_2), "it faced north");
     assert!(
-        diff_headings.iter().any(|&h| h != 0.0),
-        "the differential robot turned"
-    );
-    // two 90° turns at 1 rad/s (the route N0 → N1 → N2 → N3 has two corners) are
-    // about 3 s (60 steps) that it does not need
-    assert!(
-        diff_tick > omni_tick + 55,
-        "omni {omni_tick}, differential {diff_tick}"
+        near(std::f64::consts::PI) || near(-std::f64::consts::PI),
+        "it faced west"
     );
 }

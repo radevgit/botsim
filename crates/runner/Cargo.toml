@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 botsim-baseline = { path = "../baseline" }
+botsim-check = { path = "../check" }
 botsim-core = { path = "../core" }
 botsim-record = { path = "../record" }
 botsim-scenario = { path = "../scenario" }

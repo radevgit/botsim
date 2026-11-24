@@ -39,6 +39,37 @@ errors, 1: errors found, 2: usage or load error. `--geometry` is optional: with
 the geometry file the swept robot outlines are also checked against walls, racks
 and shelves.
 
+## Record a run and watch it
+
+```sh
+# 1. run and record (a snapshot every 0.5 s; the geometry file draws walls and racks)
+cargo run --release -p botsim-runner -- --record data/warehouse4.jsonl --record-interval 0.5 \
+    --geometry scenarios/warehouse4.geometry.json scenarios/warehouse4.toml
+
+# 2. watch it in a window
+cargo run --release -p botsim-viewer -- data/warehouse4.jsonl
+
+# the same, with the findings of the layout check drawn on the map
+cargo run --release -p botsim-viewer -- --check scenarios/warehouse4.toml data/warehouse4.jsonl
+
+# 3. the use of the roads, as text (busiest edges, waiting, groups of roads)
+cargo run --release -p botsim-viewer --example usage_report -- data/warehouse4.jsonl --to 600
+
+# 4. a video: PNG frames, then ffmpeg (see crates/export)
+cargo run --release -p botsim-export -- data/warehouse4.jsonl frames --speed 10
+```
+
+The viewer (`botsim-viewer`) plays, pauses and scrubs the recording and shows what a
+robot is doing when you click it (wheel zooms, drag moves, double click shows all).
+With `--check <scenario.toml>` it runs the layout checker in the background and
+draws each finding as a ring (red error, orange warning, blue info; click one for
+the text), with one box for each severity and the pairs of edges that overlap
+without a common node as lines. The **Usage** box shows only a heat map of how long
+each road was reserved and where robots waited, for a window of time ("from" and
+"to"); with `<scenario>.groups.json` next to the scenario (the generated warehouse
+scenarios have one) it also lists the use by group of roads. A run that freezes
+says most about its first minutes, so use the window.
+
 ## Workspace
 
 - `crates/core` — simulation core (`botsim-core`): world, robots, orders, collisions, jobs, metrics
@@ -46,6 +77,9 @@ and shelves.
 - `crates/scenario` — the scenario file (TOML): `Scenario`, `load`, `build_world` (`botsim-scenario`); shared by the runner and the checker
 - `crates/runner` — CLI and JSON summary (`botsim-runner`); re-exports the scenario crate as `botsim_runner::scenario`
 - `crates/check` — static layout checker, library and CLI (`botsim-check`); the list of checks is in `crates/check/README.md`
+- `crates/record` — the recording of a run (JSON Lines): line types, writer, reader (`botsim-record`)
+- `crates/export` — PNG frames from a recording, for videos (`botsim-export`); also the layout generators (`examples/gen_warehouse*.rs`)
+- `crates/viewer` — replay window, layout-check overlay and usage heat map (`botsim-viewer`)
 - `docs/rules.md` — the rules the simulator and the baseline follow, with the decisions behind them
 - `scenarios/` — example scenarios
 

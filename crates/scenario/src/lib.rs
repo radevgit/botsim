@@ -157,6 +157,16 @@ pub struct Scenario {
     /// average over 60 s). Default 0.
     #[serde(default)]
     pub route_wait_weight: f64,
+    /// Swept-area reservation (baseline): a robot is released onto an edge only if
+    /// no other robot holds an edge whose swept outline overlaps it (the conflict
+    /// map of `botsim-check`, per pair of robot types). Default `true`; `false`
+    /// reserves nodes and edges only. It needs the scenario file (the layout and
+    /// factsheets are read again), so a scenario from text has none.
+    #[serde(default = "yes")]
+    pub conflict_reservation: bool,
+    /// The file the scenario was read from (set by [`Scenario::load`]).
+    #[serde(skip)]
+    pub source: Option<PathBuf>,
     /// Without this section nothing is disturbed.
     #[serde(default)]
     pub disturbances: Option<DisturbancesConfig>,
@@ -442,7 +452,9 @@ impl Scenario {
     /// Read and parse a scenario file.
     pub fn load(path: &Path) -> Result<Scenario, ScenarioError> {
         let text = read(path)?;
-        Scenario::from_toml(&text)
+        let mut s = Scenario::from_toml(&text)?;
+        s.source = Some(path.to_path_buf());
+        Ok(s)
     }
 
     fn check(&self) -> Result<(), ScenarioError> {

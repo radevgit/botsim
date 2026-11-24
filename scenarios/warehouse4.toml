@@ -27,9 +27,9 @@ manufacturer = "ACME"
 serial_prefix = "Y"
 factsheet = "forklift.factsheet.json"
 start_nodes = [
-    "N555", "N500", "N445", "N534", "N479", "N513", "N547", "N636",
-    "N492", "N670", "N526", "N471", "N649", "N539", "N484", "N518",
-    "N463", "N696", "N442", "N531", "N476", "N709", "N510", "N599",
+    "N466", "N699", "N555", "N500", "N445", "N534", "N568", "N513",
+    "N547", "N492", "N437", "N560", "N649", "N505", "N539", "N484",
+    "N429", "N552", "N497", "N442", "N531", "N476", "N544", "N633",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
@@ -44,9 +44,9 @@ manufacturer = "ACME"
 serial_prefix = "X"
 factsheet = "diff_robot.factsheet.json"
 start_nodes = [
-    "N717", "N489", "N434", "N523", "N468", "N502", "N536", "N625",
-    "N481", "N714", "N570", "N515", "N460", "N638", "N672", "N528",
-    "N473", "N706", "N562", "N507", "N685", "N575", "N520", "N465",
+    "N717", "N489", "N667", "N523", "N612", "N468", "N557", "N646",
+    "N536", "N481", "N714", "N659", "N515", "N460", "N549", "N439",
+    "N528", "N473", "N596", "N685", "N541", "N486", "N575", "N431",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
@@ -61,8 +61,8 @@ manufacturer = "ACME"
 serial_prefix = "T"
 factsheet = "three_wheel.factsheet.json"
 start_nodes = [
-    "N466", "N699", "N644", "N589", "N568", "N615", "N560", "N662",
-    "N552", "N544", "N578",
+    "N623", "N479", "N602", "N636", "N471", "N573", "N463", "N696",
+    "N641", "N586", "N565",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
@@ -77,9 +77,9 @@ manufacturer = "ACME"
 serial_prefix = "O"
 factsheet = "omni_robot.factsheet.json"
 start_nodes = [
-    "N554", "N499", "N732", "N567", "N512", "N601", "N457", "N546",
-    "N491", "N436", "N559", "N504", "N682", "N483", "N572", "N551",
-    "N496", "N729", "N475",
+    "N520", "N465", "N533", "N478", "N711", "N567", "N512", "N457",
+    "N690", "N669", "N525", "N470", "N559", "N504", "N572", "N517",
+    "N462", "N551", "N496",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
@@ -94,8 +94,8 @@ manufacturer = "ACME"
 serial_prefix = "C"
 factsheet = "small_robot.factsheet.json"
 start_nodes = [
-    "N564", "N653", "N454", "N543", "N488", "N611", "N467", "N556",
-    "N679", "N535", "N480", "N548",
+    "N708", "N564", "N509", "N598", "N454", "N543", "N488", "N433",
+    "N556", "N501", "N679", "N480",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
