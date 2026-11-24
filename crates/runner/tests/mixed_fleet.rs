@@ -6,10 +6,10 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
+use botsim::scenario::Scenario;
+use botsim::summary;
 use botsim_core::graph::Graph;
 use botsim_core::observer::{Observer, Snapshot};
-use botsim_runner::scenario::Scenario;
-use botsim_runner::summary;
 
 #[derive(Debug)]
 struct Recorder(Rc<RefCell<Vec<Snapshot>>>);

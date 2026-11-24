@@ -239,6 +239,9 @@ fn v_row_parts(k: usize) -> Vec<(f64, f64)> {
     segments((V_BOTTOM + 3.0, V_TOP - 3.0), vec![shortcut])
 }
 
+/// About this far apart (m) the stops of the aisles of the north labyrinth are.
+const NORTH_STOP_SPACING: f64 = 20.0;
+
 /// The stops in the aisles of both labyrinths (station, point): in the middle of every
 /// part of the shelving, on the aisle.
 fn aisle_stops() -> Vec<(String, P)> {
@@ -250,14 +253,24 @@ fn aisle_stops() -> Vec<(String, P)> {
         if k >= 1 {
             avoid.push(shortcut_x(k - 1));
         }
-        for (a, b) in h_row_parts(k) {
-            let mid = (a + b) / 2.0;
-            let clear = |x: f64| avoid.iter().all(|s| (x - s).abs() >= 3.5);
-            let x = (0..=((b - a) * 5.0) as usize)
-                .flat_map(|i| [mid - i as f64 * 0.1, mid + i as f64 * 0.1])
-                .find(|&x| x >= a + 1.0 && x <= b - 1.0 && clear(x))
-                .unwrap_or(mid);
-            out.push((format!("LN{k}"), (x, h_y(k))));
+        // a stop for about every `NORTH_STOP_SPACING` m of a part (each one is a station of its
+        // own, so that the jobs draw them as often as the stations elsewhere), in the middle of
+        // its piece, moved off the shortcuts
+        let mut j = 0;
+        for (pa, pb) in h_row_parts(k) {
+            let n = (((pb - pa) / NORTH_STOP_SPACING).ceil() as usize).max(1);
+            for i in 0..n {
+                let a = pa + (pb - pa) * i as f64 / n as f64;
+                let b = pa + (pb - pa) * (i + 1) as f64 / n as f64;
+                let mid = (a + b) / 2.0;
+                let clear = |x: f64| avoid.iter().all(|s| (x - s).abs() >= 3.5);
+                let x = (0..=((b - a) * 5.0) as usize)
+                    .flat_map(|i| [mid - i as f64 * 0.1, mid + i as f64 * 0.1])
+                    .find(|&x| x >= a + 1.0 && x <= b - 1.0 && clear(x))
+                    .unwrap_or(mid);
+                out.push((format!("LN{k}-{j}"), (x, h_y(k))));
+                j += 1;
+            }
         }
     }
     for k in 0..V_AISLES {

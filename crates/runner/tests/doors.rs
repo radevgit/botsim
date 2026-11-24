@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use botsim::scenario::Scenario;
+use botsim::summary;
 use botsim_core::lift::DoorState;
-use botsim_runner::scenario::Scenario;
-use botsim_runner::summary;
 
 fn data() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data")
@@ -40,7 +40,7 @@ open_seconds = 3.0
 close_seconds = 3.0
 "#;
 
-fn build(text: &str) -> Result<botsim_core::world::World, botsim_runner::scenario::ScenarioError> {
+fn build(text: &str) -> Result<botsim_core::world::World, botsim::scenario::ScenarioError> {
     Scenario::from_toml(text)?.build_world(&data())
 }
 

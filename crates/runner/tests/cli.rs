@@ -1,15 +1,15 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use botsim_runner::scenario::Scenario;
-use botsim_runner::summary::{self, ticks_for};
+use botsim::scenario::Scenario;
+use botsim::summary::{self, ticks_for};
 
 fn data() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data")
 }
 
 fn cli(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_botsim-runner"))
+    Command::new(env!("CARGO_BIN_EXE_botsim"))
         .args(args)
         .output()
         .unwrap()

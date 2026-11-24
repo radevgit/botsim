@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use botsim::scenario::{Scenario, ScenarioError};
+use botsim::summary;
 use botsim_core::lift::DoorState;
-use botsim_runner::scenario::{Scenario, ScenarioError};
-use botsim_runner::summary;
 
 fn data() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data")

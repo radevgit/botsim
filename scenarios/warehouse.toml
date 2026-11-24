@@ -7,7 +7,7 @@
 #
 # Run, record and make a video from the repository root:
 # (data/ is not in git; 2700 frames of 1920x1080, about 80 s to draw, a 90 s video)
-#   cargo run --release -p botsim-runner -- --record data/warehouse.jsonl \
+#   cargo run --release -p botsim -- --record data/warehouse.jsonl \
 #       --geometry scenarios/warehouse.geometry.json scenarios/warehouse.toml
 #   cargo run --release -p botsim-export -- data/warehouse.jsonl data/warehouse_frames --speed 10
 #   ffmpeg -framerate 30 -i data/warehouse_frames/frame_%06d.png -c:v libx264 -preset slow -crf 18 \

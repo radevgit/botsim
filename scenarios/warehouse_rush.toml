@@ -1,7 +1,7 @@
 # The warehouse of warehouse.toml in a rush: 16 robots and 300 jobs per hour,
 # more than the aisles can take. The baseline controller gets into deadlocks
 # (waiting loops) that last until the end, which makes a video of who blocks whom.
-#   cargo run --release -p botsim-runner -- --record data/rush.jsonl \
+#   cargo run --release -p botsim -- --record data/rush.jsonl \
 #       --geometry scenarios/warehouse.geometry.json scenarios/warehouse_rush.toml
 #   cargo run --release -p botsim-export -- data/rush.jsonl data/rush_frames --speed 10
 #   ffmpeg -framerate 30 -i data/rush_frames/frame_%06d.png -c:v libx264 -preset slow -crf 18 \

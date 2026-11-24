@@ -1,4 +1,4 @@
-//! `botsim-runner --record`: the recording file and the unchanged summary.
+//! `botsim --record`: the recording file and the unchanged summary.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -16,7 +16,7 @@ fn tmp(name: &str) -> PathBuf {
 }
 
 fn cli(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_botsim-runner"))
+    Command::new(env!("CARGO_BIN_EXE_botsim"))
         .args(args)
         .output()
         .unwrap()

@@ -53,7 +53,7 @@ use botsim_core::world::{RobotId, World};
 use vda5050::order::Order;
 use vda5050::state::{ActionStatus, State};
 
-use crate::conflicts::{ConflictInput, ConflictTable};
+use crate::conflicts::{ConflictInput, ConflictTable, Held, NodeConflictInput};
 use crate::doors::DoorDesk;
 use crate::lifts::{LiftDesk, LiftRobot};
 use crate::node_grid::NodeGrid;
@@ -78,6 +78,12 @@ pub const WAIT_AVERAGE_SECONDS: f64 = 60.0;
 const TURN_CLEARANCE: f64 = 0.05;
 
 pub const GIVE_WAY_AFTER_SECONDS: f64 = 5.0;
+
+/// Go-first takes the node or edge of a robot H only if H has had its route released
+/// and has not moved for this long (it is held by its protective field, not just
+/// released: warehouse 4, 1102 s, two robots were released onto the same node in the
+/// same second and drove into each other).
+pub const GIVE_WAY_HOLD_SECONDS: f64 = 2.0;
 
 /// How close (metres) a robot must be to a node to count as standing on it.
 pub const NODE_TOLERANCE: f64 = 0.1;
@@ -114,6 +120,10 @@ struct Work {
     /// How long the robot has stood at the end of its released route because
     /// the next node or edge is held by another robot (S53).
     blocked_seconds: f64,
+    /// How long the robot has had a route released ahead of it and has not moved
+    /// (stopped by its protective field, or just released). Go-first takes a node
+    /// or edge from a robot only after [`GIVE_WAY_HOLD_SECONDS`] of it.
+    still_seconds: f64,
     /// The order was sent with a message delay and the robot's state has not
     /// shown it yet (S58): the controller does not know whether it was accepted.
     awaiting_ack: bool,
@@ -330,6 +340,18 @@ impl Controller {
         let n = table.pairs();
         self.conflicts = Some(table);
         n
+    }
+
+    /// Node-edge conflicts for the swept-area reservation: a robot is not released
+    /// onto an edge that passes too close to a node another robot holds, nor to a node
+    /// where it would stand next to an edge another robot holds. Call after
+    /// [`Controller::set_conflicts`]; returns the number read (0 if that was not
+    /// called).
+    pub fn set_node_conflicts(&mut self, input: &[NodeConflictInput]) -> usize {
+        let Some(table) = self.conflicts.as_mut() else {
+            return 0;
+        };
+        table.add_node_conflicts(&self.graph, &self.type_names, input)
     }
 
     /// Route with load, second part: every edge also costs `weight` metres for each
@@ -588,9 +610,20 @@ impl Controller {
         let wanted = self.lifts.window(i, &work.plan, at, from, wanted);
         // so does an edge through a door (S51)
         let wanted = self.doors.window(i, &work.plan, at, from, wanted);
-        let swept = self.conflicts.as_ref().map(|c| (c, self.robot_types.as_slice()));
+        let swept = self
+            .conflicts
+            .as_ref()
+            .map(|c| (c, self.robot_types.as_slice()));
         let waived = self.waived.get(&i).copied();
-        let rt = reserve_up_to(&mut self.reservations, &work.plan, i, from, wanted, swept, waived);
+        let rt = reserve_up_to(
+            &mut self.reservations,
+            &work.plan,
+            i,
+            from,
+            wanted,
+            swept,
+            waived,
+        );
         if rt > from {
             self.waived.remove(&i);
         }
@@ -602,6 +635,15 @@ impl Controller {
         let stuck = at == from && wanted > from && rt == from && is_waiting(state);
         work.blocked_seconds = if stuck {
             work.blocked_seconds + elapsed
+        } else {
+            0.0
+        };
+        let not_moving = state
+            .velocity
+            .as_ref()
+            .is_none_or(|v| v.vx.unwrap_or(0.0).abs() < 0.05);
+        work.still_seconds = if rt > at && not_moving {
+            work.still_seconds + elapsed
         } else {
             0.0
         };
@@ -641,8 +683,7 @@ impl Controller {
                 let orient = self.types[slot.type_idx]
                     .omnidirectional
                     .then_some((slot.id.manufacturer.as_str(), slot.series.as_str()));
-                let msg =
-                    build_order_with(&self.graph, &header, &work.plan, from, from, orient);
+                let msg = build_order_with(&self.graph, &header, &work.plan, from, from, orient);
                 slot.header_id += 1;
                 match deliver(world, msg) {
                     Ok(_) => self.reroutes += 1,
@@ -917,7 +958,10 @@ impl Controller {
             .lifts
             .window(i, &plan, 0, 0, plan.released_through(0, RELEASE_WINDOW));
         let wanted = self.doors.window(i, &plan, 0, 0, wanted);
-        let swept = self.conflicts.as_ref().map(|c| (c, self.robot_types.as_slice()));
+        let swept = self
+            .conflicts
+            .as_ref()
+            .map(|c| (c, self.robot_types.as_slice()));
         let released_through =
             reserve_up_to(&mut self.reservations, &plan, i, 0, wanted, swept, None);
         self.doors.settle(i, released_through);
@@ -944,6 +988,7 @@ impl Controller {
                     assigned_tick: tick,
                     waiting_seconds: 0.0,
                     blocked_seconds: 0.0,
+                    still_seconds: 0.0,
                     awaiting_ack: reception == Reception::InTransit,
                     cancelling: None,
                 });
@@ -989,10 +1034,23 @@ impl Controller {
             // X waits for the node, or for an edge whose swept area overlaps the one
             // of its next edge (swept-area reservation): the holder is H
             let node_holder = self.reservations.node_holder(node).filter(|&h| h != i);
-            let swept = self.conflicts.as_ref().and_then(|c| {
-                c.blocker(&self.reservations, &self.robot_types, i, edge)
-            });
-            let Some(h) = node_holder.or(swept.map(|(h, _)| h)) else {
+            let swept = self
+                .conflicts
+                .as_ref()
+                .and_then(|c| c.blocker(&self.reservations, &self.robot_types, i, edge));
+            // or for a node (or an edge) that the next edge passes too close to
+            // (node-edge conflict)
+            let nblock = if node_holder.is_none() && swept.is_none() {
+                self.conflicts
+                    .as_ref()
+                    .and_then(|c| c.node_blocker(&self.reservations, &self.robot_types, i, edge))
+            } else {
+                None
+            };
+            let Some(h) = node_holder
+                .or(swept.map(|(h, _)| h))
+                .or(nblock.map(|(h, _)| h))
+            else {
                 continue;
             };
             // H must be on its way through the node (it has released it as part of
@@ -1000,6 +1058,22 @@ impl Controller {
             // holds it because it stands on it, and cannot be gone around. For a
             // conflicting edge: H has released it as part of its route.
             let on_its_way = match (node_holder, swept) {
+                (None, None) => nblock.is_some_and(|(_, held)| {
+                    self.robots[h].work.as_ref().is_some_and(|w| match held {
+                        Held::Node(n) => w
+                            .plan
+                            .nodes
+                            .iter()
+                            .take(w.released_through + 1)
+                            .any(|&m| m == n),
+                        Held::Edge(f) => w
+                            .plan
+                            .edges
+                            .iter()
+                            .take(w.released_through)
+                            .any(|&e| e == f),
+                    })
+                }),
                 (Some(_), _) => {
                     self.robots[h].work.as_ref().is_some_and(|w| {
                         w.plan
@@ -1010,11 +1084,22 @@ impl Controller {
                     }) && self.node_of(&states[h]) != Some(node)
                 }
                 (None, Some((_, f))) => self.robots[h].work.as_ref().is_some_and(|w| {
-                    w.plan.edges.iter().take(w.released_through).any(|&e| e == f)
+                    w.plan
+                        .edges
+                        .iter()
+                        .take(w.released_through)
+                        .any(|&e| e == f)
                 }),
-                (None, None) => false,
             };
             if !on_its_way {
+                continue;
+            }
+            // H has not moved for a while with its route released
+            if !self.robots[h]
+                .work
+                .as_ref()
+                .is_some_and(|w| w.still_seconds >= GIVE_WAY_HOLD_SECONDS)
+            {
                 continue;
             }
             // the edge must be free, or held by the same robot
@@ -1047,7 +1132,10 @@ impl Controller {
             // X may also be beside H's curve (up to 100° off its heading, 5 m away).
             // The same holds if X stands on a node that H has released (H's way
             // goes through X).
-            let same_route = self.same_route_after(i, h, node);
+            // (for a conflicting edge: or both routes meet at the end of H's edge and
+            // go on to the same node, N908/T-009, warehouse 4)
+            let same_route = self.same_route_after(i, h, node)
+                || swept.is_some_and(|(_, f)| self.meet_and_go_on(i, h, f));
             // (not by who holds the node: X may have taken it over earlier)
             let on_h_way = self.node_of(&states[i]).is_some_and(|n| {
                 self.robots[h].work.as_ref().is_some_and(|w| {
@@ -1104,7 +1192,7 @@ impl Controller {
             }
             // the edge conflicts with one H holds: X may be released onto its edge
             // although H still holds the other (until X has been released)
-            if swept.is_some_and(|(sh, _)| sh == h) {
+            if swept.is_some_and(|(sh, _)| sh == h) || nblock.is_some_and(|(nh, _)| nh == h) {
                 self.waived.insert(i, edge);
             }
             self.give_ways += 1;
@@ -1125,6 +1213,41 @@ impl Controller {
             .iter()
             .skip(wb.released_through.saturating_sub(1))
             .position(|&n| n == node)
+            .and_then(|k| {
+                wb.plan
+                    .nodes
+                    .get(wb.released_through.saturating_sub(1) + k + 1)
+            });
+        after_a.is_some() && after_a == after_b
+    }
+
+    /// Does the route of `a`, within its next three nodes, reach the end node of edge
+    /// `f` of `b`, and do both go on from there to the same node?
+    fn meet_and_go_on(&self, a: usize, b: usize, f: EdgeIdx) -> bool {
+        let (Some(wa), Some(wb)) = (self.robots[a].work.as_ref(), self.robots[b].work.as_ref())
+        else {
+            return false;
+        };
+        let m = self.graph.edges[f].end;
+        let first = wa.released_through + 1;
+        let Some(p) = wa
+            .plan
+            .nodes
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(3)
+            .find_map(|(k, &n)| (n == m).then_some(k))
+        else {
+            return false;
+        };
+        let after_a = wa.plan.nodes.get(p + 1);
+        let after_b = wb
+            .plan
+            .nodes
+            .iter()
+            .skip(wb.released_through.saturating_sub(1))
+            .position(|&n| n == m)
             .and_then(|k| {
                 wb.plan
                     .nodes

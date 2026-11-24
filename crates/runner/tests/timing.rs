@@ -6,7 +6,7 @@ fn data() -> PathBuf {
 }
 
 fn cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_botsim-runner"))
+    Command::new(env!("CARGO_BIN_EXE_botsim"))
         .args(args)
         .output()
         .unwrap()

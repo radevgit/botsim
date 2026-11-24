@@ -131,7 +131,7 @@ fn faster_and_slower_walk_the_speed_list_and_stop_at_its_ends() {
     for _ in 0..20 {
         p.faster();
     }
-    assert_eq!(p.speed(), 100.0, "the highest stays");
+    assert_eq!(p.speed(), 1000.0, "the highest stays");
     // a speed that is not in the list: the next one above / below
     p.set_speed(7.0);
     p.faster();

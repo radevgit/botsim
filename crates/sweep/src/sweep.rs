@@ -1,4 +1,4 @@
-//! The outline of a robot swept along an edge (input of the conflict map, check 5).
+//! The outline of a robot swept along an edge (input of the conflict map).
 //!
 //! The edge path (`Graph::edge_path`: the NURBS trajectory sampled, or the straight
 //! line) is sampled at a fixed distance; at each sample the body outline is placed
@@ -11,13 +11,17 @@
 use botsim_core::graph::Graph;
 use botsim_core::spec::{Kinematics, Shape};
 use togo::prelude::{
-    Circle, OrientedRect, circle, overlap_circle_orect, overlap_orect_orect, point,
+    Circle, OrientedRect, circle, dist_circle_orect, dist_orect_orect, overlap_circle_orect,
+    overlap_orect_orect, point,
 };
 
-use crate::reach::TypeRef;
+use crate::types::TypeRef;
 
 /// Default distance between two samples along a path (m).
 pub const SAMPLE_STEP: f64 = 0.25;
+
+/// (min x, min y, max x, max y).
+pub type Bounds = (f64, f64, f64, f64);
 
 /// The body of the robot at one sample.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,7 +32,7 @@ pub enum Body {
 
 impl Body {
     /// (min x, min y, max x, max y) of the body.
-    pub fn bounds(&self) -> (f64, f64, f64, f64) {
+    pub fn bounds(&self) -> Bounds {
         match self {
             Body::Rect(r) => {
                 let c = r.corners();
@@ -46,6 +50,11 @@ impl Body {
     }
 }
 
+/// Do two boxes come within `margin` of each other (touching counts)?
+fn boxes_near(a: Bounds, b: Bounds, margin: f64) -> bool {
+    !(a.2 + margin < b.0 || b.2 + margin < a.0 || a.3 + margin < b.1 || b.3 + margin < a.1)
+}
+
 /// Do two bodies overlap? Touching counts as overlap (togo's rule).
 pub fn bodies_overlap(a: &Body, b: &Body) -> bool {
     match (a, b) {
@@ -54,6 +63,19 @@ pub fn bodies_overlap(a: &Body, b: &Body) -> bool {
             overlap_circle_orect(c, r)
         }
         (Body::Circle(a), Body::Circle(b)) => (a.c.x - b.c.x).hypot(a.c.y - b.c.y) <= a.r + b.r,
+    }
+}
+
+/// The distance between two bodies (m); 0 if they overlap or touch.
+pub fn body_distance(a: &Body, b: &Body) -> f64 {
+    match (a, b) {
+        (Body::Rect(a), Body::Rect(b)) => dist_orect_orect(a, b),
+        (Body::Circle(c), Body::Rect(r)) | (Body::Rect(r), Body::Circle(c)) => {
+            dist_circle_orect(c, r)
+        }
+        (Body::Circle(a), Body::Circle(b)) => {
+            ((a.c.x - b.c.x).hypot(a.c.y - b.c.y) - a.r - b.r).max(0.0)
+        }
     }
 }
 
@@ -96,42 +118,98 @@ pub fn overlap_depth(a: &Body, b: &Body) -> Option<f64> {
     (d >= 0.0).then_some(d)
 }
 
-/// A robot type's outline swept along one edge.
+/// How two swept outlines come together: see [`Sweep::contact`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Contact {
+    /// The deepest overlap of any two bodies (m); 0 if none overlaps (or they touch).
+    pub depth: f64,
+    /// The smallest distance between any two bodies (m); 0 if some overlap or touch.
+    pub distance: f64,
+}
+
+/// A robot type's outline swept along one edge (or the bodies at one node).
 #[derive(Debug, Clone)]
 pub struct Sweep {
     pub bodies: Vec<Body>,
     /// Bounding box of all bodies: (min x, min y, max x, max y); for the broad phase.
-    pub bounds: (f64, f64, f64, f64),
+    pub bounds: Bounds,
+    /// Bounding box of each body.
+    boxes: Vec<Bounds>,
 }
 
 impl Sweep {
+    /// A sweep of the given bodies (empty: a sweep that touches nothing).
+    pub fn from_bodies(bodies: Vec<Body>) -> Sweep {
+        let boxes: Vec<Bounds> = bodies.iter().map(Body::bounds).collect();
+        let bounds = boxes.iter().fold(
+            (
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ),
+            |b, c| (b.0.min(c.0), b.1.min(c.1), b.2.max(c.2), b.3.max(c.3)),
+        );
+        Sweep {
+            bodies,
+            bounds,
+            boxes,
+        }
+    }
+
     /// The deepest overlap of any body of one with any body of the other (m);
     /// `None` if the swept outlines do not overlap.
     pub fn max_overlap(&self, other: &Sweep) -> Option<f64> {
-        if !self.overlaps(other) {
-            return None;
-        }
-        let mut deepest: Option<f64> = None;
-        for x in &self.bodies {
-            for y in &other.bodies {
-                if let Some(d) = overlap_depth(x, y) {
-                    deepest = Some(deepest.map_or(d, |m: f64| m.max(d)));
-                }
-            }
-        }
-        deepest
+        self.contact(other, 0.0).map(|c| c.depth)
     }
 
     /// Do the two swept outlines overlap anywhere? First the bounding boxes, then
     /// every body of one against every body of the other.
     pub fn overlaps(&self, other: &Sweep) -> bool {
-        let (a, b) = (self.bounds, other.bounds);
-        if a.2 < b.0 || b.2 < a.0 || a.3 < b.1 || b.3 < a.1 {
+        if !boxes_near(self.bounds, other.bounds, 0.0) {
             return false;
         }
-        self.bodies
-            .iter()
-            .any(|x| other.bodies.iter().any(|y| bodies_overlap(x, y)))
+        self.bodies.iter().zip(&self.boxes).any(|(x, bx)| {
+            other
+                .bodies
+                .iter()
+                .zip(&other.boxes)
+                .any(|(y, by)| boxes_near(*bx, *by, 0.0) && bodies_overlap(x, y))
+        })
+    }
+
+    /// How the two outlines come together, if any body of one overlaps, touches or
+    /// is nearer than `clearance` (m) to a body of the other; `None` if the
+    /// outlines stay `clearance` or more apart. With `clearance` 0 only overlap
+    /// (touching too) is found.
+    pub fn contact(&self, other: &Sweep, clearance: f64) -> Option<Contact> {
+        let clearance = clearance.max(0.0);
+        if !boxes_near(self.bounds, other.bounds, clearance) {
+            return None;
+        }
+        let mut depth: Option<f64> = None;
+        let mut distance = f64::INFINITY;
+        for (x, bx) in self.bodies.iter().zip(&self.boxes) {
+            for (y, by) in other.bodies.iter().zip(&other.boxes) {
+                if !boxes_near(*bx, *by, clearance) {
+                    continue;
+                }
+                if let Some(d) = overlap_depth(x, y) {
+                    depth = Some(depth.map_or(d, |m: f64| m.max(d)));
+                    distance = 0.0;
+                } else if clearance > 0.0 && distance > 0.0 {
+                    let gap = body_distance(x, y);
+                    if gap < clearance {
+                        distance = distance.min(gap);
+                    }
+                }
+            }
+        }
+        // closer than the clearance counts, so a gap equal to it does not
+        (depth.is_some() || distance < clearance).then_some(Contact {
+            depth: depth.unwrap_or(0.0),
+            distance: if depth.is_some() { 0.0 } else { distance },
+        })
     }
 }
 
@@ -155,17 +233,7 @@ pub fn sweep(graph: &Graph, edge: usize, t: &TypeRef, step: f64) -> Option<Sweep
         let heading = path.tangent_at(s);
         bodies.push(body_at(&t.shape, t.kinematics, x, y, heading));
     }
-    let mut b = (
-        f64::INFINITY,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::NEG_INFINITY,
-    );
-    for body in &bodies {
-        let (a, c, d, e) = body.bounds();
-        b = (b.0.min(a), b.1.min(c), b.2.max(d), b.3.max(e));
-    }
-    Some(Sweep { bodies, bounds: b })
+    Some(Sweep::from_bodies(bodies))
 }
 
 /// The bodies of a robot of type `t` standing on a node: one for each heading it
@@ -361,6 +429,33 @@ mod tests {
     }
 
     #[test]
+    fn contact_finds_overlap_and_near_misses() {
+        let t = TypeRef::test_rect("ACME/X1", Kinematics::Differential, 2.0, 1.0);
+        let contact = |g: &Graph, clearance: f64| {
+            let a = sweep(g, 0, &t, 0.25).expect("sweep");
+            let b = sweep(g, 1, &t, 0.25).expect("sweep");
+            a.contact(&b, clearance)
+        };
+        // parallel 1.05 m apart, bodies 1 m wide: 0.05 m gap
+        let g = two_edges(0.0, 1.05, 10.0, 0.0);
+        assert!(contact(&g, 0.0).is_none());
+        assert!(contact(&g, 0.04).is_none());
+        let c = contact(&g, 0.10).expect("within 10 cm");
+        assert_eq!(c.depth, 0.0);
+        assert!((c.distance - 0.05).abs() < 1e-9, "{c:?}");
+        // a gap equal to the clearance is not "below" it
+        assert!(contact(&two_edges(0.0, 1.10, 10.0, 0.0), 0.10 - 1e-6).is_none());
+        // overlap: depth, distance 0, with or without clearance
+        let g = two_edges(0.0, 0.9, 10.0, 0.0);
+        for clearance in [0.0, 0.1] {
+            let c = contact(&g, clearance).expect("overlap");
+            assert!((c.depth - 0.1).abs() < 1e-9 && c.distance == 0.0, "{c:?}");
+        }
+        // far away: nothing
+        assert!(contact(&two_edges(50.0, 50.0, 10.0, 0.0), 0.1).is_none());
+    }
+
+    #[test]
     fn overlap_depth_when_one_body_is_inside_the_other_on_an_axis() {
         // a 1 x 1 box centred in a 4 x 2 box: it has to move 1.5 m along x? no:
         // out along y by 1.5 (0.5 + 1.0), along x by 2.5 (0.5 + 2.0): 1.5
@@ -380,6 +475,11 @@ mod tests {
         let r = Body::Rect(OrientedRect::from_angle(point(0.0, 0.0), 0.0, 1.0, 0.5));
         let d = overlap_depth(&c(1.25, 0.5), &r).expect("overlap");
         assert!((d - 0.25).abs() < 1e-12, "{d}");
+        // distances
+        assert!((body_distance(&c(0.0, 1.0), &c(3.0, 1.0)) - 1.0).abs() < 1e-12);
+        // the rectangle reaches x = 1; the circle's near edge is at 3 - 0.5
+        assert!((body_distance(&c(3.0, 0.5), &r) - 1.5).abs() < 1e-12);
+        assert_eq!(body_distance(&c(1.25, 0.5), &r), 0.0);
     }
 
     #[test]

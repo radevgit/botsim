@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use botsim_runner::scenario::Scenario;
-use botsim_runner::summary::{self, Summary};
+use botsim::scenario::Scenario;
+use botsim::summary::{self, Summary};
 
 fn data() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data")
@@ -85,7 +85,7 @@ fn the_timeout_must_be_positive_and_the_cli_json_has_the_fields() {
             .contains("deadlock_timeout")
     );
 
-    let out = Command::new(env!("CARGO_BIN_EXE_botsim-runner"))
+    let out = Command::new(env!("CARGO_BIN_EXE_botsim"))
         .arg(data().join("deadlock.toml"))
         .output()
         .unwrap();

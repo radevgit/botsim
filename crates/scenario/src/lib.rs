@@ -158,12 +158,17 @@ pub struct Scenario {
     #[serde(default)]
     pub route_wait_weight: f64,
     /// Swept-area reservation (baseline): a robot is released onto an edge only if
-    /// no other robot holds an edge whose swept outline overlaps it (the conflict
-    /// map of `botsim-check`, per pair of robot types). Default `true`; `false`
-    /// reserves nodes and edges only. It needs the scenario file (the layout and
-    /// factsheets are read again), so a scenario from text has none.
+    /// no other robot holds an edge whose swept outline overlaps it or comes nearer
+    /// than `conflict_clearance` (the conflict map of `botsim-sweep`, per pair of
+    /// robot types). Default `true`; `false` reserves nodes and edges only. It needs
+    /// the scenario file (the layout and factsheets are read again), so a scenario
+    /// from text has none.
     #[serde(default = "yes")]
     pub conflict_reservation: bool,
+    /// Swept-area reservation: two bodies nearer than this (m), overlap included,
+    /// conflict. Default 0.10; 0 keeps only overlaps of 5 cm or more.
+    #[serde(default = "default_conflict_clearance")]
+    pub conflict_clearance: f64,
     /// The file the scenario was read from (set by [`Scenario::load`]).
     #[serde(skip)]
     pub source: Option<PathBuf>,
@@ -282,6 +287,10 @@ fn default_stop_max() -> f64 {
 
 fn yes() -> bool {
     true
+}
+
+fn default_conflict_clearance() -> f64 {
+    0.10
 }
 
 fn one_door() -> Vec<String> {

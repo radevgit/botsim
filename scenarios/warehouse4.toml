@@ -27,9 +27,9 @@ manufacturer = "ACME"
 serial_prefix = "Y"
 factsheet = "forklift.factsheet.json"
 start_nodes = [
-    "N466", "N699", "N555", "N500", "N445", "N534", "N568", "N513",
-    "N547", "N492", "N437", "N560", "N649", "N505", "N539", "N484",
-    "N429", "N552", "N497", "N442", "N531", "N476", "N544", "N633",
+    "N610", "N500", "N445", "N534", "N479", "N568", "N513", "N492",
+    "N526", "N471", "N704", "N505", "N484", "N518", "N497", "N586",
+    "N675", "N476", "N565", "N510", "N489", "N578", "N667", "N523",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
@@ -44,9 +44,9 @@ manufacturer = "ACME"
 serial_prefix = "X"
 factsheet = "diff_robot.factsheet.json"
 start_nodes = [
-    "N717", "N489", "N667", "N523", "N612", "N468", "N557", "N646",
-    "N536", "N481", "N714", "N659", "N515", "N460", "N549", "N439",
-    "N528", "N473", "N596", "N685", "N541", "N486", "N575", "N431",
+    "N725", "N722", "N612", "N468", "N557", "N646", "N502", "N447",
+    "N625", "N481", "N570", "N659", "N515", "N693", "N494", "N583",
+    "N706", "N562", "N507", "N486", "N719", "N575", "N664", "N465",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
@@ -61,8 +61,8 @@ manufacturer = "ACME"
 serial_prefix = "T"
 factsheet = "three_wheel.factsheet.json"
 start_nodes = [
-    "N623", "N479", "N602", "N636", "N471", "N573", "N463", "N696",
-    "N641", "N586", "N565",
+    "N699", "N555", "N589", "N547", "N636", "N581", "N649", "N683",
+    "N539", "N573", "N531",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
@@ -77,9 +77,9 @@ manufacturer = "ACME"
 serial_prefix = "O"
 factsheet = "omni_robot.factsheet.json"
 start_nodes = [
-    "N520", "N465", "N533", "N478", "N711", "N567", "N512", "N457",
-    "N690", "N669", "N525", "N470", "N559", "N504", "N572", "N517",
-    "N462", "N551", "N496",
+    "N554", "N499", "N622", "N478", "N567", "N656", "N690", "N546",
+    "N491", "N559", "N449", "N538", "N483", "N716", "N462", "N551",
+    "N496", "N585", "N441",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
@@ -94,8 +94,8 @@ manufacturer = "ACME"
 serial_prefix = "C"
 factsheet = "small_robot.factsheet.json"
 start_nodes = [
-    "N708", "N564", "N509", "N598", "N454", "N543", "N488", "N433",
-    "N556", "N501", "N679", "N480",
+    "N530", "N619", "N687", "N543", "N488", "N577", "N522", "N501",
+    "N734", "N535", "N480", "N713",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
@@ -109,15 +109,18 @@ drop = 3.0
 rate_per_hour = 900.0
 # every station but the parking
 stations = [
-    "LN0", "LN1", "LN2", "LN3", "LN4", "LN5", "LN6", "LV0",
-    "LV1", "LV2", "LV3", "LV4", "LV5", "GOODS-IN-1", "GOODS-IN-2", "GOODS-IN-3",
-    "GOODS-IN-4", "GOODS-IN-5", "GOODS-OUT-1", "GOODS-OUT-2", "GOODS-OUT-3", "RW00", "RW01", "RW02",
-    "RW03", "RW04", "RW05", "RW06", "RW10", "RW11", "RW12", "RW13",
-    "RW14", "RW15", "RW16", "RW20", "RW21", "RW22", "RW23", "RW24",
-    "RW25", "RW26", "RW30", "RW31", "RW32", "RW33", "RW34", "RW35",
-    "RW36", "RE00", "RE01", "RE02", "RE03", "RE04", "RE10", "RE11",
-    "RE12", "RE13", "RE14", "RE20", "RE21", "RE22", "RE23", "RE24",
-    "RE30", "RE31", "RE32", "RE33", "RE34", "WALL-S", "WALL-N",
+    "LN0-0", "LN0-1", "LN0-2", "LN0-3", "LN1-0", "LN1-1", "LN1-2", "LN1-3",
+    "LN2-0", "LN2-1", "LN2-2", "LN2-3", "LN3-0", "LN3-1", "LN3-2", "LN3-3",
+    "LN4-0", "LN4-1", "LN4-2", "LN4-3", "LN5-0", "LN5-1", "LN5-2", "LN5-3",
+    "LN6-0", "LN6-1", "LN6-2", "LN6-3", "LV0", "LV1", "LV2", "LV3",
+    "LV4", "LV5", "GOODS-IN-1", "GOODS-IN-2", "GOODS-IN-3", "GOODS-IN-4", "GOODS-IN-5", "GOODS-OUT-1",
+    "GOODS-OUT-2", "GOODS-OUT-3", "RW00", "RW01", "RW02", "RW03", "RW04", "RW05",
+    "RW06", "RW10", "RW11", "RW12", "RW13", "RW14", "RW15", "RW16",
+    "RW20", "RW21", "RW22", "RW23", "RW24", "RW25", "RW26", "RW30",
+    "RW31", "RW32", "RW33", "RW34", "RW35", "RW36", "RE00", "RE01",
+    "RE02", "RE03", "RE04", "RE10", "RE11", "RE12", "RE13", "RE14",
+    "RE20", "RE21", "RE22", "RE23", "RE24", "RE30", "RE31", "RE32",
+    "RE33", "RE34", "WALL-S", "WALL-N",
 ]
 
 [disturbances]

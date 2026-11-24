@@ -1,4 +1,4 @@
-//! `botsim-runner [--timing] [--record <file.jsonl> [--record-interval <seconds>]
+//! `botsim [--timing] [--record <file.jsonl> [--record-interval <seconds>]
 //! [--geometry <geometry.json>]] <scenario.toml>`: run a scenario headless and print the JSON summary on
 //! stdout. Errors go to stderr with exit code 1; a wrong command line gives exit
 //! code 2.
@@ -19,11 +19,11 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use botsim::scenario::Scenario;
+use botsim::summary;
 use botsim_record::{GeometryFile, LayoutLine, LayoutRobot, Recorder};
-use botsim_runner::scenario::Scenario;
-use botsim_runner::summary;
 
-const USAGE: &str = "usage: botsim-runner [--timing] [--record <file.jsonl> \
+const USAGE: &str = "usage: botsim [--timing] [--record <file.jsonl> \
 [--record-interval <seconds>] [--geometry <geometry.json>]] <scenario.toml>";
 
 /// Snapshot interval of a recording, simulated seconds.

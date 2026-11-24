@@ -9,7 +9,7 @@ Status: work in progress.
 ## Try it
 
 ```sh
-cargo run --release -p botsim-runner -- scenarios/ring_jobs.toml
+cargo run --release -p botsim -- scenarios/ring_jobs.toml
 ```
 
 It runs the scenario to its end and prints a JSON summary (jobs, throughput,
@@ -23,7 +23,7 @@ and a larger, slower forklift; the layout says which type may use which edge
 and at what speed).
 
 `scenarios/lift_jobs.toml` is another example: two floors, one lift and jobs
-between the floors (`cargo run --release -p botsim-runner -- scenarios/lift_jobs.toml`).
+between the floors (`cargo run --release -p botsim -- scenarios/lift_jobs.toml`).
 
 ## Check a layout
 
@@ -43,7 +43,7 @@ and shelves.
 
 ```sh
 # 1. run and record (a snapshot every 0.5 s; the geometry file draws walls and racks)
-cargo run --release -p botsim-runner -- --record data/warehouse4.jsonl --record-interval 0.5 \
+cargo run --release -p botsim -- --record data/warehouse4.jsonl --record-interval 0.5 \
     --geometry scenarios/warehouse4.geometry.json scenarios/warehouse4.toml
 
 # 2. watch it in a window
@@ -68,15 +68,18 @@ without a common node as lines. The **Usage** box shows only a heat map of how l
 each road was reserved and where robots waited, for a window of time ("from" and
 "to"); with `<scenario>.groups.json` next to the scenario (the generated warehouse
 scenarios have one) it also lists the use by group of roads. A run that freezes
-says most about its first minutes, so use the window.
+says most about its first minutes, so use the window. The time line at the bottom is
+a stacked histogram of the robot statuses over time (one colour for each, as in the table
+at the right) and is also the scrubber: click or drag on it to jump, the line is now.
 
 ## Workspace
 
 - `crates/core` — simulation core (`botsim-core`): world, robots, orders, collisions, jobs, metrics
 - `crates/baseline` — the bundled baseline controller (`botsim-baseline`)
 - `crates/scenario` — the scenario file (TOML): `Scenario`, `load`, `build_world` (`botsim-scenario`); shared by the runner and the checker
-- `crates/runner` — CLI and JSON summary (`botsim-runner`); re-exports the scenario crate as `botsim_runner::scenario`
+- `crates/runner` — CLI and JSON summary (package `botsim`, folder `crates/runner`); re-exports the scenario crate as `botsim::scenario`
 - `crates/check` — static layout checker, library and CLI (`botsim-check`); the list of checks is in `crates/check/README.md`
+- `crates/sweep` — swept robot bodies along the edges and the conflict map of a layout for a fleet (`botsim-sweep`); library used by the checker, for the runner and later the traffic module
 - `crates/record` — the recording of a run (JSON Lines): line types, writer, reader (`botsim-record`)
 - `crates/export` — PNG frames from a recording, for videos (`botsim-export`); also the layout generators (`examples/gen_warehouse*.rs`)
 - `crates/viewer` — replay window, layout-check overlay and usage heat map (`botsim-viewer`)

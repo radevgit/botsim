@@ -1,6 +1,6 @@
 # A one-way ring of four nodes (20 m sides), two robots, random transport jobs.
 # Run it from the repository root:
-#   cargo run --release -p botsim-runner -- scenarios/ring_jobs.toml
+#   cargo run --release -p botsim -- scenarios/ring_jobs.toml
 name = "ring-jobs"
 seed = 7                      # same seed = same jobs = same result
 duration = 1800.0             # simulated seconds

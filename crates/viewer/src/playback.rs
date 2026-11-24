@@ -1,7 +1,8 @@
 //! The timeline of the viewer: where in the run we are, and whether time moves.
 
 /// Speeds to choose from, simulated seconds per real second.
-pub const SPEEDS: [f64; 8] = [0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0];
+pub const SPEEDS: [f64; 11] =
+    [0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0];
 
 /// A position on the timeline `start ..= end` (simulated seconds) that moves with
 /// real time when it is playing.

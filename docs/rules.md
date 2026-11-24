@@ -680,10 +680,12 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   types (a type may have a trajectory on the edge, another a straight line).
 - **Swept-area reservation (S102, setting `conflict_reservation`, default true):**
   two edges that cross, merge or run close have no node in common, so the node
-  and edge reservations let two robots use them at the same time. The layout
-  checker (`botsim-check`) makes the **conflict map**: per pair of robot types, the
-  pairs of edges whose swept outlines (factsheet body, sampled every 0.25 m) overlap
-  by at least 5 cm. The runner reads the scenario's layout and factsheets again,
+  and edge reservations let two robots use them at the same time. The library
+  `botsim-sweep` (shared with the layout checker; the runner does not depend on the
+  checker, U8) makes the **conflict map**: per pair of robot types, the pairs of
+  edges whose swept outlines (factsheet body, sampled every 0.25 m) overlap or come
+  nearer than the **clearance** (setting `conflict_clearance`, default 0.10 m; with 0
+  only overlaps of 5 cm or more). The runner reads the scenario's layout and factsheets again,
   takes the pairs that have **no node in common and are near a junction** (merge or
   diverge; parallel conflicts, which are layout faults, are left out) and gives them
   to the controller (`Controller::set_conflicts`, `botsim_baseline::conflicts`). A
@@ -698,9 +700,24 @@ The bundled controller talks to the robots only with VDA 5050 messages.
     (`waived`, until it has been released). Without that a robot waiting before a
     merge and a robot on the merge curve that its field stops froze each other
     (warehouse 4, 1100 s: 4 robots moving, 76 waiting).
-  - Result on warehouse 4, first 1100 s (weight 5): collisions 21 to 6, jobs done 91
-    to 86, 61 robots moving at 1000 s, no stand-off left at 1100 s. Not covered:
-    robots standing on a node against an edge (`node_pairs` of the map), the turn on
+  - **Same route for a conflict wait:** the "same route" test of go-first is also
+    met if X's route reaches the end node of H's conflicting edge within its next
+    three nodes and both go on from there to the same node (a robot on the road
+    beside the end of a merge curve, warehouse 4, N908).
+  - **Robots standing on a node (S109):** the node-edge conflicts of the map
+    (`node_pairs`: a robot standing on a node against an edge that does not touch
+    it, near a junction) are used too (`Controller::set_node_conflicts`). A robot is
+    not released onto an edge if another robot holds a node that the edge passes too
+    close to for those two types, nor if it would end at a node next to an edge
+    another robot holds. Holding a node counts as standing on it (a robot released
+    through it holds it). Go-first knows these waits too (S114): X waits for such a
+    node or edge that H holds as part of its route, H has been standing with its route
+    released for 2 s (`GIVE_WAY_HOLD_SECONDS`, so that a robot only just released is
+    not taken from), and the other conditions hold; X is then released although H
+    still holds it (`waived`).
+  - Result on warehouse 4, first 1100 s (weight 5): collisions 21 to 6 (edge pairs
+    only) to 1 (with node-edge conflicts), jobs done 91, 86, 79, 59 to 61 robots
+    moving at 1000 s, no stand-off at 1100 s. Not covered: the turn on
     the spot, the protective field, driving backwards; the deadlock detector of the
     core does not see waits for a conflicting edge.
 - **Route with load (S91, brief request of 2026-11-23):** the shortest route is
@@ -979,7 +996,8 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   east). `start_headings = [...]` gives one heading for each start node instead
   (the count must match `start_nodes`). `botsim_scenario::road_heading` gives the
   heading for a node, for the checker.
-- Optional `conflict_reservation` (default true, §9 "Swept-area reservation").
+- Optional `conflict_reservation` (default true, §9 "Swept-area reservation") and
+  `conflict_clearance` (m, default 0.10, the gap below which two bodies conflict).
 - Optional `route_load_weight` and `route_wait_weight` (metres, default 0, §9
   "Route with load").
 - **Debug option `stop_at_first_deadlock`** (**S59**, default `false`): the run
@@ -997,7 +1015,7 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   jobs) and its final position). It has no clock times or
   file paths, so the same scenario gives the same bytes.
 - Exit codes: 0 done, 1 error (message on standard error), 2 wrong command line.
-- Command line: `botsim-runner [--timing] <scenario.toml>`.
+- Command line: `botsim [--timing] <scenario.toml>` (the package of `crates/runner`, U7).
 
 ## 12. Known simplifications (not modelled yet)
 
@@ -1020,7 +1038,7 @@ edges (§7g, §7h).
 ## 13. Speed and scale (**S52**)
 
 The brief's target is about 1,000 robots. Measured with
-`cargo run --release -p botsim-runner --example scale -- <robots> <side> <seconds> <jobs per robot per hour>`
+`cargo run --release -p botsim --example scale -- <robots> <side> <seconds> <jobs per robot per hour>`
 (a one-way Manhattan grid with 6 m between nodes, 0.05 s steps, one thread):
 
 | Robots | Grid | Before | After |

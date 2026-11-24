@@ -1,7 +1,7 @@
 //! Scale test: many robots on a big one-way grid, measured in real time (S52).
 //!
 //! ```sh
-//! cargo run --release -p botsim-runner --example scale -- [robots] [side] [sim_seconds] [jobs_per_robot_per_hour] [observer_seconds]
+//! cargo run --release -p botsim --example scale -- [robots] [side] [sim_seconds] [jobs_per_robot_per_hour] [observer_seconds]
 //! ```
 //!
 //! Defaults: 100 robots, a 30 × 30 grid, 60 simulated seconds, 20 jobs per robot
@@ -17,10 +17,10 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Instant;
 
+use botsim::scenario::Scenario;
+use botsim::summary;
 use botsim_core::graph::Graph;
 use botsim_core::observer::{Observer, Snapshot};
-use botsim_runner::scenario::Scenario;
-use botsim_runner::summary;
 
 const FACTSHEET: &str = include_str!("../../../scenarios/diff_robot.factsheet.json");
 

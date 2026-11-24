@@ -59,8 +59,14 @@ fn lanes_used(weight: f64) -> [[bool; 2]; 2] {
     let spec = RobotSpec::from_factsheet(&f).unwrap();
     let mut w = World::new(g, DT, 0).unwrap();
     let times = ActionTimes::new(1.0).with("pick", 2.0).with("drop", 2.0);
-    w.add_robot(RobotId::new("ACME", "R0"), spec.clone(), times.clone(), a, 0.0)
-        .unwrap();
+    w.add_robot(
+        RobotId::new("ACME", "R0"),
+        spec.clone(),
+        times.clone(),
+        a,
+        0.0,
+    )
+    .unwrap();
     w.add_robot(RobotId::new("ACME", "R1"), spec, times, c, 0.0)
         .unwrap();
     w.set_safety_stop(true);
@@ -101,6 +107,9 @@ fn without_a_load_weight_both_robots_use_the_same_lane() {
 #[test]
 fn with_a_load_weight_the_second_robot_takes_the_empty_lane() {
     let used = lanes_used(5.0);
-    assert!(used[0][0] != used[0][1] && used[1][0] != used[1][1], "{used:?}");
+    assert!(
+        used[0][0] != used[0][1] && used[1][0] != used[1][1],
+        "{used:?}"
+    );
     assert_ne!(used[0], used[1], "{used:?}");
 }

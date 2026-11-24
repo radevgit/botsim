@@ -24,7 +24,6 @@
 
 use std::path::Path;
 
-use botsim_core::spec::{RobotSpec, Shape};
 use serde::Serialize;
 
 pub mod clearance;
@@ -40,10 +39,11 @@ pub mod places;
 pub mod reach;
 pub mod shelving;
 pub mod spacing;
-pub mod sweep;
 pub mod start;
 pub mod structure;
 
+/// The swept outlines live in `botsim-sweep`.
+pub use botsim_sweep::sweep;
 pub use finding::{Finding, FindingPlace, Level, PlaceKind, to_json, to_text};
 pub use input::{FleetType, Inputs, LoadError, load, load_with_geometry};
 
@@ -58,6 +58,12 @@ pub struct Options {
     /// Conflicts with an overlap less deep than this (m) are left out of the map
     /// and the findings. 0 keeps all, touching too.
     pub min_overlap: f64,
+    /// Robot-to-robot clearance (m): in the conflict map two bodies **nearer** than
+    /// this count as conflicting, overlap or not (default 0.10 m). The findings
+    /// keep to real overlaps (`min_overlap`); the near misses are only in the map,
+    /// for a controller that keeps a gap. 0 turns it off. (Not the `clearance`
+    /// check, which is robot against walls and racks.)
+    pub clearance: f64,
     /// Compute the conflict map and its findings (the slow part).
     pub conflict_map: bool,
 }
@@ -68,7 +74,27 @@ impl Default for Options {
             geometry: None,
             sample_step: sweep::SAMPLE_STEP,
             min_overlap: conflict::MIN_OVERLAP,
+            clearance: conflict::CLEARANCE,
             conflict_map: true,
+        }
+    }
+}
+
+impl Options {
+    /// The map of the older entry points ([`check_inputs`], [`check_all`],
+    /// [`conflict_map_json`]): overlaps only, no clearance margin.
+    fn overlap_only() -> Options {
+        Options {
+            clearance: 0.0,
+            ..Options::default()
+        }
+    }
+
+    fn map_options(&self) -> conflict::MapOptions {
+        conflict::MapOptions {
+            sample_step: self.sample_step,
+            min_overlap: self.min_overlap,
+            clearance: self.clearance,
         }
     }
 }
@@ -119,14 +145,16 @@ pub fn run(inputs: &Inputs, options: &Options) -> Report {
     Report::new(findings, conflict_map)
 }
 
-/// Run all checks on loaded inputs (findings only; with the default options).
+/// Run all checks on loaded inputs (findings only; default options, but a map of
+/// overlaps only: no clearance margin).
 pub fn check_inputs(inputs: &Inputs) -> Vec<Finding> {
-    run(inputs, &Options::default()).findings
+    run(inputs, &Options::overlap_only()).findings
 }
 
-/// Run all checks and also return the conflict map (default options).
+/// Run all checks and also return the conflict map (default options, but overlaps
+/// only: no clearance margin; use [`run`] with [`Options::clearance`] for that).
 pub fn check_all(inputs: &Inputs) -> (Vec<Finding>, Option<conflict::ConflictMap>) {
-    let r = run(inputs, &Options::default());
+    let r = run(inputs, &Options::overlap_only());
     (r.findings, r.conflict_map)
 }
 
@@ -205,7 +233,7 @@ fn run_checks(
     out.extend(spacing::check(lif, &types));
     out.extend(long_edges::check(lif, &types));
     let map = if options.conflict_map {
-        conflict::compute(lif, &types, options.sample_step, options.min_overlap)
+        conflict::compute(lif, &types, &options.map_options())
     } else {
         None
     };
@@ -233,64 +261,11 @@ pub fn conflict_map_json(scenario_path: &Path) -> Result<String, LoadError> {
     Ok(map.as_ref().map_or("null".to_string(), conflict::to_json))
 }
 
-/// How far the protective field reaches in front of the body (m): from the
-/// factsheet's `envelopes2d` whose id says "safety" or "field" (the rule
-/// `botsim-core` uses to tell them from the body); if the factsheet has none,
-/// the fixed margin of the simulator's own protective field.
-/// The second value says whether the number is from the factsheet.
-fn field_margin(f: &vda5050::factsheet::Factsheet, body: &Shape) -> (f64, bool) {
-    let body_front = match body {
-        Shape::Rect {
-            cx, half_length, ..
-        } => cx + half_length,
-        Shape::Circle { cx, radius, .. } => cx + radius,
-    };
-    let field_front = f
-        .mobile_robot_geometry
-        .envelopes2d
-        .iter()
-        .flatten()
-        .filter(|e| {
-            let id = e.envelope_2d_id.to_ascii_lowercase();
-            id.contains("safety") || id.contains("field")
-        })
-        .flat_map(|e| e.vertices.iter())
-        .map(|v| v.x)
-        .filter(|x| x.is_finite())
-        .fold(f64::NEG_INFINITY, f64::max);
-    if field_front.is_finite() {
-        ((field_front - body_front).max(0.0), true)
-    } else {
-        (botsim_core::safety::FIELD_MARGIN, false)
-    }
-}
-
-/// The robot type of a fleet entry as the checks need it; the error is a
-/// finding (the factsheet cannot be used).
+/// The robot type of a fleet entry as the checks need it (`TypeRef::from_factsheet`
+/// of `botsim-sweep`); the error is a finding (the factsheet cannot be used).
 pub(crate) fn type_ref(f: &FleetType) -> Result<reach::TypeRef, Finding> {
-    let name = f.type_name();
-    match RobotSpec::from_factsheet(&f.factsheet) {
-        Ok(s) => {
-            let (field_margin, field_from_factsheet) = field_margin(&f.factsheet, &s.shape);
-            Ok(reach::TypeRef {
-            name,
-            manufacturer: f.factsheet.manufacturer.clone(),
-            series: f.factsheet.type_specification.series_name.clone(),
-            kinematics: s.kinematics,
-            length: match s.shape {
-                Shape::Rect { half_length, .. } => 2.0 * half_length,
-                Shape::Circle { radius, .. } => 2.0 * radius,
-            },
-            width: match s.shape {
-                Shape::Rect { half_width, .. } => 2.0 * half_width,
-                Shape::Circle { radius, .. } => 2.0 * radius,
-            },
-            field_margin,
-            field_from_factsheet,
-            shape: s.shape,
-            })
-        }
-        Err(e) => Err(Finding::new(
+    reach::TypeRef::from_factsheet(&f.factsheet).map_err(|e| {
+        Finding::new(
             Level::Error,
             "factsheet",
             format!(
@@ -298,8 +273,8 @@ pub(crate) fn type_ref(f: &FleetType) -> Result<reach::TypeRef, Finding> {
                 f.factsheet_path.display()
             ),
         )
-        .robot(&name)),
-    }
+        .robot(&f.type_name())
+    })
 }
 
 /// Load a scenario (and the LIF and factsheets it names) and run all checks.

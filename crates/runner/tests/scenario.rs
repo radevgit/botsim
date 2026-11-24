@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use botsim::scenario::{Scenario, ScenarioError};
 use botsim_core::robot::Reception::Accepted;
 use botsim_core::world::RobotId;
-use botsim_runner::scenario::{Scenario, ScenarioError};
 use vda5050::order::Order;
 
 fn data() -> PathBuf {
@@ -125,7 +125,10 @@ fn start_heading_road_faces_along_the_road_that_leaves_the_node() {
         .replace("action_time", "start_heading = \"road\"\naction_time");
     let s = Scenario::from_toml(&text).unwrap();
     let w = s.build_world(&data()).unwrap();
-    let h: Vec<f64> = w.robot_ids().map(|id| w.pose(id).unwrap().heading).collect();
+    let h: Vec<f64> = w
+        .robot_ids()
+        .map(|id| w.pose(id).unwrap().heading)
+        .collect();
     let q = std::f64::consts::FRAC_PI_2;
     for (got, want) in h.iter().zip([0.0, q, -q]) {
         assert!((got - want).abs() < 1e-9, "{h:?}");
@@ -138,8 +141,14 @@ fn start_headings_give_one_heading_for_each_start_node() {
         .replace("three_nodes.lif.json", "ring.lif.json")
         .replace(r#"["A", "B"]"#, r#"["N0", "N1"]"#)
         .replace("action_time", "start_headings = [3.0, -1.0]\naction_time");
-    let w = Scenario::from_toml(&text).unwrap().build_world(&data()).unwrap();
-    let h: Vec<f64> = w.robot_ids().map(|id| w.pose(id).unwrap().heading).collect();
+    let w = Scenario::from_toml(&text)
+        .unwrap()
+        .build_world(&data())
+        .unwrap();
+    let h: Vec<f64> = w
+        .robot_ids()
+        .map(|id| w.pose(id).unwrap().heading)
+        .collect();
     assert_eq!(h, [3.0, -1.0]);
     // the wrong number of entries, and a word other than "road", are refused
     let few = GOOD.replace("action_time", "start_headings = [3.0]\naction_time");

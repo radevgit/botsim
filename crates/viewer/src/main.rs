@@ -13,8 +13,9 @@ use botsim_check::{Finding, Level, Options, run_scenario};
 use botsim_export::{Renderer, View, sample};
 use botsim_record::{LayoutLine, Recording, SnapshotLine, read_recording_partial};
 use botsim_viewer::{
-    Group, Playback, SPEEDS, Usage, busiest_edges, describe, group_table, groups_from_json,
-    most_waited_nodes, pick_robot, usage_between,
+    ALL_STATUSES, Group, Playback, SPEEDS, StatusPoint, Usage, busiest_edges, describe,
+    group_table, groups_from_json, most_waited_nodes, pick_robot, point_at, status_colour,
+    status_series, usage_between,
 };
 use eframe::egui;
 
@@ -121,6 +122,8 @@ struct ViewerApp {
     /// The conflicts without a common node, as lines (see [`CheckOutput`]).
     conflicts: Vec<ConflictLine>,
     show_conflicts: bool,
+    /// How many robots are in each status at each snapshot (the strip under the slider).
+    statuses: Vec<StatusPoint>,
     recording: Recording,
     /// The floor that is shown (an index into the layout's maps).
     map: usize,
@@ -164,6 +167,7 @@ impl ViewerApp {
             groups,
             conflicts: Vec::new(),
             show_conflicts: true,
+            statuses: status_series(&recording),
             recording,
             map: 0,
             playback: Playback::new(first, last),
@@ -508,15 +512,71 @@ impl eframe::App for ViewerApp {
                         );
                     }
                 }
-                let mut time = self.playback.time();
-                ui.spacing_mut().slider_width = (ui.available_width() - 90.0).max(50.0);
-                let range = self.playback.start()..=self.playback.end();
-                if ui
-                    .add(egui::Slider::new(&mut time, range).suffix(" s"))
-                    .changed()
-                {
-                    self.playback.seek(time);
+            });
+            // the time line: a stacked histogram of the statuses over time (colours as in the
+            // table at the right) that is also the scrubber: click or drag to jump there
+            let bar_width = (ui.available_width() - 100.0).max(50.0);
+            ui.horizontal(|ui| {
+                let now = self.playback.time();
+                let (start, end) = (self.playback.start(), self.playback.end());
+                let size = egui::vec2(bar_width, 56.0);
+                let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
+                let rect = response.rect;
+                painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+                let span = (end - start).max(1e-9);
+                let x_of = |t: f64| rect.left() + (((t - start) / span) as f32) * rect.width();
+                // one column of pixels at a time: the status counts at the time of the column
+                let total = self
+                    .statuses
+                    .iter()
+                    .map(|p| p.counts.iter().sum::<usize>())
+                    .max()
+                    .unwrap_or(1)
+                    .max(1) as f32;
+                let columns = rect.width().floor().max(1.0) as usize;
+                for c in 0..columns {
+                    let t = start + span * (c as f64 + 0.5) / columns as f64;
+                    let Some(p) = point_at(&self.statuses, t) else {
+                        break;
+                    };
+                    let x0 = rect.left() + c as f32;
+                    let mut y = rect.bottom();
+                    for (k, &status) in ALL_STATUSES.iter().enumerate() {
+                        if p.counts[k] == 0 {
+                            continue;
+                        }
+                        let h = rect.height() * p.counts[k] as f32 / total;
+                        let [r, g, b] = status_colour(status);
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(x0, y - h),
+                                egui::pos2(x0 + 1.0, y),
+                            ),
+                            0.0,
+                            egui::Color32::from_rgb(r, g, b),
+                        );
+                        y -= h;
+                    }
                 }
+                let x = x_of(now);
+                painter.line_segment(
+                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                    egui::Stroke::new(1.5, ui.visuals().strong_text_color()),
+                );
+                if let (true, Some(pos)) = (
+                    response.clicked() || response.dragged(),
+                    response.interact_pointer_pos(),
+                ) {
+                    let f = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64;
+                    self.playback.seek(start + f * span);
+                }
+                // the time, in a box of fixed size (so the line does not move)
+                ui.add_sized(
+                    [90.0, 20.0],
+                    egui::Label::new(
+                        egui::RichText::new(format!("{:.1} s", self.playback.time())).monospace(),
+                    ),
+                );
             });
         });
 
@@ -530,6 +590,26 @@ impl eframe::App for ViewerApp {
             .default_size(360.0)
             .size_range(200.0..=900.0)
             .show(ui, |ui| {
+                // at the bottom: every status a robot can have, and how many robots have it now
+                egui::Panel::bottom("status_counts").show(ui, |ui| {
+                    ui.add_space(4.0);
+                    ui.strong(format!("Statuses at {time:.0} s"));
+                    egui::Grid::new("status_grid").num_columns(2).show(ui, |ui| {
+                        for status in ALL_STATUSES {
+                            let n = snapshot.robots.iter().filter(|r| r.status == status).count();
+                            let [r, g, b] = status_colour(status);
+                            ui.colored_label(
+                                egui::Color32::from_rgb(r, g, b),
+                                format!("■ {status:?}"),
+                            );
+                            ui.label(format!("{n}"));
+                            ui.end_row();
+                        }
+                        ui.strong("all robots");
+                        ui.strong(format!("{}", snapshot.robots.len()));
+                        ui.end_row();
+                    });
+                });
                 if let (true, Some(u)) = (self.show_heat, &self.usage) {
                     ui.add_space(8.0);
                     ui.strong("Use of the roads");

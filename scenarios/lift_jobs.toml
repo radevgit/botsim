@@ -3,7 +3,7 @@
 # jobs ride the lift. The lift stops are G2 (floor 1) and U2 (floor 2); a robot
 # waits on G1 / U1, the node before the entrance, while the lift is busy.
 # Run it from the repository root:
-#   cargo run --release -p botsim-runner -- scenarios/lift_jobs.toml
+#   cargo run --release -p botsim -- scenarios/lift_jobs.toml
 name = "lift-jobs"
 seed = 11
 duration = 3600.0             # simulated seconds

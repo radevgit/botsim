@@ -11,6 +11,7 @@ repository.workspace = true
 botsim-core = { path = "../core" }
 botsim-scenario = { path = "../scenario" }
 botsim-record = { path = "../record" }
+botsim-sweep = { path = "../sweep" }
 aabb = "0.8.0"
 togo = "0.8.0"
 vda5050 = "0.1.0"

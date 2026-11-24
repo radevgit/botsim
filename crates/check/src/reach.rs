@@ -12,7 +12,6 @@
 use std::collections::{HashMap, HashSet};
 
 use botsim_core::graph::Graph;
-use botsim_core::spec::{Kinematics, Shape};
 use vdma_lif::{Layout, Lif};
 
 use crate::finding::{Finding, FindingPlace, Level};
@@ -20,50 +19,8 @@ use crate::places::LayoutIndex;
 
 const CHECK: &str = "reachability";
 
-/// A robot type of the fleet, as the check needs it.
-#[derive(Debug, Clone)]
-pub struct TypeRef {
-    /// `manufacturer/seriesName`.
-    pub name: String,
-    pub manufacturer: String,
-    pub series: String,
-    pub kinematics: Kinematics,
-    /// Length of the body outline (m), along the driving direction.
-    pub length: f64,
-    /// Width of the body outline (m), across the driving direction.
-    pub width: f64,
-    /// How far the protective field reaches in front of the body (m).
-    pub field_margin: f64,
-    /// False if the factsheet has no protective field and `field_margin` is the
-    /// simulator's default.
-    pub field_from_factsheet: bool,
-    /// Body outline in the robot frame (x forward, y left), from the kinematic center.
-    pub shape: Shape,
-}
-
-impl TypeRef {
-    /// A rectangle body centred on the kinematic center, for tests.
-    #[cfg(test)]
-    pub fn test_rect(name: &str, kinematics: Kinematics, length: f64, width: f64) -> TypeRef {
-        let (manufacturer, series) = name.split_once('/').unwrap_or(("ACME", name));
-        TypeRef {
-            name: name.into(),
-            manufacturer: manufacturer.into(),
-            series: series.into(),
-            kinematics,
-            length,
-            width,
-            field_margin: 0.3,
-            field_from_factsheet: false,
-            shape: Shape::Rect {
-                cx: 0.0,
-                cy: 0.0,
-                half_length: length / 2.0,
-                half_width: width / 2.0,
-            },
-        }
-    }
-}
+/// A robot type of the fleet, as the check needs it (defined in `botsim-sweep`).
+pub use botsim_sweep::TypeRef;
 
 /// Where a node is for one robot type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -378,6 +335,7 @@ fn strongly_connected(adj: &[Vec<usize>]) -> Vec<usize> {
 mod tests {
     use super::*;
     use crate::finding::PlaceKind;
+    use botsim_core::spec::Kinematics;
 
     fn x1(kinematics: Kinematics) -> TypeRef {
         TypeRef::test_rect("ACME/X1", kinematics, 1.0, 0.6)

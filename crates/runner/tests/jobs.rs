@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use botsim_runner::scenario::Scenario;
-use botsim_runner::summary::{self, Summary};
+use botsim::scenario::Scenario;
+use botsim::summary::{self, Summary};
 
 fn data() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data")
@@ -19,7 +19,7 @@ fn run_text(text: &str) -> Summary {
 }
 
 fn cli(file: &Path) -> Vec<u8> {
-    let out = Command::new(env!("CARGO_BIN_EXE_botsim-runner"))
+    let out = Command::new(env!("CARGO_BIN_EXE_botsim"))
         .arg(file)
         .output()
         .unwrap();

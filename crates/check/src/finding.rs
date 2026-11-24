@@ -23,28 +23,9 @@ impl fmt::Display for Level {
     }
 }
 
-/// What kind of layout object a place is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PlaceKind {
-    Node,
-    Edge,
-    Station,
-}
-
-/// A layout object a finding is about, with its position, so a viewer can
-/// draw it without looking the id up.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct FindingPlace {
-    pub kind: PlaceKind,
-    pub id: String,
-    /// Map id, so that the finding is drawn on the right floor.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub map: Option<String>,
-    /// One point for a node or station; start and end for an edge (later
-    /// possibly a sampled curve).
-    pub points: Vec<[f64; 2]>,
-}
+/// A layout object a finding is about, with its position (kind, id, map, points),
+/// so a viewer can draw it without looking the id up. Defined in `botsim-sweep`.
+pub use botsim_sweep::{Place as FindingPlace, PlaceKind};
 
 /// How many ids the text output shows per finding.
 const TEXT_IDS: usize = 10;

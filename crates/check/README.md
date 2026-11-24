@@ -47,6 +47,13 @@ of the fleet (types of the scenario's factsheets), on the whole LIF file.
 | | the two kinds of `conflict` finding (edge-edge and node-edge) are **classified**: *near a junction* (a diverge or merge: one node of one edge and one node of the other are at most 2 edges apart in the graph, or closer than the longer of the two robots plus its protective field) is `info`, with the junction nodes as places; the rest (*parallel*) is `warning`. In the map: `junction_nodes` on a conflict | info / warning | viewer request |
 | `conflict` (node-edge) | a robot **standing on a node** (with the heading of an edge to or from it) against an edge that does not touch that node, driven by another robot; per ordered pair of robot types; the finding lists the nodes and the edges as places and the deepest case in the text | warning | check 5, G6 |
 
+The swept outlines and the conflict map are computed by the library crate `botsim-sweep`
+(`crates/sweep`); the checker turns the map into findings. `Options::clearance` (default
+0.10 m, CLI `--clearance <m>`): in the map two bodies **nearer** than this count as conflicting
+(overlap too; `depth` 0 and `distance` > 0 for a near miss). The findings keep to real overlaps
+(`min_overlap`), so the clearance changes only the map. `check_all` and `check_inputs` use
+clearance 0 (as before).
+
 Also computed, not a finding: the **conflict map** (`report.conflict_map`): every pair of
 different edges on the same map whose swept outlines overlap, per pair of robot types, with
 the overlap depth and whether the two edges share a node (`pairs`), and the node-edge conflicts

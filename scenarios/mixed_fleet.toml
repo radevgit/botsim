@@ -5,7 +5,7 @@
 #    ramp P2 -> P3
 # A one-way ring P0 .. P5 (20 m sides) with the cross aisle P1 -> P4 in the middle.
 # Run it from the repository root:
-#   cargo run --release -p botsim-runner -- scenarios/mixed_fleet.toml
+#   cargo run --release -p botsim -- scenarios/mixed_fleet.toml
 name = "mixed-fleet"
 seed = 5
 duration = 3600.0

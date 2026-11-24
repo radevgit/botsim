@@ -12,7 +12,7 @@ echo "0/3 remove the previous export"
 rm -rf data/warehouse2_frames
 
 echo "1/3 simulate and record"
-cargo run --release -p botsim-runner -- --record data/warehouse2.jsonl --record-interval 0.5 --geometry scenarios/warehouse2.geometry.json scenarios/warehouse2.toml > data/warehouse2_summary.json
+cargo run --release -p botsim -- --record data/warehouse2.jsonl --record-interval 0.5 --geometry scenarios/warehouse2.geometry.json scenarios/warehouse2.toml > data/warehouse2_summary.json
 wc -l data/warehouse2.jsonl
 grep -E '"(collision_count|deadlock_count)"' data/warehouse2_summary.json
 

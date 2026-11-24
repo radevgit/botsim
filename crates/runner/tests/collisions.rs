@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use botsim_runner::scenario::Scenario;
-use botsim_runner::summary;
+use botsim::scenario::Scenario;
+use botsim::summary;
 
 fn data() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data")
@@ -33,7 +33,7 @@ fn collisions_are_counted_and_listed() {
 #[test]
 fn the_cli_json_has_the_collision_fields() {
     let file = data().join("overlap.toml");
-    let out = Command::new(env!("CARGO_BIN_EXE_botsim-runner"))
+    let out = Command::new(env!("CARGO_BIN_EXE_botsim"))
         .arg(file)
         .output()
         .unwrap();

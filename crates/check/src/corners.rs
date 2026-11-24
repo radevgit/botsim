@@ -47,8 +47,12 @@ pub fn check(lif: &Lif, map: Option<&ConflictMap>) -> Vec<Finding> {
     };
     let overlapping: HashSet<(&str, &str)> = map
         .into_iter()
-        .flat_map(|m| &m.node_pairs)
-        .flat_map(|p| &p.conflicts)
+        .flat_map(|m| {
+            m.node_pairs
+                .iter()
+                .flat_map(|p| &p.conflicts)
+                .filter(move |c| crate::conflict::is_overlap(m, c.depth, c.distance))
+        })
         .map(|c| (c.node.as_str(), c.edge.as_str()))
         .collect();
     let mut near: Vec<Near> = Vec::new();
@@ -200,7 +204,8 @@ mod tests {
             1.0,
             0.6,
         );
-        crate::conflict::compute(l, &[t], 0.25, 0.0).expect("map")
+        crate::conflict::compute(l, &[t], &crate::conflict::MapOptions::overlap_only(0.25, 0.0))
+            .expect("map")
     }
 
     #[test]

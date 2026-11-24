@@ -60,8 +60,14 @@ fn second_robot_takes_the_lower_lane(wait_weight: f64) -> bool {
     let mut w = World::new(g, DT, 0).unwrap();
     let times = ActionTimes::new(1.0).with("pick", 2.0).with("drop", 2.0);
     for (name, node) in [("R0", a), ("R1", c), ("Z", u2)] {
-        w.add_robot(RobotId::new("ACME", name), spec.clone(), times.clone(), node, 0.0)
-            .unwrap();
+        w.add_robot(
+            RobotId::new("ACME", name),
+            spec.clone(),
+            times.clone(),
+            node,
+            0.0,
+        )
+        .unwrap();
     }
     w.set_safety_stop(true);
     let mut ctl = Controller::new(&w);

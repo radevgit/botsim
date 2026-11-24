@@ -1,0 +1,16 @@
+[package]
+name = "botsim-sweep"
+description = "Swept robot bodies along LIF edges and the conflict map of a layout for a mixed fleet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+botsim-core = { path = "../core" }
+togo = "0.8.0"
+vda5050 = "0.1.0"
+vdma-lif = "0.1.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

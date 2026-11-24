@@ -35,8 +35,14 @@ fn run(conflicts: bool) -> (usize, usize) {
     let mut w = World::new(g, DT, 0).unwrap();
     let times = ActionTimes::new(1.0).with("pick", 1.0).with("drop", 1.0);
     // the second robot faces north, as its edge does
-    w.add_robot(RobotId::new("ACME", "R1"), spec.clone(), times.clone(), a, 0.0)
-        .unwrap();
+    w.add_robot(
+        RobotId::new("ACME", "R1"),
+        spec.clone(),
+        times.clone(),
+        a,
+        0.0,
+    )
+    .unwrap();
     w.add_robot(
         RobotId::new("ACME", "R2"),
         spec,

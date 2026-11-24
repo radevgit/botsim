@@ -51,13 +51,7 @@ pub fn check(inputs: &Inputs) -> Vec<Finding> {
         let Some(a) = analysis else {
             continue; // the graph error is reported by the reachability check
         };
-        // TODO (checker session): `start_heading = "road"` and `start_headings` are not
-        // read yet; a "road" group is checked here as if it faced east.
-        let heading = match group.start_heading {
-            botsim_scenario::StartHeading::Angle(a) => a,
-            botsim_scenario::StartHeading::Road => 0.0,
-        };
-        check_group(gi, &group.serial_prefix, &group.start_nodes, heading, &t, a, &place, &mut out);
+        check_group(gi, group, &t, a, &place, &mut out);
         for n in &group.start_nodes {
             starts.push((n, gi));
         }
@@ -67,28 +61,45 @@ pub fn check(inputs: &Inputs) -> Vec<Finding> {
     out
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The heading (radians) of the robot on start node number `i` of the group:
+/// `start_headings` if given, else `start_heading` (an angle, or along the first
+/// road that leaves the node; east if none does).
+fn start_heading(
+    group: &botsim_scenario::RobotGroup,
+    i: usize,
+    g: &botsim_core::graph::Graph,
+    node: usize,
+    t: &TypeRef,
+) -> f64 {
+    match (group.start_headings.get(i), group.start_heading) {
+        (Some(&h), _) => h,
+        (None, botsim_scenario::StartHeading::Angle(a)) => a,
+        (None, botsim_scenario::StartHeading::Road) => {
+            botsim_scenario::road_heading(g, node, &t.manufacturer, &t.series).unwrap_or(0.0)
+        }
+    }
+}
+
 fn check_group(
-    group: usize,
-    prefix: &str,
-    start_nodes: &[String],
-    heading: f64,
+    group_index: usize,
+    group: &botsim_scenario::RobotGroup,
     t: &TypeRef,
     a: &Analysis,
     place: &dyn Fn(&str) -> Vec<FindingPlace>,
     out: &mut Vec<Finding>,
 ) {
     let g = &a.graph;
-    let who = format!("robot group {} (\"{prefix}\")", group + 1);
+    let start_nodes = &group.start_nodes;
+    let who = format!("robot group {} (\"{}\")", group_index + 1, group.serial_prefix);
     let finding = |level, text: String, node: &str| {
         Finding::new(level, CHECK, text)
             .robot(&t.name)
             .with_places(place(node))
             .with_ids([node])
     };
-    let mut cannot_leave: Vec<&str> = Vec::new();
+    let mut cannot_leave: Vec<(&str, f64)> = Vec::new();
     let mut not_main: Vec<&str> = Vec::new();
-    for node in start_nodes {
+    for (i, node) in start_nodes.iter().enumerate() {
         let Some(ni) = g.node_idx(node) else {
             out.push(finding(
                 Level::Error,
@@ -111,19 +122,20 @@ fn check_group(
             .copied()
             .filter(|&e| a.usable[e])
             .collect();
+        let heading = start_heading(group, i, g, ni, t);
         if !outs.is_empty()
             && !outs.iter().any(|&e| {
                 g.can_start(heading, None, e, t.kinematics, &t.manufacturer, &t.series)
             })
         {
-            cannot_leave.push(node);
+            cannot_leave.push((node, heading));
         }
         if !a.node_in_main(ni) {
             not_main.push(node);
         }
     }
-    let heading_deg = heading.to_degrees();
-    for node in cannot_leave {
+    for (node, heading) in cannot_leave {
+        let heading_deg = heading.to_degrees();
         out.push(finding(
             Level::Warning,
             format!(
@@ -288,6 +300,24 @@ start_nodes = {start_nodes}
             }],
             geometry: None,
         }
+    }
+
+    #[test]
+    fn start_heading_follows_the_scenario() {
+        let mut i = inputs(r#"["N0", "N1"]"#);
+        let t = crate::type_ref(&i.fleet[0]).expect("type");
+        let g = botsim_core::graph::Graph::from_lif(&i.lif).expect("graph");
+        let n1 = g.node_idx("N1").expect("N1");
+        let group = &mut i.scenario.robots[0];
+        // an angle for all, east by default
+        assert_eq!(start_heading(group, 1, &g, n1, &t), 0.0);
+        // along the road: the edge N1 -> N2 runs north
+        group.start_heading = botsim_scenario::StartHeading::Road;
+        let h = start_heading(group, 1, &g, n1, &t);
+        assert!((h - std::f64::consts::FRAC_PI_2).abs() < 1e-9, "{h}");
+        // one heading for each start node wins over both
+        group.start_headings = vec![1.0, 2.0];
+        assert_eq!(start_heading(group, 1, &g, n1, &t), 2.0);
     }
 
     #[test]

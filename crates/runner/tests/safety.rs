@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use botsim_runner::scenario::Scenario;
+use botsim::scenario::Scenario;
 
 fn data() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data")

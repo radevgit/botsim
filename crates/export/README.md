@@ -15,7 +15,7 @@ cd /path/to/botsim
 mkdir -p data    # not in git: a new checkout does not have it
 
 # 1. run a scenario and record it (and draw the static geometry: walls, racks, ...)
-cargo run --release -p botsim-runner -- --record data/warehouse.jsonl \
+cargo run --release -p botsim -- --record data/warehouse.jsonl \
     --geometry scenarios/warehouse.geometry.json scenarios/warehouse.toml
 
 # 2. draw the frames: 900 simulated seconds at speed 10 = 2700 frames, about 80 s

@@ -9,11 +9,12 @@
 //!
 //! Not yet: deadlocks, controller time per step.
 
-use botsim_baseline::conflicts::ConflictInput;
+use botsim_baseline::conflicts::{ConflictInput, NodeConflictInput};
 use botsim_baseline::controller::Controller;
 use botsim_core::jobs::Job;
 use botsim_core::lift::DoorState;
 use botsim_core::world::World;
+use botsim_sweep::{MapOptions, TypeRef};
 use serde::Serialize;
 
 use crate::scenario::{Scenario, ScenarioError};
@@ -241,7 +242,7 @@ pub fn run(scenario: &Scenario, world: World) -> Result<Summary, ScenarioError> 
 /// measured and reported in `timing` (S39).
 ///
 /// Unless the scenario says `conflict_reservation = false`, a scenario read from a
-/// file also gets swept-area reservation: the conflict map of `botsim-check` (made
+/// file also gets swept-area reservation: the conflict map of `botsim-sweep` (made
 /// from the layout and the factsheets) goes to the controller.
 pub fn run_with(
     scenario: &Scenario,
@@ -257,7 +258,9 @@ pub fn run_with(
         if scenario.conflict_reservation
             && let Some(path) = &scenario.source
         {
-            c.set_conflicts(&conflict_input(path));
+            let (edges, nodes) = conflict_input(scenario, path);
+            c.set_conflicts(&edges);
+            c.set_node_conflicts(&nodes);
         }
         c
     });
@@ -422,18 +425,46 @@ pub fn run_with(
     })
 }
 
-/// The edge pairs whose swept outlines overlap and that have no node in common (the
-/// node reservation covers the others), from the layout checker; empty if the
-/// scenario's files cannot be read again or the layout is not a graph.
-fn conflict_input(scenario_file: &std::path::Path) -> Vec<ConflictInput> {
-    let Ok(inputs) = botsim_check::load(scenario_file) else {
-        return Vec::new();
+/// The conflict map of the layout for the fleet (`botsim-sweep`): edge pairs whose
+/// swept outlines overlap or come nearer than the scenario's `conflict_clearance`
+/// and that have no node in common (the node reservation covers the others), and
+/// nodes against edges. Empty if the scenario's files cannot be read again or the
+/// layout is not a graph.
+fn conflict_input(
+    scenario: &Scenario,
+    scenario_file: &std::path::Path,
+) -> (Vec<ConflictInput>, Vec<NodeConflictInput>) {
+    let none = (Vec::new(), Vec::new());
+    let base = scenario_file.parent().unwrap_or(std::path::Path::new("."));
+    let read = |path: &std::path::Path| std::fs::read_to_string(path).ok();
+    let Some(lif) = read(&base.join(&scenario.lif))
+        .and_then(|t| serde_json::from_str::<vdma_lif::Lif>(&t).ok())
+    else {
+        return none;
     };
-    let (_, map) = botsim_check::check_all(&inputs);
-    let Some(map) = map else {
-        return Vec::new();
+    let mut types: Vec<TypeRef> = Vec::new();
+    for g in &scenario.robots {
+        let Some(factsheet) = read(&base.join(&g.factsheet))
+            .and_then(|t| serde_json::from_str::<vda5050::factsheet::Factsheet>(&t).ok())
+        else {
+            return none;
+        };
+        let Ok(t) = TypeRef::from_factsheet(&factsheet) else {
+            return none;
+        };
+        if !types.iter().any(|x| x.name == t.name) {
+            types.push(t);
+        }
+    }
+    let options = MapOptions {
+        clearance: scenario.conflict_clearance,
+        ..MapOptions::default()
     };
-    map.pairs
+    let Some(map) = botsim_sweep::compute(&lif, &types, &options) else {
+        return none;
+    };
+    let edges = map
+        .pairs
         .into_iter()
         .map(|p| ConflictInput {
             type_a: p.type_a,
@@ -445,5 +476,21 @@ fn conflict_input(scenario_file: &std::path::Path) -> Vec<ConflictInput> {
                 .map(|c| (c.edge_a, c.edge_b))
                 .collect(),
         })
-        .collect()
+        .collect();
+    // a robot standing on a node against an edge that does not touch it
+    let nodes = map
+        .node_pairs
+        .into_iter()
+        .map(|p| NodeConflictInput {
+            type_node: p.type_node,
+            type_edge: p.type_edge,
+            pairs: p
+                .conflicts
+                .into_iter()
+                .filter(|c| c.junction_nodes.is_some())
+                .map(|c| (c.node, c.edge))
+                .collect(),
+        })
+        .collect();
+    (edges, nodes)
 }

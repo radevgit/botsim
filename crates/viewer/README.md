@@ -11,7 +11,7 @@ workspace `Cargo.toml`, `scenarios/` and `data/`; `data/` is not in git):
 ```sh
 cd /path/to/botsim
 # record a run (and its static geometry), then open it
-cargo run --release -p botsim-runner -- --record data/warehouse.jsonl \
+cargo run --release -p botsim -- --record data/warehouse.jsonl \
     --geometry scenarios/warehouse.geometry.json scenarios/warehouse.toml
 cargo run --release -p botsim-viewer -- data/warehouse.jsonl
 ```
