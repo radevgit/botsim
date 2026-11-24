@@ -26,6 +26,8 @@ fn robot(x: f64, y: f64, heading: f64) -> RobotRecord {
         last_node: None,
         released: RouteRecord::default(),
         planned: RouteRecord::default(),
+        charge: None,
+        charging: false,
     }
 }
 

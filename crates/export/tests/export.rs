@@ -71,6 +71,8 @@ fn snapshots() -> Vec<SnapshotLine> {
                     last_node: None,
                     released: RouteRecord::default(),
                     planned: RouteRecord::default(),
+                    charge: None,
+                    charging: false,
                 }],
                 reservations: vec![],
                 blocking: vec![],

@@ -103,6 +103,10 @@ pub struct RobotSnapshot {
     /// Still ahead and not released yet (the horizon).
     pub planned_nodes: Vec<NodeIdx>,
     pub planned_edges: Vec<EdgeIdx>,
+    /// The battery charge in percent; `None` if the robot has no battery model.
+    pub charge: Option<f64>,
+    /// The robot is charging (always false until the chargers exist).
+    pub charging: bool,
 }
 
 /// The nodes and edges a controller has reserved for a robot.

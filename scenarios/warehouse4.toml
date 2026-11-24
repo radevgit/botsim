@@ -21,19 +21,27 @@ deadlock_timeout = 20.0
 # route with load: each other robot on an edge (or at the node it ends at) makes the
 # edge 5 m longer for the route, so that the empty parallel lane is preferred
 route_load_weight = 5.0
+# chargers: the six stalls in the north-east (stations of type charger)
+charger_power_w = 1500.0
+charge_low = 25.0
 
 [[robot]]
 manufacturer = "ACME"
 serial_prefix = "Y"
 factsheet = "forklift.factsheet.json"
 start_nodes = [
-    "N610", "N500", "N445", "N534", "N479", "N568", "N513", "N492",
-    "N526", "N471", "N704", "N505", "N484", "N518", "N497", "N586",
-    "N675", "N476", "N565", "N510", "N489", "N578", "N667", "N523",
+    "N466", "N500", "N445", "N534", "N479", "N568", "N513", "N636",
+    "N492", "N526", "N471", "N649", "N505", "N484", "N518", "N463",
+    "N696", "N497", "N442", "N476", "N565", "N510", "N599", "N489",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
 action_time = 1.0
+battery_wh = 2000.0
+drive_wh_per_m = 0.25
+idle_w = 50.0
+work_w = 150.0
+start_charge = [50.0, 100.0]
 
 [robot.action_times]
 pick = 8.0
@@ -44,13 +52,18 @@ manufacturer = "ACME"
 serial_prefix = "X"
 factsheet = "diff_robot.factsheet.json"
 start_nodes = [
-    "N725", "N722", "N612", "N468", "N557", "N646", "N502", "N447",
-    "N625", "N481", "N570", "N659", "N515", "N693", "N494", "N583",
-    "N706", "N562", "N507", "N486", "N719", "N575", "N664", "N465",
+    "N717", "N578", "N667", "N523", "N468", "N557", "N502", "N625",
+    "N481", "N714", "N570", "N659", "N515", "N460", "N549", "N638",
+    "N494", "N439", "N562", "N507", "N685", "N486", "N575", "N698",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
 action_time = 1.0
+battery_wh = 800.0
+drive_wh_per_m = 0.1
+idle_w = 30.0
+work_w = 80.0
+start_charge = [50.0, 100.0]
 
 [robot.action_times]
 pick = 5.0
@@ -61,12 +74,17 @@ manufacturer = "ACME"
 serial_prefix = "T"
 factsheet = "three_wheel.factsheet.json"
 start_nodes = [
-    "N699", "N555", "N589", "N547", "N636", "N581", "N649", "N683",
-    "N539", "N573", "N531",
+    "N555", "N644", "N589", "N691", "N547", "N581", "N615", "N539",
+    "N573", "N675", "N531",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
 action_time = 1.0
+battery_wh = 1500.0
+drive_wh_per_m = 0.2
+idle_w = 40.0
+work_w = 100.0
+start_charge = [50.0, 100.0]
 
 [robot.action_times]
 pick = 6.0
@@ -77,13 +95,18 @@ manufacturer = "ACME"
 serial_prefix = "O"
 factsheet = "omni_robot.factsheet.json"
 start_nodes = [
-    "N554", "N499", "N622", "N478", "N567", "N656", "N690", "N546",
-    "N491", "N559", "N449", "N538", "N483", "N716", "N462", "N551",
-    "N496", "N585", "N441",
+    "N554", "N499", "N478", "N711", "N567", "N656", "N601", "N457",
+    "N546", "N491", "N436", "N470", "N559", "N682", "N538", "N483",
+    "N551", "N530", "N475",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
 action_time = 1.0
+battery_wh = 600.0
+drive_wh_per_m = 0.08
+idle_w = 30.0
+work_w = 60.0
+start_charge = [50.0, 100.0]
 
 [robot.action_times]
 pick = 4.0
@@ -94,12 +117,17 @@ manufacturer = "ACME"
 serial_prefix = "C"
 factsheet = "small_robot.factsheet.json"
 start_nodes = [
-    "N530", "N619", "N687", "N543", "N488", "N577", "N522", "N501",
-    "N734", "N535", "N480", "N713",
+    "N708", "N653", "N454", "N543", "N488", "N577", "N433", "N522",
+    "N611", "N679", "N535", "N480",
 ]
 # each robot faces along the road that leaves its start node
 start_heading = "road"
 action_time = 1.0
+battery_wh = 300.0
+drive_wh_per_m = 0.04
+idle_w = 20.0
+work_w = 40.0
+start_charge = [50.0, 100.0]
 
 [robot.action_times]
 pick = 3.0
@@ -109,18 +137,16 @@ drop = 3.0
 rate_per_hour = 900.0
 # every station but the parking
 stations = [
-    "LN0-0", "LN0-1", "LN0-2", "LN0-3", "LN1-0", "LN1-1", "LN1-2", "LN1-3",
-    "LN2-0", "LN2-1", "LN2-2", "LN2-3", "LN3-0", "LN3-1", "LN3-2", "LN3-3",
-    "LN4-0", "LN4-1", "LN4-2", "LN4-3", "LN5-0", "LN5-1", "LN5-2", "LN5-3",
-    "LN6-0", "LN6-1", "LN6-2", "LN6-3", "LV0", "LV1", "LV2", "LV3",
-    "LV4", "LV5", "GOODS-IN-1", "GOODS-IN-2", "GOODS-IN-3", "GOODS-IN-4", "GOODS-IN-5", "GOODS-OUT-1",
-    "GOODS-OUT-2", "GOODS-OUT-3", "RW00", "RW01", "RW02", "RW03", "RW04", "RW05",
-    "RW06", "RW10", "RW11", "RW12", "RW13", "RW14", "RW15", "RW16",
-    "RW20", "RW21", "RW22", "RW23", "RW24", "RW25", "RW26", "RW30",
-    "RW31", "RW32", "RW33", "RW34", "RW35", "RW36", "RE00", "RE01",
-    "RE02", "RE03", "RE04", "RE10", "RE11", "RE12", "RE13", "RE14",
-    "RE20", "RE21", "RE22", "RE23", "RE24", "RE30", "RE31", "RE32",
-    "RE33", "RE34", "WALL-S", "WALL-N",
+    "LN0-0", "LN0-1", "LN0-2", "LN1-0", "LN1-1", "LN2-0", "LN2-1", "LN3-0",
+    "LN3-1", "LN3-2", "LN4-0", "LN4-1", "LN4-2", "LN5-0", "LN5-1", "LN6-0",
+    "LN6-1", "LV0", "LV1", "LV2", "LV3", "LV4", "LV5", "GOODS-IN-1",
+    "GOODS-IN-2", "GOODS-IN-3", "GOODS-IN-4", "GOODS-IN-5", "GOODS-OUT-1", "GOODS-OUT-2", "RW00", "RW01",
+    "RW02", "RW03", "RW04", "RW05", "RW06", "RW10", "RW11", "RW12",
+    "RW13", "RW14", "RW15", "RW16", "RW20", "RW21", "RW22", "RW23",
+    "RW24", "RW25", "RW26", "RW30", "RW31", "RW32", "RW33", "RW34",
+    "RW35", "RW36", "RE00", "RE01", "RE02", "RE03", "RE04", "RE10",
+    "RE11", "RE12", "RE13", "RE14", "RE20", "RE21", "RE22", "RE23",
+    "RE24", "RE30", "RE31", "RE32", "RE33", "RE34", "WALL-S", "WALL-N",
 ]
 
 [disturbances]

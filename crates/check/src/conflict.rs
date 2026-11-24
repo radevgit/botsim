@@ -32,42 +32,86 @@ pub(crate) fn is_overlap(map: &ConflictMap, depth: f64, distance: f64) -> bool {
 pub fn findings(lif: &Lif, map: &ConflictMap) -> Vec<Finding> {
     let mut out = Vec::new();
     for pair in &map.pairs {
-        for junction in [false, true] {
+        for class in Class::ALL {
             let open: Vec<&Conflict> = pair
                 .conflicts
                 .iter()
                 .filter(|c| {
                     !c.shares_node
                         && is_overlap(map, c.depth, c.distance)
-                        && c.junction_nodes.is_some() == junction
+                        && Class::of(&c.junction_nodes, c.depth) == class
                 })
                 .collect();
             if open.is_empty() {
                 continue;
             }
             for layout in lif.origins.iter().flat_map(|o| &o.layouts) {
-                report_layout(layout, pair, &open, junction, &mut out);
+                report_layout(layout, pair, &open, class, &mut out);
             }
         }
     }
     for pair in &map.node_pairs {
-        for junction in [false, true] {
+        for class in Class::ALL {
             let sel: Vec<&NodeConflict> = pair
                 .conflicts
                 .iter()
                 .filter(|c| {
-                    is_overlap(map, c.depth, c.distance) && c.junction_nodes.is_some() == junction
+                    is_overlap(map, c.depth, c.distance)
+                        && Class::of(&c.junction_nodes, c.depth) == class
                 })
                 .collect();
             if sel.is_empty() {
                 continue;
             }
             for layout in lif.origins.iter().flat_map(|o| &o.layouts) {
-                report_node_layout(layout, pair, &sel, junction, &mut out);
+                report_node_layout(layout, pair, &sel, class, &mut out);
             }
         }
     }
     out
+}
+
+/// An overlap near a junction at least this deep (m) is a `warning`, not `info`: it
+/// is more than the two outlines touching on the turn itself.
+pub const DEEP_OVERLAP: f64 = 0.2;
+
+/// How a conflict is reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    /// Not near a junction: `warning`.
+    Parallel,
+    /// Near a junction, overlap of [`DEEP_OVERLAP`] or more: `warning`.
+    JunctionDeep,
+    /// Near a junction, shallower: `info`.
+    JunctionShallow,
+}
+
+impl Class {
+    const ALL: [Class; 3] = [Class::Parallel, Class::JunctionDeep, Class::JunctionShallow];
+
+    fn of(junction_nodes: &Option<[String; 2]>, depth: f64) -> Class {
+        match (junction_nodes, depth >= DEEP_OVERLAP) {
+            (None, _) => Class::Parallel,
+            (Some(_), true) => Class::JunctionDeep,
+            (Some(_), false) => Class::JunctionShallow,
+        }
+    }
+
+    fn level_and_text(self) -> (Level, String) {
+        match self {
+            Class::Parallel => (Level::Warning, "parallel, not near a junction".into()),
+            Class::JunctionDeep => (
+                Level::Warning,
+                format!(
+                    "near a junction but overlapping by {DEEP_OVERLAP} m or more (the junction reservation may not be enough)"
+                ),
+            ),
+            Class::JunctionShallow => (
+                Level::Info,
+                "near a junction (diverge or merge; reserve the junction as a unit)".into(),
+            ),
+        }
+    }
 }
 
 /// One finding per pair of types, layout and kind: robots standing on nodes against
@@ -76,7 +120,7 @@ fn report_node_layout(
     layout: &Layout,
     pair: &NodeTypePair,
     sel: &[&NodeConflict],
-    junction: bool,
+    class: Class,
     out: &mut Vec<Finding>,
 ) {
     let nodes: HashMap<&str, ()> = layout.nodes.iter().map(|n| (n.node_id.as_str(), ())).collect();
@@ -108,11 +152,7 @@ fn report_node_layout(
             pair.type_node, pair.type_edge
         )
     };
-    let (level, kind) = if junction {
-        (Level::Info, "near a junction (diverge or merge; reserve the junction as a unit)")
-    } else {
-        (Level::Warning, "not near a junction")
-    };
+    let (level, kind) = class.level_and_text();
     out.push(
         Finding::new(
             level,
@@ -138,7 +178,7 @@ fn report_layout(
     layout: &Layout,
     pair: &TypePair,
     open: &[&Conflict],
-    junction: bool,
+    class: Class,
     out: &mut Vec<Finding>,
 ) {
     let here: HashMap<&str, ()> = layout.edges.iter().map(|e| (e.edge_id.as_str(), ())).collect();
@@ -163,13 +203,10 @@ fn report_layout(
     } else {
         format!("a robot of {} and one of {}", pair.type_a, pair.type_b)
     };
-    let (level, kind) = if junction {
-        (Level::Info, "near a junction (diverge or merge; reserve the junction as a unit)")
-    } else {
-        (Level::Warning, "parallel, not near a junction")
-    };
+    let (level, kind) = class.level_and_text();
+    let deepest = mine.iter().map(|c| c.depth).fold(0.0, f64::max);
     let mut places = idx.edges(ids.iter().copied());
-    if junction {
+    if class != Class::Parallel {
         // the junction nodes where the edges come together
         let mut nodes: Vec<&str> = Vec::new();
         for c in &mine {
@@ -186,7 +223,7 @@ fn report_layout(
             level,
             CHECK,
             format!(
-                "{} pair(s) of edges without a common node have overlapping swept outlines, {kind}: {who} must not use them at the same time (no node reservation covers it); first: {} and {}",
+                "{} pair(s) of edges without a common node have overlapping swept outlines, {kind}: {who} must not use them at the same time (no node reservation covers it); deepest overlap {deepest:.2} m; first: {} and {}",
                 mine.len(),
                 first.edge_a,
                 first.edge_b
@@ -267,7 +304,20 @@ mod tests {
     #[test]
     fn near_a_junction_is_info_and_parallel_is_a_warning() {
         let y2 = vec![TypeRef::test_rect("ACME/Y2", Kinematics::Differential, 2.4, 1.4)];
-        // E3 starts 1 m beside the start of E1: they come together there (junction)
+        // E3 starts 1.3 m beside the start of E1 (overlap 0.1 m): they come together
+        // there (junction), shallow
+        let l = lif(
+            &[("A", 0.0, 0.0), ("B", 30.0, 0.0), ("D", 0.0, 1.3), ("F", 5.0, 1.3)],
+            &[("E1", "A", "B"), ("E3", "D", "F")],
+        );
+        let m = compute(&l, &y2, &overlap_only()).expect("map");
+        let f = findings(&l, &m);
+        let edge_f: Vec<_> = f.iter().filter(|x| x.text.contains("pair(s) of edges")).collect();
+        assert_eq!(edge_f.len(), 1);
+        assert_eq!(edge_f[0].level, Level::Info);
+        assert!(edge_f[0].text.contains("deepest overlap 0.10 m"), "{}", edge_f[0].text);
+        assert!(edge_f[0].places.iter().any(|p| p.kind == crate::finding::PlaceKind::Node));
+        // 1.0 m beside it (overlap 0.4 m): still a junction, but deep: warning
         let l = lif(
             &[("A", 0.0, 0.0), ("B", 30.0, 0.0), ("D", 0.0, 1.0), ("F", 5.0, 1.0)],
             &[("E1", "A", "B"), ("E3", "D", "F")],
@@ -276,7 +326,8 @@ mod tests {
         let f = findings(&l, &m);
         let edge_f: Vec<_> = f.iter().filter(|x| x.text.contains("pair(s) of edges")).collect();
         assert_eq!(edge_f.len(), 1);
-        assert_eq!(edge_f[0].level, Level::Info);
+        assert_eq!(edge_f[0].level, Level::Warning);
+        assert!(edge_f[0].text.contains("near a junction"), "{}", edge_f[0].text);
         assert!(edge_f[0].places.iter().any(|p| p.kind == crate::finding::PlaceKind::Node));
         // E3 runs 1 m beside the middle of E1, its nodes 10 m or more from E1's: parallel
         let l = lif(

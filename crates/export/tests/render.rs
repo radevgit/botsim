@@ -72,6 +72,8 @@ fn robot(map: usize, x: f64, y: f64, heading: f64, status: StatusRecord) -> Robo
         last_node: None,
         released: RouteRecord::default(),
         planned: RouteRecord::default(),
+        charge: None,
+        charging: false,
     }
 }
 

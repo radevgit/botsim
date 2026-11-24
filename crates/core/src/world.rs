@@ -63,6 +63,19 @@ impl RobotId {
     }
 }
 
+/// What the batteries of a run show (see [`World::battery_report`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BatteryReport {
+    /// Robots with a battery model.
+    pub robots: usize,
+    /// Robots whose battery was empty at some time.
+    pub ran_empty: usize,
+    /// Robots standing empty now.
+    pub empty_now: usize,
+    /// Simulated seconds all robots together spent charging.
+    pub charging_seconds: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorldError {
     DuplicateRobot(RobotId),
@@ -75,6 +88,8 @@ pub enum WorldError {
     Disturbance(DisturbanceError),
     /// The observer interval must be a positive, finite number of seconds.
     BadObserverInterval(f64),
+    /// The charger power must be a positive, finite number of watts.
+    BadChargerPower(f64),
     /// A lift is wrong, or a call to it.
     Lift(LiftError),
     DuplicateLift(String),
@@ -127,6 +142,9 @@ impl fmt::Display for WorldError {
                     "the observer interval must be positive and finite, got {v}"
                 )
             }
+            WorldError::BadChargerPower(v) => {
+                write!(f, "the charger power must be positive and finite, got {v}")
+            }
         }
     }
 }
@@ -157,6 +175,9 @@ enum Delivery {
 
 #[derive(Debug)]
 pub struct World {
+    /// The power (W) of the chargers, and the nodes where they are ([`World::set_chargers`]).
+    charger_power_w: Option<f64>,
+    charger_nodes: Vec<NodeIdx>,
     /// Messages to the robots that are on their way: (tick they arrive, message).
     inbox: VecDeque<(u64, Delivery)>,
     /// How many steps a message takes, each way (S58); 0 = none.
@@ -264,6 +285,8 @@ impl World {
             broad: AABB::new(),
             safety_stop: false,
             pass_through: false,
+            charger_power_w: None,
+            charger_nodes: Vec::new(),
             inbox: VecDeque::new(),
             message_delay: 0,
             zones_on_robots: false,
@@ -505,6 +528,7 @@ impl World {
         self.deliver_due();
         let now_ms = self.now_ms();
         self.step_doors();
+        self.refresh_chargers();
         for e in &mut self.robots {
             e.robot.set_time(now_ms);
             // a robot that is moving, and not stopped already, may be stopped (S37)
@@ -920,6 +944,82 @@ impl World {
         Ok(())
     }
 
+    /// Make the stations of the layout whose `stationType` is `charger` (any case)
+    /// chargers with `power_w` watts: a robot with a battery standing on one of their
+    /// interaction nodes charges after `startCharging`. Returns the number of
+    /// charger nodes. Without this call there are no chargers.
+    pub fn set_chargers(&mut self, power_w: f64) -> Result<usize, WorldError> {
+        if !(power_w.is_finite() && power_w > 0.0) {
+            return Err(WorldError::BadChargerPower(power_w));
+        }
+        let mut nodes: Vec<NodeIdx> = self
+            .graph
+            .stations
+            .iter()
+            .filter(|s| {
+                s.station_type
+                    .as_deref()
+                    .is_some_and(|t| t.eq_ignore_ascii_case("charger"))
+            })
+            .flat_map(|s| s.interaction_nodes.iter().copied())
+            .collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        self.charger_power_w = Some(power_w);
+        self.charger_nodes = nodes;
+        self.refresh_chargers();
+        Ok(self.charger_nodes.len())
+    }
+
+    /// A robot that stands on a charger node gets the charger's power.
+    fn refresh_chargers(&mut self) {
+        for e in &mut self.robots {
+            e.robot.set_charger_power(self.charger_power_w.filter(|_| {
+                let p = e.robot.pose();
+                self.charger_nodes.iter().any(|&n| {
+                    let n = &self.graph.nodes[n];
+                    n.map == p.map
+                        && (n.x - p.x).hypot(n.y - p.y) <= crate::robot::START_NODE_TOLERANCE
+                })
+            }));
+        }
+    }
+
+    /// Battery figures of the run: `None` if no robot has a battery model.
+    pub fn battery_report(&self) -> Option<BatteryReport> {
+        let with: Vec<_> = self
+            .robots
+            .iter()
+            .filter(|e| e.robot.battery().is_some())
+            .collect();
+        if with.is_empty() {
+            return None;
+        }
+        Some(BatteryReport {
+            robots: with.len(),
+            ran_empty: with.iter().filter(|e| e.robot.ran_empty()).count(),
+            empty_now: with.iter().filter(|e| e.robot.is_out_of_charge()).count(),
+            charging_seconds: with.iter().map(|e| e.robot.charging_seconds()).sum(),
+        })
+    }
+
+    /// Give a robot a battery (see [`crate::battery`]).
+    pub fn set_battery(
+        &mut self,
+        id: &RobotId,
+        battery: crate::battery::Battery,
+    ) -> Result<(), WorldError> {
+        let i = self.find(id)?;
+        self.robots[i].robot.set_battery(battery);
+        Ok(())
+    }
+
+    /// The charge of a robot in percent; `None` if it has no battery model.
+    pub fn battery_percent(&self, id: &RobotId) -> Result<Option<f64>, WorldError> {
+        let i = self.find(id)?;
+        Ok(self.robots[i].robot.battery().map(|b| b.percent()))
+    }
+
     /// The robot's zone requests as it states them now.
     pub fn zone_requests(
         &self,
@@ -947,7 +1047,12 @@ impl World {
             .map(|e| {
                 let state = e.robot.state(&self.graph, &header);
                 let p = e.robot.pose();
-                let status = match (e.robot.is_held(), e.robot.phase()) {
+                // (a robot with an empty battery stands still: it is held, also when
+                // it was standing already)
+                let status = match (
+                    e.robot.is_held() || e.robot.is_out_of_charge(),
+                    e.robot.phase(),
+                ) {
                     (true, _) => RobotStatus::Held,
                     _ if e.robot.is_obstructed() => RobotStatus::Obstructed,
                     (_, Phase::Rotating) => RobotStatus::Turning,
@@ -976,6 +1081,8 @@ impl World {
                     released_edges: Vec::new(),
                     planned_nodes: Vec::new(),
                     planned_edges: Vec::new(),
+                    charge: e.robot.battery().map(|b| b.percent()),
+                    charging: state.power_supply.charging,
                 };
                 for n in &state.node_states {
                     if let Some(i) = self.graph.node_idx(&n.node_id) {

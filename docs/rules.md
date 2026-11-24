@@ -911,6 +911,31 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 - Not yet: look-ahead beyond the window, robot types
   and per-type edge rules.
 
+### Charging (charging brief step 2, first part; S129)
+
+- On only if the scenario has `charger_power_w` (chargers) and a battery model; the
+  limit is `charge_low` (percent, default 25). The baseline reads the charge from the
+  robot's state, as a real controller does.
+- A **free** robot (no job) whose charge is below the limit gets a trip to a charger,
+  planned like a job route (route load included) but without actions: the order id is
+  `charge-<n>`. The chargers are the stations of type `charger`. A charger is free if
+  no robot holds its node and no other robot is on its way there. The pair of a low
+  robot and a free charger with the shortest route is served first, so the nearest
+  robot gets the charger. A robot that already stands on a charger just starts.
+- On arrival the controller sends `startCharging`; the robot gets no jobs while it
+  charges. A trip is not a job: it is not in the completed or rejected jobs.
+- If no charger is free, the robot stays where it is and gets jobs as before.
+- A charging robot whose reported charge has reached the upper limit (80 %, or
+  `charge_low` if that is higher) gets `stopCharging` and is free for jobs again; it
+  stands on the charger node until a job takes it away.
+- **Critical limit (10 %, fixed for now):** a free robot below the low limit for which
+  no charger is free keeps taking jobs; below the critical limit it takes no more jobs
+  and waits where it is until a charger is free.
+- **Metrics** in the summary's `battery` section: `charge_trips` (trips sent) and
+  `waiting_for_charger_seconds` (free robots below the low limit, counted per
+  dispatch cycle in which they got no charger, all robots together; a robot that gets
+  a job in that cycle is counted for that cycle).
+
 ## 10. Metrics
 
 - **Throughput**: finished jobs per simulated hour.
@@ -944,6 +969,47 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   output of a scenario stays byte-identical. Only the controller is timed, not
   the simulation.
 - Not yet: a debug option to stop at the first deadlock.
+
+## 10a. Battery (charging brief, step 1)
+
+- A robot has a battery model only if its `[[robot]]` group sets `battery_wh`
+  (capacity, Wh). Without it the state says `stateOfCharge` 100 for ever, as before,
+  so the existing scenarios do not change.
+- Energy: a step in which the robot moved costs `drive_wh_per_m` per metre moved; a
+  step without motion costs `work_w` while an action runs at a node (phase Acting),
+  else `idle_w` (standing, waiting, turning on the spot, obstructed). Defaults 0.
+  The charge does not go below 0 (`botsim_core::battery`).
+- `start_charge` (percent, default 100): a number for all robots of the group, or a
+  range `[low, high]` from which each robot gets a random value. The values come from
+  an own stream of the scenario seed (`"battery"`), so the same seed gives the same
+  charges and runs without batteries are not changed. A random start keeps all robots
+  from reaching a charge limit together.
+- The state reports the charge (`powerSupply.stateOfCharge`). `World::battery_percent`
+  gives it directly.
+- **Chargers:** the scenario key `charger_power_w` (W, above 0) makes the stations of
+  the layout whose `stationType` is `charger` (any case) chargers; the nodes where
+  they are interacted with are the charger nodes (`World::set_chargers`). Without
+  the key there are no chargers. A robot with a battery that stands on a charger node
+  (within 0.1 m) and receives the instant action `startCharging` gains
+  `charger_power_w` per hour of charge (no losses, no taper, nothing drained while
+  charging) and the state says `powerSupply.charging = true`. It ends at
+  `stopCharging`, when the battery is full, or when the robot moves. `startCharging`
+  is FINISHED at once; if the robot has no battery or does not stand on a charger it
+  FAILS with `INVALID_INSTANT_ACTION` (reference `actionId`). `stopCharging` is
+  always FINISHED. The robot does not drive to a charger by itself.
+- **Empty battery:** a robot whose charge is 0 (and that is not charging) is held
+  where it is: it brakes as for a hold and stays (status `Held` in the observer), and
+  its state has the error `BATTERY_EMPTY` (level FATAL; not one of the predefined
+  types, which the standard allows) until it has charge again (charging at a charger).
+- **Metrics:** the run summary has a `battery` section (left out if no robot has a
+  battery model): `robots`, `ran_empty` (robots whose battery was empty at some
+  time), `empty_at_end`, `charging_seconds` (all robots together).
+- Not yet: the controller's metrics (time waiting for a charger) and the baseline's
+  charging rule.
+- The observer snapshot carries it: `RobotSnapshot.charge` (`None` without a
+  battery model) and `RobotSnapshot.charging` (false until the chargers exist). The
+  recording writer is the record crate's (viewer session); it has to copy the two
+  fields.
 
 ## 10b. Disturbances
 
@@ -1018,6 +1084,16 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 - Command line: `botsim [--timing] <scenario.toml>` (the package of `crates/runner`, U7).
 
 ## 12. Known simplifications (not modelled yet)
+
+**Future: rescue of an empty robot (decided later, not now).** A robot with an empty
+battery stays where it is for ever; in a real warehouse an operator helps from
+outside the system. Two ways, to be built when wanted: (a) a timed battery swap in
+place (scenario keys such as `rescue_after_seconds` and `rescue_charge`, off by
+default): the charge jumps up and the controller goes on with the same plan; (b) a
+manual move: the robot is carried away and told its new position with the instant
+action `initPosition`; the controller sees the new node and plans the rest of the
+job (pickup or drop) from there, which needs an interface to move a robot by hand.
+The job of an empty robot that carries a load stays on that robot meanwhile.
 
 Three-wheel limits are the simulator's own choice (no turning radius in the
 factsheet, §2), and the baseline does not know how tight a curve may be; a job

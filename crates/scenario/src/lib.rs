@@ -81,10 +81,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use botsim_core::actions::ActionTimes;
+use botsim_core::battery::{Battery, BatterySpec};
 use botsim_core::disturbances::{Disturbances, StopSpec, check_duration_variation};
 use botsim_core::door::DoorSpec;
 use botsim_core::graph::Graph;
-use botsim_core::jobs::JobGenerator;
+use botsim_core::jobs::{JobGenerator, Rng};
 use botsim_core::lift::{LiftSpec, LiftStop};
 use botsim_core::spec::RobotSpec;
 use botsim_core::world::{RobotId, World, unix_ms_from_utc};
@@ -165,6 +166,15 @@ pub struct Scenario {
     /// from text has none.
     #[serde(default = "yes")]
     pub conflict_reservation: bool,
+    /// Charging power (W) of the stations of the layout whose `stationType` is
+    /// `charger`; without it there are no chargers. A robot with a battery standing on
+    /// the interaction node of such a station charges after `startCharging`.
+    #[serde(default)]
+    pub charger_power_w: Option<f64>,
+    /// Baseline: a free robot whose charge is below this (percent) drives to a free
+    /// charger and charges there. Default 25. Used only with `charger_power_w`.
+    #[serde(default = "default_charge_low")]
+    pub charge_low: f64,
     /// Swept-area reservation: two bodies nearer than this (m), overlap included,
     /// conflict. Default 0.10; 0 keeps only overlaps of 5 cm or more.
     #[serde(default = "default_conflict_clearance")]
@@ -293,6 +303,10 @@ fn default_conflict_clearance() -> f64 {
     0.10
 }
 
+fn default_charge_low() -> f64 {
+    25.0
+}
+
 fn one_door() -> Vec<String> {
     vec!["front".to_string()]
 }
@@ -392,6 +406,76 @@ pub struct RobotGroup {
     /// as it is in the order). A real fleet may contain both kinds.
     #[serde(default)]
     pub zone_requests: ZoneRequestsWhen,
+    /// Battery capacity (Wh). Without it the robots of the group have no battery
+    /// model (they report 100 % for ever); the other battery settings need it.
+    #[serde(default)]
+    pub battery_wh: Option<f64>,
+    /// Energy used per metre driven (Wh/m); default 0.
+    #[serde(default)]
+    pub drive_wh_per_m: Option<f64>,
+    /// Power while standing, rotating or waiting (W); default 0.
+    #[serde(default)]
+    pub idle_w: Option<f64>,
+    /// Power while an action runs at a node (W); default 0.
+    #[serde(default)]
+    pub work_w: Option<f64>,
+    /// The charge at the start, percent: a number (the same for all robots of the
+    /// group) or a range `[low, high]` from which each robot gets a random value
+    /// (drawn from the scenario seed: the same seed gives the same charges). Default
+    /// 100. A random start keeps the robots from reaching a charge limit together.
+    #[serde(default)]
+    pub start_charge: Option<StartCharge>,
+}
+
+impl RobotGroup {
+    /// The battery of this group: `None` without `battery_wh`; the text says why
+    /// the settings cannot be used.
+    pub fn battery_spec(&self) -> Result<Option<BatterySpec>, String> {
+        let Some(capacity_wh) = self.battery_wh else {
+            if self.drive_wh_per_m.is_some()
+                || self.idle_w.is_some()
+                || self.work_w.is_some()
+                || self.start_charge.is_some()
+            {
+                return Err("battery settings need battery_wh".to_string());
+            }
+            return Ok(None);
+        };
+        let spec = BatterySpec {
+            capacity_wh,
+            drive_wh_per_m: self.drive_wh_per_m.unwrap_or(0.0),
+            idle_w: self.idle_w.unwrap_or(0.0),
+            work_w: self.work_w.unwrap_or(0.0),
+        };
+        spec.check().map_err(|e| e.to_string())?;
+        if let Some(StartCharge(lo, hi)) = self.start_charge
+            && !(lo.is_finite() && hi.is_finite() && 0.0 <= lo && lo <= hi && hi <= 100.0)
+        {
+            return Err(format!(
+                "start_charge must be 0 to 100 percent, low not above high, got [{lo}, {hi}]"
+            ));
+        }
+        Ok(Some(spec))
+    }
+}
+
+/// `start_charge`: a percent range; a single number is the range with both ends equal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StartCharge(pub f64, pub f64);
+
+impl<'de> Deserialize<'de> for StartCharge {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            One(f64),
+            Range([f64; 2]),
+        }
+        Ok(match Raw::deserialize(d)? {
+            Raw::One(v) => StartCharge(v, v),
+            Raw::Range([lo, hi]) => StartCharge(lo, hi),
+        })
+    }
 }
 
 /// The two values of `zone_requests` in a `[[robot]]` group.
@@ -469,6 +553,12 @@ impl Scenario {
     fn check(&self) -> Result<(), ScenarioError> {
         positive("duration", self.duration)?;
         positive("time_step", self.time_step)?;
+        if !(self.charge_low.is_finite() && (0.0..=100.0).contains(&self.charge_low)) {
+            return invalid(format!(
+                "charge_low must be 0 to 100 percent, got {}",
+                self.charge_low
+            ));
+        }
         if let Some(t) = self.deadlock_timeout {
             positive("deadlock_timeout", t)?;
         }
@@ -509,6 +599,8 @@ impl Scenario {
             if g.start_headings.iter().any(|a| !a.is_finite()) {
                 return invalid(at("start_headings must be finite numbers"));
             }
+            g.battery_spec()
+                .map_err(|m| ScenarioError::Invalid(at(&m)))?;
             non_negative(&at("action_time"), g.action_time)?;
             for (t, v) in &g.action_times {
                 non_negative(&at(&format!("action_times.{t}")), *v)?;
@@ -745,7 +837,12 @@ impl Scenario {
                 .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
         }
 
+        // an own random stream: runs without batteries are not changed by it
+        let mut battery_rng = Rng::stream(self.seed, "battery");
         for (gi, g) in self.robots.iter().enumerate() {
+            let battery = g
+                .battery_spec()
+                .map_err(|m| ScenarioError::Invalid(format!("robot group {}: {m}", gi + 1)))?;
             let path = base_dir.join(&g.factsheet);
             let factsheet: Factsheet = parse_json(&path)?;
             let spec = RobotSpec::from_factsheet(&factsheet).map_err(|e| ScenarioError::Input {
@@ -797,7 +894,22 @@ impl Scenario {
                 world
                     .set_zone_request_timing(&id, timing)
                     .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
+                // the battery, with a start charge drawn from the seed
+                if let Some(bspec) = battery {
+                    let StartCharge(lo, hi) = g.start_charge.unwrap_or(StartCharge(100.0, 100.0));
+                    let percent = lo + (hi - lo) * battery_rng.next_f64();
+                    let b = Battery::new(bspec, percent)
+                        .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
+                    world
+                        .set_battery(&id, b)
+                        .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
+                }
             }
+        }
+        if let Some(p) = self.charger_power_w {
+            world
+                .set_chargers(p)
+                .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
         }
         Ok(world)
     }

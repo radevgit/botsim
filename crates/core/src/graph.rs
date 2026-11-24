@@ -443,7 +443,9 @@ impl Graph {
         manufacturer: &str,
         series: &str,
     ) -> Option<EdgeOrientation> {
-        self.edges[edge].props_for(manufacturer, series)?.orientation
+        self.edges[edge]
+            .props_for(manufacturer, series)?
+            .orientation
     }
 
     /// May a robot of this type drive the edge? The edge must list the type, and

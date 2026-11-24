@@ -362,6 +362,14 @@ fn robot_panel(
     };
     field("Status", info.status.clone());
     field("Speed", format!("{:.2} m/s", info.speed));
+    field(
+        "Charge",
+        match info.charge {
+            Some(c) if info.charging => format!("{c:.0} % (charging)"),
+            Some(c) => format!("{c:.0} %"),
+            None => "not simulated".to_string(),
+        },
+    );
     field("Last node", info.last_node.clone().unwrap_or("–".into()));
     field("Released", list(&info.released, " → "));
     field("Planned", list(&info.planned, " → "));

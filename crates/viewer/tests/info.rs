@@ -34,7 +34,20 @@ fn robot(id: &str, status: StatusRecord) -> RobotRecord {
         last_node: None,
         released: RouteRecord::default(),
         planned: RouteRecord::default(),
+        charge: None,
+        charging: false,
     }
+}
+
+#[test]
+fn it_reports_the_charge_if_the_recording_has_one() {
+    let mut r = robot("ACME/R-001", StatusRecord::Idle);
+    let none = describe(&layout(), &snapshot(vec![r.clone()], vec![]), 0).unwrap();
+    assert_eq!((none.charge, none.charging), (None, false));
+    r.charge = Some(63.0);
+    r.charging = true;
+    let some = describe(&layout(), &snapshot(vec![r], vec![]), 0).unwrap();
+    assert_eq!((some.charge, some.charging), (Some(63.0), true));
 }
 
 fn snapshot(robots: Vec<RobotRecord>, blocking: Vec<[usize; 2]>) -> SnapshotLine {

@@ -3,6 +3,7 @@
 //! Knows nothing about files, Rerun or MQTT; those live in adapters.
 
 pub mod actions;
+pub mod battery;
 pub mod collision;
 pub mod deadlock;
 pub mod disturbances;

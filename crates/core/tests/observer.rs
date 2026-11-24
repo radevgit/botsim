@@ -341,3 +341,51 @@ fn a_bad_interval_is_refused_and_the_interval_does_not_change_the_run() {
     assert_eq!(run(None), run(Some(0.05)));
     assert_eq!(run(None), run(Some(2.0)));
 }
+
+#[test]
+fn a_snapshot_carries_the_charge_of_a_robot_with_a_battery() {
+    use botsim_core::battery::{Battery, BatterySpec};
+    let mut w = world();
+    let spec = BatterySpec {
+        capacity_wh: 100.0,
+        drive_wh_per_m: 0.0,
+        idle_w: 360.0, // 0.1 Wh per second
+        work_w: 360.0,
+    };
+    w.set_battery(&id("R-1"), Battery::new(spec, 50.0).unwrap())
+        .unwrap();
+    let log = observed(&mut w);
+    for _ in 0..200 {
+        w.step(); // 10 s
+    }
+    let log = log.borrow();
+    let last = log.snapshots.last().unwrap();
+    // R-1 has a battery: 50 % minus 10 s at 0.1 Wh/s of 100 Wh = 49 %
+    let c = last.robots[0].charge.unwrap();
+    assert!((c - 49.0).abs() < 0.01, "{c}");
+    assert!(!last.robots[0].charging);
+    // R-2 has none
+    assert_eq!(last.robots[1].charge, None);
+}
+
+#[test]
+fn a_robot_with_an_empty_battery_is_held_also_when_it_stands_still() {
+    use botsim_core::battery::{Battery, BatterySpec};
+    let mut w = world();
+    let spec = BatterySpec {
+        capacity_wh: 100.0,
+        drive_wh_per_m: 0.0,
+        idle_w: 0.0,
+        work_w: 0.0,
+    };
+    w.set_battery(&id("R-1"), Battery::new(spec, 0.0).unwrap())
+        .unwrap();
+    let log = observed(&mut w);
+    for _ in 0..20 {
+        w.step();
+    }
+    let log = log.borrow();
+    let last = log.snapshots.last().unwrap();
+    assert_eq!(last.robots[0].status, RobotStatus::Held);
+    assert_eq!(last.robots[1].status, RobotStatus::Idle);
+}

@@ -113,10 +113,26 @@ const GOODS_IN_BAYS: [(P, P, P); 5] = [
 ];
 /// The sidings of the goods-out bays on the east side: where they begin (y) and how
 /// long they are (they run north).
-const EAST_BAYS: [(f64, f64); 3] = [(33.0, 8.0), (89.0, 8.0), (103.0, 8.0)];
+/// (the bay at y = 33 is gone: the second east road is where it was)
+const EAST_BAYS: [(f64, f64); 2] = [(80.0, 8.0), (92.0, 8.0)];
+
+/// The second road beside the east ring road: its distance from the ring (m, outside) and its
+/// first and last y. Both run north.
+const EAST_ROAD_DX: f64 = 3.6;
+/// (from the south wall road to the north wall road: with them it is the outer loop round the
+/// hall, the ring road is the inner one)
+const EAST_ROAD_Y: (f64, f64) = (4.0, H - 4.0);
+/// Its bridges (10 m S-curves, driving north): `(y on the start side, true: from the ring to
+/// the road)`. The ends on the ring are on a straight piece of it, not on the arcs of the rows
+/// of the east grid (rows at y = 28, 46, 58, 66, 74, 84; a row that runs east turns north on the
+/// ring, with an arc of 3.5 m after the junction, one that runs west before it).
+const EAST_BRIDGES: [(f64, bool); 4] = [(26.0, true), (40.0, false), (62.5, true), (104.0, true)];
+// (the last one leaves the ring for the road, so that nobody merges from the road into the top
+// ring, which is where the jams were: the road goes on round the north wall to x = 215)
 
 /// Where the narrow lanes along the south and north wall branch off the ring road (x).
-const LANES_X: [f64; 2] = [40.0, 200.0];
+/// (the east one is next to the big corner arc of the ring road: 3 m before it starts)
+const LANES_X: [f64; 2] = [40.0, 215.0];
 
 /// Are there turn arcs (for the three-wheel robots) at the crossings of two roads? Without
 /// them nobody drives past the corner node of a crossing at the same time as a robot on
@@ -144,6 +160,11 @@ const ARC_RADII: [f64; 3] = [3.0, 3.0, 3.0];
 /// from the corner node (a forklift is 2.4 m long).
 const MIN_TANGENT: f64 = 3.0;
 
+/// A node put in a long straight edge (not a narrow one) is at least this far (m) from the ends
+/// and the middle of any curve that is not its own: a robot that waits at the node would be
+/// in the way of a robot on the curve (the baseline found three such places at 2 to 3 m).
+const CURVE_CLEAR: f64 = 3.5;
+
 /// A node put in a long straight edge is at least this far (m) from the corner of any arc.
 const SPLIT_CLEAR: f64 = MIN_TANGENT;
 
@@ -160,9 +181,31 @@ const NARROW_RADIUS: f64 = 1.8;
 /// The radius of the arcs at the junctions (m): about what a forklift needs.
 const TURN_RADIUS: f64 = 3.0;
 
-/// Where the sidings of the charging and parking stalls begin (y); each is 8 m long,
-/// with a stall on each side of the lane at x = 212.
-const STALLS_Y: [f64; 3] = [92.0, 101.0, 110.0];
+/// The charging stalls: sidings (a bow 8 m long, 3 m inwards, the station at its apex) off the
+/// wall roads, which carry little traffic: `(x where it begins, true: on the south road, which
+/// runs east, false: on the north road, which runs west)`. Not on a road that others use to get
+/// somewhere (the lane at x = 212 was one, and the robots that charged there stood in the queue
+/// of the jobs), and clear of the bridges and the links at x = 215 and of the shelving stops.
+const CHARGER_SIDINGS: [(f64, bool); 6] = [
+    (94.0, true),
+    (137.0, true),
+    (178.0, true),
+    (190.0, true),
+    (194.0, false),
+    (206.0, false),
+];
+/// How far a siding of `CHARGER_SIDINGS` runs along the road, and how far it bulges (m).
+const SIDING_LENGTH: f64 = 8.0;
+const SIDING_BULGE: f64 = 3.0;
+
+/// The apex of a siding of `CHARGER_SIDINGS` (the stall).
+fn siding_apex((x, south): (f64, bool)) -> P {
+    if south {
+        (x + SIDING_LENGTH / 2.0, 4.0 + SIDING_BULGE)
+    } else {
+        (x - SIDING_LENGTH / 2.0, H - 4.0 - SIDING_BULGE)
+    }
+}
 
 /// The second labyrinth, between the two grids (x = 100 to 140, y = 10 to 66):
 /// six aisles that run north and south in turns (the first north), from `V_BOTTOM`
@@ -240,7 +283,7 @@ fn v_row_parts(k: usize) -> Vec<(f64, f64)> {
 }
 
 /// About this far apart (m) the stops of the aisles of the north labyrinth are.
-const NORTH_STOP_SPACING: f64 = 20.0;
+const NORTH_STOP_SPACING: f64 = 40.0;
 
 /// The stops in the aisles of both labyrinths (station, point): in the middle of every
 /// part of the shelving, on the aisle.
@@ -528,6 +571,24 @@ impl Net {
                 _ => None,
             })
             .collect();
+        // the curves of the layout: their two ends and the middle (the nodes they join, and
+        // three points), so that a new node is not put 2 to 3 m from one that is not its own
+        // (a robot that waits there is in the way of the one on the curve)
+        let curves: Vec<(usize, usize, [P; 3])> = self
+            .edges
+            .iter()
+            .filter_map(|e| {
+                let (a, b) = (self.nodes[e.a], self.nodes[e.b]);
+                let mid = match e.curve? {
+                    Curve::Arc(c, _) => ((a.0 + 2.0 * c.0 + b.0) / 4.0, (a.1 + 2.0 * c.1 + b.1) / 4.0),
+                    Curve::Cubic(c1, c2) => (
+                        (a.0 + 3.0 * c1.0 + 3.0 * c2.0 + b.0) / 8.0,
+                        (a.1 + 3.0 * c1.1 + 3.0 * c2.1 + b.1) / 8.0,
+                    ),
+                };
+                Some((e.a, e.b, [a, mid, b]))
+            })
+            .collect();
         let edges = std::mem::take(&mut self.edges);
         for e in edges {
             let (a, b) = (self.nodes[e.a], self.nodes[e.b]);
@@ -551,6 +612,12 @@ impl Net {
                 !corners
                     .iter()
                     .any(|c| (c.0 - at.0).hypot(c.1 - at.1) < clear)
+                    && (is_narrow
+                        || !curves.iter().any(|(ca, cb, pts)| {
+                            ![ca, cb].contains(&&e.a)
+                                && ![ca, cb].contains(&&e.b)
+                                && pts.iter().any(|c| (c.0 - at.0).hypot(c.1 - at.1) < CURVE_CLEAR)
+                        }))
             };
             let mut from = e.a;
             let mut at = 0.0;
@@ -965,6 +1032,24 @@ const FLEET: [(&str, &str, f64, usize); 5] = [
     ("C", "small_robot.factsheet.json", 3.0, 12),
 ];
 
+/// Write a battery for every robot type and chargers into the scenario (see `battery_wh` in
+/// the scenario crate and `briefs/charging_ready.md`)? Off: a run without batteries, as before.
+const WITH_BATTERY: bool = true;
+/// The batteries of the types of `FLEET` (same order): capacity (Wh), energy per metre driven
+/// (Wh), power standing (W), power working (W). Placeholders, not measured values: chosen so that
+/// a robot that drives about half of the time lasts about three hours (the first values, 1.0 to
+/// 0.25 Wh/m, emptied a battery in 15 minutes: 1.0 Wh/m at 1.2 m/s is 4.3 kW).
+const BATTERY: [(f64, f64, f64, f64); 5] = [
+    (2000.0, 0.25, 50.0, 150.0),
+    (800.0, 0.1, 30.0, 80.0),
+    (1500.0, 0.2, 40.0, 100.0),
+    (600.0, 0.08, 30.0, 60.0),
+    (300.0, 0.04, 20.0, 40.0),
+];
+/// The power of every charger (W) and the charge (percent) below which a free robot goes to charge.
+const CHARGER_POWER_W: f64 = 1500.0;
+const CHARGE_LOW: f64 = 25.0;
+
 /// The robots start at least this far apart (m).
 const START_GAP: f64 = 6.0;
 
@@ -1072,6 +1157,13 @@ fn scenario(net: &Net) -> String {
          # edge 5 m longer for the route, so that the empty parallel lane is preferred\n\
          route_load_weight = 5.0\n"
     );
+    if WITH_BATTERY {
+        let _ = write!(
+            s,
+            "# chargers: the six stalls in the north-east (stations of type charger)\n\
+             charger_power_w = {CHARGER_POWER_W:?}\ncharge_low = {CHARGE_LOW:?}\n"
+        );
+    }
     for (k, (prefix, factsheet, action, _)) in FLEET.iter().enumerate() {
         let _ = write!(
             s,
@@ -1084,7 +1176,19 @@ fn scenario(net: &Net) -> String {
         }
         let _ = write!(
             s,
-            "]\n# each robot faces along the road that leaves its start node\nstart_heading = \"road\"\naction_time = 1.0\n\n[robot.action_times]\npick = {action:?}\ndrop = {action:?}\n"
+            "]\n# each robot faces along the road that leaves its start node\nstart_heading = \"road\"\naction_time = 1.0\n"
+        );
+        if WITH_BATTERY {
+            let (wh, per_m, idle, work) = BATTERY[k];
+            let _ = write!(
+                s,
+                "battery_wh = {wh:?}\ndrive_wh_per_m = {per_m:?}\nidle_w = {idle:?}\nwork_w = {work:?}\n\
+                 start_charge = [50.0, 100.0]\n"
+            );
+        }
+        let _ = write!(
+            s,
+            "\n[robot.action_times]\npick = {action:?}\ndrop = {action:?}\n"
         );
     }
     let stations: Vec<String> = net
@@ -1385,6 +1489,10 @@ const LOOP_R: f64 = 2.0;
 fn column_x(i: usize, j: usize) -> f64 {
     if i == NET_X.len() - 2 && COLUMN_COPY_ROWS.contains(&j) {
         COLUMN_COPY_X
+    } else if i == NET_X.len() - 2 && j == 0 {
+        // the bottom row: the loop is as far from the column as at the copy (3.6 m), a large
+        // robot that turns between the column and the ring road needs the room
+        NET_X[i + 1] - DOUBLE_HALF
     } else {
         NET_X[i + 1]
     }
@@ -1397,7 +1505,16 @@ const COLUMN_COPY_ROWS: std::ops::RangeInclusive<usize> = 1..=6;
 /// The bridges between the column and its copy (10 m long S-curves, driving south):
 /// `(y on the column, true: from the column to the copy)`; the end on the column is not near the
 /// junctions of the column (at y = 130, 90, 84, 74, 66, 37, 10).
-const COLUMN_BRIDGES: [(f64, bool); 4] = [(122.0, true), (98.0, false), (58.0, true), (28.0, false)];
+/// The third number is the length of the bridge along the road (m): the one at 62 is shorter,
+/// so that its end on the copy (y = 55.2, a node already: the end of a lane change of the loops)
+/// is 3.5 m from the corners of the loops beside the copy, not 2.5 m (a robot waiting at the
+/// old end, y = 48, was in the way of the one on the loop's corner arc).
+const COLUMN_BRIDGES: [(f64, bool, f64); 4] = [
+    (122.0, true, 10.0),
+    (98.0, false, 10.0),
+    (62.0, true, 6.8),
+    (28.0, false, 10.0),
+];
 
 /// The loops of all the cells of the west part. Neighbours turn in opposite directions (a
 /// chessboard), so that the two sides that face each other in a street run the same way.
@@ -1537,12 +1654,15 @@ fn lane_changes() -> Vec<(P, P, P)> {
         // the right side faces the column at x = 100 (runs south): same way if clockwise
         if l.i == last_i && l.cw {
             let length = (l.y1 - l.y0) - 2.0 * LOOP_R;
+            // (the lane: the copy of the column, or the column itself; the loop of the bottom row
+            // is further from it, see `column_x`)
+            let lane_x = if l.j == 0 { NET_X[last_i + 1] } else { l.x1 + h };
             changes(
-                (l.x1 + h, sides[2].0.1),
+                (lane_x, sides[2].0.1),
                 sides[2].0,
                 (0.0, -1.0),
                 length,
-                h,
+                lane_x - l.x1,
                 false,
                 true,
             );
@@ -1903,8 +2023,13 @@ const STOP_GAP: f64 = 4.0;
 
 /// The bridges between the ring road and the road along the south wall: `(x, true)` leaves the
 /// ring at x for the road (12 m long), `(x, false)` leaves the road for the ring.
-const BRIDGES_SOUTH: [(f64, bool); 5] = [
-    (80.0, false),
+const BRIDGES_SOUTH: [(f64, bool); 6] = [
+    // (45: one more in the long gap between the wall road's start at x = 40 and the bridge at
+    // 80, to take traffic off the ring)
+    (45.0, true),
+    // (80: from the ring to the road; it was from the road to the ring, landing at x = 92, just
+    // before the column at x = 100, where 143 of 249 robots waited)
+    (80.0, true),
     (108.0, true),
     (124.0, false),
     (146.0, true),
@@ -2091,6 +2216,12 @@ fn cell_lanes_vertical(
         if (x - RING).abs() < 1e-9 || (x - (W - RING)).abs() < 1e-9 {
             continue;
         }
+        // (not in the bottom cell beside the column at x = 140: the half circle of the middle
+        // labyrinth lands there, 3 m from the lane's first node, where a waiting robot is in its
+        // way: the lane is only a way past anyway)
+        if (x - V_XCOL).abs() < 1e-9 && (yb - RING).abs() < 1e-9 {
+            continue;
+        }
         // (beside the column at x = 140 the lane starts where the shortcut arcs of the middle
         // labyrinth land, 4 m from the middle of the cell: these keep the long S-curves)
         let (lo, hi) = if (x - V_XCOL).abs() < 1e-9 {
@@ -2204,11 +2335,11 @@ fn build_net() -> Net {
     // 3.6 m from the column) from the column to the copy and back. The copy goes from y = 112
     // (a bridge from the column at 122) to y = 40 (a bridge back to the column at 30)
     net.line((COLUMN_COPY_X, 112.0), (COLUMN_COPY_X, 38.0));
-    for (y, to_copy) in COLUMN_BRIDGES {
+    for (y, to_copy, len) in COLUMN_BRIDGES {
         let (from, to) = if to_copy {
-            ((WEST_X[3], y), (COLUMN_COPY_X, y - 10.0))
+            ((WEST_X[3], y), (COLUMN_COPY_X, y - len))
         } else {
-            ((COLUMN_COPY_X, y + 10.0), (WEST_X[3], y))
+            ((COLUMN_COPY_X, y + len), (WEST_X[3], y))
         };
         net.s_link(from, to, (0.0, -1.0));
     }
@@ -2294,22 +2425,16 @@ fn build_net() -> Net {
     net.arc((lane + r, 84.0), (lane, 84.0), (lane, 84.0 + r));
     net.line((lane, 84.0 + r), (lane, y1 - r));
     net.arc((lane, y1 - r), (lane, y1), (lane - r, y1));
-    for y in STALLS_Y {
-        net.bow((lane, y), (lane - 3.0, y + 4.0), (lane, y + 8.0));
-        net.bow((lane, y), (lane + 3.0, y + 4.0), (lane, y + 8.0));
+    // (the stalls were here, beside the lane: now sidings off the wall roads, see below)
+    for siding in CHARGER_SIDINGS {
+        let (x, south) = siding;
+        let y = if south { 4.0 } else { H - 4.0 };
+        let dx = if south { SIDING_LENGTH } else { -SIDING_LENGTH };
+        net.bow((x, y), siding_apex(siding), (x + dx, y));
         // the stalls are one station: a robot that is sent to park draws one of them
-        net.add_station(
-            "PARK",
-            "Parking and charging",
-            "parking",
-            (lane - 3.0, y + 4.0),
-        );
-        net.add_station(
-            "PARK",
-            "Parking and charging",
-            "parking",
-            (lane + 3.0, y + 4.0),
-        );
+        // (type `charger`: with `charger_power_w` in the scenario a robot charges here; the jobs
+        // leave the station out)
+        net.add_station("PARK", "Charging", "charger", siding_apex(siding));
     }
 
     // bays on curved one-way sidings that rejoin the ring further on: west (the left
@@ -2322,9 +2447,11 @@ fn build_net() -> Net {
         net.add_station(&format!("GOODS-IN-{}", n + 1), &name, "bay", apex);
     }
     for (n, (a, length)) in EAST_BAYS.into_iter().enumerate() {
-        net.bow((x1, a), (x1 + 3.0, a + length / 2.0), (x1, a + length));
+        // (the sidings branch off the second east road, which runs as far as they do)
+        let xr = x1 + EAST_ROAD_DX;
+        net.bow((xr, a), (xr + 3.0, a + length / 2.0), (xr, a + length));
         let name = format!("Goods out {}", n + 1);
-        let apex = (x1 + 3.0, a + length / 2.0);
+        let apex = (xr + 3.0, a + length / 2.0);
         net.add_station(&format!("GOODS-OUT-{}", n + 1), &name, "bay", apex);
     }
 
@@ -2399,7 +2526,9 @@ fn build_net() -> Net {
     let [lw, le] = LANES_X;
     net.line((lw, y0), (lw, 4.0));
     net.line((lw, 4.0), (le, 4.0));
-    net.line((le, 4.0), (le, y0));
+    // (the east link at the south goes from the ring to the road, as at the north: nobody merges
+    // from the outer road into the ring just before its corner, where 91 of 153 robots waited)
+    net.line((le, y0), (le, 4.0));
     net.line((le, y1), (le, H - 4.0));
     net.line((le, H - 4.0), (lw, H - 4.0));
     net.line((lw, H - 4.0), (lw, y1));
@@ -2422,6 +2551,23 @@ fn build_net() -> Net {
             ((x, H - 4.0), (x - bridge, y1))
         };
         net.s_link(from, to, (-1.0, 0.0));
+    }
+
+    // a second road beside the ring road on the east (outside it, 3.6 m from it, both run north),
+    // with bridges (S-curves of 10 m) from one to the other and back, as for the column at x = 100:
+    // the east ring road was the only way for everything that goes north or south on that side
+    // the wall roads go on to it: south road east, up the east road, north road west
+    let xe = x1 + EAST_ROAD_DX;
+    net.line((le, 4.0), (xe, 4.0));
+    net.line((xe, EAST_ROAD_Y.0), (xe, EAST_ROAD_Y.1));
+    net.line((xe, H - 4.0), (le, H - 4.0));
+    for (y, to_road) in EAST_BRIDGES {
+        let (from, to) = if to_road {
+            ((x1, y), (x1 + EAST_ROAD_DX, y + 10.0))
+        } else {
+            ((x1 + EAST_ROAD_DX, y), (x1, y + 10.0))
+        };
+        net.s_link(from, to, (0.0, 1.0));
     }
 
     net.split_at_nodes();
@@ -2722,7 +2868,7 @@ fn build_geometry() -> GeometryFile {
     }
     for (name, x, ys) in [(
         "E",
-        W - RING + 3.0,
+        W - RING + EAST_ROAD_DX + 3.0,
         EAST_BAYS.map(|(a, l)| a + l / 2.0).to_vec(),
     )] {
         for (i, y) in ys.iter().enumerate() {
@@ -2814,22 +2960,14 @@ fn build_geometry() -> GeometryFile {
         }
     }
 
-    // the charging and parking area: a marked floor (grey) round the lane at x = 212,
-    // and a stall (a long station, along the lane) at the apex of each siding, one on
-    // each side
-    s.polygon(
-        "parking".into(),
-        GeometryKind::Other,
-        (200.0, 88.0, 224.0, 122.0),
-    );
-    for (i, y) in STALLS_Y.iter().enumerate() {
-        for (side, x) in [("w", 212.0 - 3.0), ("e", 212.0 + 3.0)] {
-            s.polygon(
-                format!("charge-{side}{i}"),
-                GeometryKind::Station,
-                (x - 1.2, y + 4.0 - 3.0, x + 1.2, y + 4.0 + 3.0),
-            );
-        }
+    // the charging stalls: a station (along the road) at the apex of each siding
+    for (i, siding) in CHARGER_SIDINGS.into_iter().enumerate() {
+        let (x, y) = siding_apex(siding);
+        s.polygon(
+            format!("charge-{i}"),
+            GeometryKind::Station,
+            (x - 2.4, y - 1.2, x + 2.4, y + 1.2),
+        );
     }
 
     // racking beside the labyrinth, and over it along the top ring road
@@ -2891,8 +3029,8 @@ fn groups_json() -> Value {
     // the bridges of the column: the middle of each is half way between its two ends
     let column_bridges: Vec<Value> = COLUMN_BRIDGES
         .iter()
-        .map(|&(y, to_copy)| {
-            let mid = if to_copy { y - 5.0 } else { y + 5.0 };
+        .map(|&(y, to_copy, len)| {
+            let mid = if to_copy { y - len / 2.0 } else { y + len / 2.0 };
             json!([COLUMN_COPY_X + 1.0, mid - 1.5, WEST_X[3] - 1.0, mid + 1.5])
         })
         .collect();
@@ -2907,6 +3045,8 @@ fn groups_json() -> Value {
         {"name": "boulevard", "boxes": [[140.0, 65.7, w - ring, 66.3], [140.0, 73.7, w - ring, 74.3], [140.0, 83.7, w - ring, 84.3]]},
         {"name": "north serpentine", "boxes": [[WEST_X[3] + 0.5, 88.0, 196.0, h - ring - 1.0]]},
         {"name": "middle serpentine", "boxes": [[WEST_X[3] + 0.5, 14.0, 140.0, 66.0]]},
+        {"name": "east road", "boxes": [[w - ring + EAST_ROAD_DX - 0.3, EAST_ROAD_Y.0, w - ring + EAST_ROAD_DX + 0.3, EAST_ROAD_Y.1]]},
+        {"name": "bridges east", "boxes": [[w - ring + 0.4, 26.0, w - ring + EAST_ROAD_DX - 0.4, 114.0]]},
         {"name": "east grid", "boxes": [[140.0, ring, w - ring + 6.0, h - ring]]},
     ])
 }

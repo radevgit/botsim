@@ -41,6 +41,13 @@ pub struct RobotRecord {
     pub last_node: Option<usize>,
     pub released: RouteRecord,
     pub planned: RouteRecord,
+    /// The state of charge in percent; `None` if the simulator has no battery model (the
+    /// recordings made before it have no such field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charge: Option<f64>,
+    /// The robot is charging.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub charging: bool,
 }
 
 /// The body outline relative to the kinematic center (turns with the heading).
@@ -177,6 +184,8 @@ impl From<&RobotSnapshot> for RobotRecord {
                 nodes: r.planned_nodes.clone(),
                 edges: r.planned_edges.clone(),
             },
+            charge: r.charge,
+            charging: r.charging,
         }
     }
 }

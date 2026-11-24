@@ -23,6 +23,9 @@ pub struct RobotInfo {
     pub waits_for: Vec<String>,
     /// The robots that wait for this one.
     pub waited_for_by: Vec<String>,
+    /// The state of charge in percent; `None` if the recording has no battery.
+    pub charge: Option<f64>,
+    pub charging: bool,
 }
 
 fn node_name(layout: &LayoutLine, node: usize) -> String {
@@ -62,5 +65,7 @@ pub fn describe(layout: &LayoutLine, snapshot: &SnapshotLine, index: usize) -> O
             .filter(|[_, blocker]| *blocker == index)
             .map(|&[waiter, _]| id_of(waiter))
             .collect(),
+        charge: robot.charge,
+        charging: robot.charging,
     })
 }

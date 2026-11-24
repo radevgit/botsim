@@ -10,7 +10,7 @@
 //! Not yet: deadlocks, controller time per step.
 
 use botsim_baseline::conflicts::{ConflictInput, NodeConflictInput};
-use botsim_baseline::controller::Controller;
+use botsim_baseline::controller::{ChargePolicy, Controller};
 use botsim_core::jobs::Job;
 use botsim_core::lift::DoorState;
 use botsim_core::world::World;
@@ -47,6 +47,9 @@ pub struct Summary {
     /// The doors as they stand at the end of the run; left out without doors.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub doors: Vec<DoorSummary>,
+    /// The batteries; left out when no robot has a battery model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery: Option<BatterySummary>,
     pub jobs: JobsSummary,
     pub metrics: MetricsSummary,
     pub robots: Vec<RobotSummary>,
@@ -54,6 +57,24 @@ pub struct Summary {
     /// differs from run to run and so breaks identical output.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timing: Option<TimingSummary>,
+}
+
+/// The batteries of the run (charging brief).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BatterySummary {
+    /// Robots with a battery model.
+    pub robots: usize,
+    /// Robots whose battery was empty at some time (they stopped where they were).
+    pub ran_empty: usize,
+    /// Robots standing empty at the end.
+    pub empty_at_end: usize,
+    /// Simulated seconds all robots together spent charging.
+    pub charging_seconds: f64,
+    /// Trips the controller sent robots on to a charger (0 without chargers).
+    pub charge_trips: usize,
+    /// Simulated seconds free robots below the low limit waited for a charger (all
+    /// robots together).
+    pub waiting_for_charger_seconds: f64,
 }
 
 /// How long the controller took per step (real time, not simulated time).
@@ -255,6 +276,14 @@ pub fn run_with(
         let mut c = Controller::new(&world);
         c.set_load_weight(scenario.route_load_weight);
         c.set_wait_weight(scenario.route_wait_weight);
+        // robots with a low battery go to a charger (only with chargers in the world)
+        if scenario.charger_power_w.is_some() {
+            c.set_charging(ChargePolicy {
+                low: scenario.charge_low,
+                high: 80.0_f64.max(scenario.charge_low),
+                critical: 10.0,
+            });
+        }
         if scenario.conflict_reservation
             && let Some(path) = &scenario.source
         {
@@ -375,6 +404,16 @@ pub fn run_with(
         deadlock_count: deadlocks.len(),
         deadlocks,
         random_stops: world.random_stops(),
+        battery: world.battery_report().map(|b| BatterySummary {
+            robots: b.robots,
+            ran_empty: b.ran_empty,
+            empty_at_end: b.empty_now,
+            charging_seconds: round_micro(b.charging_seconds),
+            charge_trips: controller.as_ref().map_or(0, |c| c.charge_trips()),
+            waiting_for_charger_seconds: round_micro(
+                controller.as_ref().map_or(0.0, |c| c.charge_wait_seconds()),
+            ),
+        }),
         lifts: world
             .lifts()
             .iter()

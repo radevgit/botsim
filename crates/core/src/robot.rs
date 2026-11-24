@@ -29,6 +29,7 @@ use vda5050::order::Order;
 use vda5050::state::{ActionStatus, State};
 
 use crate::actions::ActionTimes;
+use crate::battery::Battery;
 use crate::drive::{DriveError, Driver, Phase, Pose};
 use crate::errors::{ErrorType, RobotError};
 use crate::graph::{EdgeIdx, Graph, NodeIdx};
@@ -99,6 +100,19 @@ pub struct Robot {
     door_edges: HashSet<String>,
     /// Drive through nodes where possible (S66).
     pass_through: bool,
+    /// The battery; `None`: no battery model, the state reports 100 %.
+    battery: Option<Battery>,
+    /// The power (W) of the charger the robot stands on; set by the world.
+    charger_power_w: Option<f64>,
+    /// `startCharging` was received and not ended by `stopCharging`, moving or a
+    /// full battery.
+    charging_requested: bool,
+    /// The robot gains charge right now.
+    charging: bool,
+    /// The battery has been empty at some time.
+    ran_empty: bool,
+    /// Simulated seconds spent charging.
+    charging_seconds: f64,
 }
 
 impl Robot {
@@ -129,7 +143,49 @@ impl Robot {
             door_blocked: false,
             door_edges: HashSet::new(),
             pass_through: false,
+            battery: None,
+            charger_power_w: None,
+            charging_requested: false,
+            charging: false,
+            ran_empty: false,
+            charging_seconds: 0.0,
         })
+    }
+
+    /// The world tells the robot whether it stands on a charger and its power (W).
+    pub fn set_charger_power(&mut self, power_w: Option<f64>) {
+        self.charger_power_w = power_w;
+    }
+
+    /// Does the robot gain charge right now?
+    pub fn is_charging(&self) -> bool {
+        self.charging
+    }
+
+    /// Is the battery empty (and not charging)? The robot then stands still.
+    pub fn is_out_of_charge(&self) -> bool {
+        !self.charging && self.battery.as_ref().is_some_and(|b| b.is_empty())
+    }
+
+    /// Has the battery been empty at some time?
+    pub fn ran_empty(&self) -> bool {
+        self.ran_empty
+    }
+
+    /// Simulated seconds the robot has been charging.
+    pub fn charging_seconds(&self) -> f64 {
+        self.charging_seconds
+    }
+
+    /// Give the robot a battery (see [`crate::battery`]); its charge is reported in
+    /// the state and falls as the robot drives, works and stands.
+    pub fn set_battery(&mut self, battery: Battery) {
+        self.battery = Some(battery);
+    }
+
+    /// The battery, if the robot has one.
+    pub fn battery(&self) -> Option<&Battery> {
+        self.battery.as_ref()
     }
 
     /// Drive through nodes without stopping where it can (S66, see
@@ -502,7 +558,32 @@ impl Robot {
 
     /// Advance by `dt` seconds.
     pub fn step(&mut self, dt: f64) {
+        let before = self.driver.pose();
+        // an empty battery stops the robot where it is (it brakes as for a hold)
+        if self.is_out_of_charge() {
+            self.ran_empty = true;
+            self.driver.hold(2.0 * dt);
+        }
         self.driver.step(dt);
+        if let Some(b) = self.battery.as_mut() {
+            let after = self.driver.pose();
+            let moved = (after.x - before.x).hypot(after.y - before.y);
+            // moving or a full battery ends the charging
+            if moved > 0.0 || b.is_full() {
+                self.charging_requested = false;
+            }
+            match self.charger_power_w {
+                Some(p) if self.charging_requested => {
+                    self.charging = true;
+                    self.charging_seconds += dt;
+                    b.charge(dt, p);
+                }
+                _ => {
+                    self.charging = false;
+                    b.drain(dt, moved, self.driver.phase() == Phase::Acting);
+                }
+            }
+        }
         self.update_cancel();
         self.update_zone_requests();
     }
@@ -516,6 +597,22 @@ impl Robot {
             &self.errors,
             &self.instant,
         );
+        if let Some(b) = &self.battery {
+            state.power_supply.state_of_charge = b.percent();
+            state.power_supply.charging = self.charging;
+            if self.is_out_of_charge() {
+                // not one of the predefined types: the standard allows others
+                state.errors.push(vda5050::state::StateError {
+                    error_type: "BATTERY_EMPTY".to_string(),
+                    error_references: None,
+                    error_description: Some("the battery is empty, the robot cannot move".into()),
+                    error_description_translations: None,
+                    error_hint: Some("charge the robot".into()),
+                    error_hint_translations: None,
+                    error_level: vda5050::state::ErrorLevel::Fatal,
+                });
+            }
+        }
         // an empty array if there are zones but no request (as the standard says)
         if let Some(zr) = &self.zone_requests {
             state.zone_requests = Some(self.zone_requests());
@@ -712,6 +809,25 @@ impl Robot {
                         ErrorType::InvalidInstantAction,
                         &a.action_id,
                         "the robot has no such zone set (or it is in use)",
+                    ));
+                }
+                continue;
+            }
+
+            if a.action_type == "startCharging" || a.action_type == "stopCharging" {
+                if a.action_type == "stopCharging" {
+                    self.charging_requested = false;
+                    self.instant[idx].status = ActionStatus::Finished;
+                } else if self.battery.is_some() && self.charger_power_w.is_some() {
+                    // charging runs while the robot stands on the charger and the
+                    // battery is not full
+                    self.charging_requested = true;
+                    self.instant[idx].status = ActionStatus::Finished;
+                } else {
+                    self.errors.push(action_error(
+                        ErrorType::InvalidInstantAction,
+                        &a.action_id,
+                        "startCharging: the robot has no battery or does not stand on a charger",
                     ));
                 }
                 continue;
