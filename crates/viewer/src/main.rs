@@ -6,13 +6,16 @@
 
 use std::fs::File;
 use std::io::BufReader;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-use botsim_check::{Finding, Level, check_scenario};
+use botsim_check::{Finding, Level, Options, run_scenario};
 use botsim_export::{Renderer, View, sample};
 use botsim_record::{LayoutLine, Recording, SnapshotLine, read_recording_partial};
-use botsim_viewer::{Playback, SPEEDS, describe, pick_robot};
+use botsim_viewer::{
+    Group, Playback, SPEEDS, Usage, busiest_edges, describe, group_table, groups_from_json,
+    most_waited_nodes, pick_robot, usage_between,
+};
 use eframe::egui;
 
 const USAGE: &str = "usage: botsim-viewer [--check <scenario.toml>] <recording.jsonl>";
@@ -57,7 +60,48 @@ fn marks_for(layout: &LayoutLine, findings: &[Finding]) -> Vec<Mark> {
     marks
 }
 
+/// The layout check running in a thread: its findings, or why it failed.
+type CheckResult = std::sync::mpsc::Receiver<Result<CheckOutput, String>>;
+
+/// What the check gives the viewer: the findings, and the pairs of edge ids whose swept
+/// outlines overlap although the two edges have no node in common (the conflicts that
+/// the node reservation does not cover), each pair once.
+struct CheckOutput {
+    findings: Vec<Finding>,
+    open_conflicts: Vec<(String, String)>,
+}
+
+/// A conflict drawn as a line between the middles of its two edges.
+struct ConflictLine {
+    map: usize,
+    from: (f64, f64),
+    to: (f64, f64),
+}
+
+/// The conflicts as lines between the edges' middles (edges that are not in the layout
+/// are left out).
+fn conflict_lines(layout: &LayoutLine, pairs: &[(String, String)]) -> Vec<ConflictLine> {
+    let middle = |id: &str| {
+        let e = layout.edges.iter().find(|e| e.id == id)?;
+        let a = layout.nodes.get(e.start)?;
+        let b = layout.nodes.get(e.end)?;
+        Some((a.map, ((a.x + b.x) / 2.0, (a.y + b.y) / 2.0)))
+    };
+    pairs
+        .iter()
+        .filter_map(|(a, b)| {
+            let (map, from) = middle(a)?;
+            let (_, to) = middle(b)?;
+            Some(ConflictLine { map, from, to })
+        })
+        .collect()
+}
+
 struct ViewerApp {
+    /// The check still running, if any.
+    check: Option<CheckResult>,
+    /// Why the check failed.
+    check_error: Option<String>,
     /// What the layout check found, placed on the floor (empty without `--check`).
     findings: Vec<Finding>,
     marks: Vec<Mark>,
@@ -65,6 +109,18 @@ struct ViewerApp {
     selected_finding: Option<usize>,
     /// Which severities are shown: error, warning, info.
     show_levels: [bool; 3],
+    /// Show only the heat map of the use of the roads (see `usage`), not the picture.
+    show_heat: bool,
+    /// The use of the roads over the whole recording, counted when the heat map is first shown.
+    usage: Option<Usage>,
+    /// The window of time of the usage (seconds from, to): the start of the run at first.
+    heat_window: (f64, f64),
+    /// The groups of roads for the table of the use (from `<scenario>.groups.json` next to the
+    /// scenario given with `--check`; none: no table).
+    groups: Vec<Group>,
+    /// The conflicts without a common node, as lines (see [`CheckOutput`]).
+    conflicts: Vec<ConflictLine>,
+    show_conflicts: bool,
     recording: Recording,
     /// The floor that is shown (an index into the layout's maps).
     map: usize,
@@ -87,15 +143,27 @@ struct ViewerApp {
 }
 
 impl ViewerApp {
-    fn new(recording: Recording, cut_off: bool, findings: Vec<Finding>) -> ViewerApp {
+    fn new(
+        recording: Recording,
+        cut_off: bool,
+        check: Option<CheckResult>,
+        groups: Vec<Group>,
+    ) -> ViewerApp {
         let first = recording.snapshots.first().map_or(0.0, |s| s.time);
         let last = recording.snapshots.last().map_or(0.0, |s| s.time);
-        let marks = marks_for(&recording.layout, &findings);
         ViewerApp {
-            findings,
-            marks,
+            check,
+            check_error: None,
+            findings: Vec::new(),
+            marks: Vec::new(),
             selected_finding: None,
             show_levels: [true; 3],
+            show_heat: false,
+            usage: None,
+            heat_window: (first, last.min(first + 500.0)),
+            groups,
+            conflicts: Vec::new(),
+            show_conflicts: true,
             recording,
             map: 0,
             playback: Playback::new(first, last),
@@ -243,6 +311,20 @@ fn style(ctx: &egui::Context) {
 }
 
 /// The side panel: what the selected robot is doing now.
+/// The colour of a road in the heat map: `t` from 0 (not used: light grey) over yellow to 1
+/// (the most used: dark red).
+fn heat_colour(t: f64) -> egui::Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let lerp = |a: f64, b: f64, k: f64| (a + (b - a) * k).round() as u8;
+    if t < 0.5 {
+        let k = t / 0.5;
+        egui::Color32::from_rgb(lerp(205.0, 245.0, k), lerp(208.0, 200.0, k), lerp(215.0, 40.0, k))
+    } else {
+        let k = (t - 0.5) / 0.5;
+        egui::Color32::from_rgb(lerp(245.0, 170.0, k), lerp(200.0, 20.0, k), lerp(40.0, 20.0, k))
+    }
+}
+
 fn robot_panel(
     ui: &mut egui::Ui,
     layout: &LayoutLine,
@@ -294,6 +376,30 @@ fn robot_panel(
 
 impl eframe::App for ViewerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // the layout check: wait for it without blocking the window
+        if let Some(rx) = &self.check {
+            match rx.try_recv() {
+                Ok(Ok(output)) => {
+                    self.marks = marks_for(&self.recording.layout, &output.findings);
+                    self.conflicts =
+                        conflict_lines(&self.recording.layout, &output.open_conflicts);
+                    self.findings = output.findings;
+                    self.check = None;
+                }
+                Ok(Err(e)) => {
+                    self.check_error = Some(e);
+                    self.check = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(200));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.check_error = Some("the check stopped without a result".to_string());
+                    self.check = None;
+                }
+            }
+        }
         // time
         let dt = ui.input(|i| i.stable_dt) as f64;
         handle_keys(ui, &mut self.playback);
@@ -338,6 +444,52 @@ impl eframe::App for ViewerApp {
                     self.camera = None;
                 }
                 ui.label(format!("{zoom:.1}×"));
+                let mut heat_changed = ui
+                    .checkbox(&mut self.show_heat, "Usage")
+                    .on_hover_text(
+                        "Only a heat map of how much each road was used (time reserved) in \
+                         the window, and where robots waited",
+                    )
+                    .changed();
+                if self.show_heat {
+                    // the window of time: a run that freezes says most in its first part
+                    let end = self.playback.end();
+                    ui.label("from");
+                    heat_changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.heat_window.0)
+                                .range(0.0..=end)
+                                .speed(5.0)
+                                .suffix(" s"),
+                        )
+                        .changed();
+                    ui.label("to");
+                    heat_changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.heat_window.1)
+                                .range(0.0..=end)
+                                .speed(5.0)
+                                .suffix(" s"),
+                        )
+                        .changed();
+                    if ui.button("all").clicked() {
+                        self.heat_window = (0.0, end);
+                        heat_changed = true;
+                    }
+                }
+                if self.show_heat && (heat_changed || self.usage.is_none()) {
+                    self.usage = Some(usage_between(
+                        &self.recording,
+                        self.heat_window.0,
+                        self.heat_window.1,
+                    ));
+                }
+                if self.check.is_some() {
+                    ui.label("checking the layout…");
+                }
+                if let Some(e) = &self.check_error {
+                    ui.colored_label(egui::Color32::from_rgb(220, 30, 30), e);
+                }
                 if !self.findings.is_empty() {
                     for (i, level) in [Level::Error, Level::Warning, Level::Info]
                         .into_iter()
@@ -345,6 +497,15 @@ impl eframe::App for ViewerApp {
                     {
                         let n = self.findings.iter().filter(|f| f.level == level).count();
                         ui.checkbox(&mut self.show_levels[i], format!("{level} {n}"));
+                    }
+                    if !self.conflicts.is_empty() {
+                        ui.checkbox(
+                            &mut self.show_conflicts,
+                            format!("conflicts {}", self.conflicts.len()),
+                        )
+                        .on_hover_text(
+                            "Pairs of edges whose swept outlines overlap and that have no node in common",
+                        );
                     }
                 }
                 let mut time = self.playback.time();
@@ -369,6 +530,36 @@ impl eframe::App for ViewerApp {
             .default_size(360.0)
             .size_range(200.0..=900.0)
             .show(ui, |ui| {
+                if let (true, Some(u)) = (self.show_heat, &self.usage) {
+                    ui.add_space(8.0);
+                    ui.strong("Use of the roads");
+                    ui.label(format!(
+                        "reserved share of {:.0} s; busiest edge {:.0} %",
+                        u.duration,
+                        100.0 * u.max_edge_share()
+                    ));
+                    if !self.groups.is_empty() {
+                        ui.label("by group of roads (mean share reserved):");
+                        for r in group_table(&self.recording.layout, u, &self.groups) {
+                            ui.label(format!(
+                                "  {}  {:.1} %  ({} edges, busiest {:.0} %)",
+                                r.name,
+                                100.0 * r.mean_share,
+                                r.edges,
+                                100.0 * r.max_share
+                            ));
+                        }
+                    }
+                    ui.label("busiest edges:");
+                    for (id, share) in busiest_edges(&self.recording.layout, u, 15) {
+                        ui.label(format!("  {id}  {:.0} %", 100.0 * share));
+                    }
+                    ui.label("most waiting (robot-seconds / run):");
+                    for (id, share) in most_waited_nodes(&self.recording.layout, u, 10) {
+                        ui.label(format!("  {id}  {:.2}", share));
+                    }
+                    ui.separator();
+                }
                 if let Some(f) = self.selected_finding.and_then(|i| self.findings.get(i)) {
                     ui.add_space(8.0);
                     ui.strong(format!("{} [{}]", f.level, f.check));
@@ -453,6 +644,55 @@ impl eframe::App for ViewerApp {
                 egui::Image::new(texture)
                     .fit_to_exact_size(points)
                     .paint_at(ui, rect);
+                // the heat map: only the roads, coloured by how long they were reserved (grey
+                // little, yellow, red most; the width goes with it), and a red disc at the nodes
+                // where robots waited (by how long)
+                if let (true, Some(u)) = (self.show_heat, &self.usage) {
+                    let painter = ui.painter_at(rect);
+                    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(250, 250, 252));
+                    let layout = &self.recording.layout;
+                    let view = renderer.view();
+                    let at = |x: f64, y: f64| {
+                        let (px, py) = view.to_px(x, y);
+                        rect.min + egui::vec2(px, py) / ppp
+                    };
+                    let max = u.max_edge_share().max(1e-9);
+                    let mut order: Vec<usize> = (0..layout.edges.len()).collect();
+                    order.sort_by(|&a, &b| u.edge_share(a).total_cmp(&u.edge_share(b)));
+                    for e in order {
+                        let edge = &layout.edges[e];
+                        let (Some(a), Some(b)) = (layout.nodes.get(edge.start), layout.nodes.get(edge.end))
+                        else {
+                            continue;
+                        };
+                        if a.map != self.map {
+                            continue;
+                        }
+                        let t = (u.edge_share(e) / max).sqrt();
+                        let colour = heat_colour(t);
+                        let stroke = egui::Stroke::new(1.0 + 3.5 * t as f32, colour);
+                        let points: Vec<egui::Pos2> = match edge.paths.first() {
+                            Some(p) if p.points.len() >= 2 => {
+                                p.points.iter().map(|q| at(q[0], q[1])).collect()
+                            }
+                            _ => vec![at(a.x, a.y), at(b.x, b.y)],
+                        };
+                        painter.add(egui::Shape::line(points, stroke));
+                    }
+                    let wait_max = u.max_node_wait_share().max(1e-9);
+                    for (n, node) in layout.nodes.iter().enumerate() {
+                        let share = u.node_wait_share(n);
+                        if node.map != self.map || share <= 0.0 {
+                            continue;
+                        }
+                        let t = (share / wait_max).sqrt() as f32;
+                        painter.circle_filled(
+                            at(node.x, node.y),
+                            2.0 + 9.0 * t,
+                            egui::Color32::from_rgba_unmultiplied(200, 30, 30, 120),
+                        );
+                    }
+                }
                 // the layout check: a ring for each placed finding (red error, orange
                 // warning, blue info); the text shows when the pointer is near
                 {
@@ -465,6 +705,21 @@ impl eframe::App for ViewerApp {
                         None
                     };
                     let mut clicked_finding: Option<usize> = None;
+                    if self.show_conflicts {
+                        let stroke =
+                            egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(200, 40, 160, 160));
+                        for c in self.conflicts.iter().filter(|c| c.map == self.map) {
+                            let (ax, ay) = renderer.view().to_px(c.from.0, c.from.1);
+                            let (bx, by) = renderer.view().to_px(c.to.0, c.to.1);
+                            painter.line_segment(
+                                [
+                                    rect.min + egui::vec2(ax, ay) / ppp,
+                                    rect.min + egui::vec2(bx, by) / ppp,
+                                ],
+                                stroke,
+                            );
+                        }
+                    }
                     let shown = |l: Level| match l {
                         Level::Error => self.show_levels[0],
                         Level::Warning => self.show_levels[1],
@@ -535,16 +790,58 @@ fn main() -> ExitCode {
         eprintln!("unknown option {path}\n{USAGE}");
         return ExitCode::from(2);
     }
-    let findings = match check {
-        Some(scenario) => match check_scenario(Path::new(scenario)) {
-            Ok(f) => f,
+    // the groups of roads for the table of the use: `<scenario>.groups.json` next to the scenario
+    let groups = check
+        .and_then(|scenario| {
+            let p = PathBuf::from(scenario).with_extension("groups.json");
+            std::fs::read_to_string(&p).ok().map(|t| (p, t))
+        })
+        .map(|(p, t)| match groups_from_json(&t) {
+            Ok(g) => g,
             Err(e) => {
-                eprintln!("error: check {scenario}: {e}");
-                return ExitCode::from(1);
+                eprintln!("note: {}: {e}", p.display());
+                Vec::new()
             }
-        },
-        None => Vec::new(),
-    };
+        })
+        .unwrap_or_default();
+    // the check runs in a thread (the conflict map takes seconds); the window opens at once
+    let check_result = check.map(|scenario| {
+        let scenario = PathBuf::from(scenario);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // the geometry file next to the scenario (`warehouse4.geometry.json`) gives the
+            // clearance check its walls and racks
+            let geometry = scenario.with_extension("geometry.json");
+            let options = Options {
+                geometry: geometry.exists().then_some(geometry),
+                ..Options::default()
+            };
+            let result = run_scenario(&scenario, &options)
+                .map(|report| {
+                    let mut seen = std::collections::HashSet::new();
+                    let mut open_conflicts = Vec::new();
+                    for pair in report.conflict_map.iter().flat_map(|m| &m.pairs) {
+                        for c in pair.conflicts.iter().filter(|c| !c.shares_node) {
+                            let key = if c.edge_a <= c.edge_b {
+                                (c.edge_a.clone(), c.edge_b.clone())
+                            } else {
+                                (c.edge_b.clone(), c.edge_a.clone())
+                            };
+                            if seen.insert(key.clone()) {
+                                open_conflicts.push(key);
+                            }
+                        }
+                    }
+                    CheckOutput {
+                        findings: report.findings,
+                        open_conflicts,
+                    }
+                })
+                .map_err(|e| format!("check {}: {e}", scenario.display()));
+            let _ = tx.send(result);
+        });
+        rx
+    });
     let path = PathBuf::from(path);
     let (recording, cut_off) = match File::open(&path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))
@@ -577,7 +874,7 @@ fn main() -> ExitCode {
         options,
         Box::new(|cc| {
             style(&cc.egui_ctx);
-            Ok(Box::new(ViewerApp::new(recording, cut_off, findings)))
+            Ok(Box::new(ViewerApp::new(recording, cut_off, check_result, groups)))
         }),
     );
     match result {

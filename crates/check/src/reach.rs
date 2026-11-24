@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 
 use botsim_core::graph::Graph;
-use botsim_core::spec::Kinematics;
+use botsim_core::spec::{Kinematics, Shape};
 use vdma_lif::{Layout, Lif};
 
 use crate::finding::{Finding, FindingPlace, Level};
@@ -28,6 +28,41 @@ pub struct TypeRef {
     pub manufacturer: String,
     pub series: String,
     pub kinematics: Kinematics,
+    /// Length of the body outline (m), along the driving direction.
+    pub length: f64,
+    /// Width of the body outline (m), across the driving direction.
+    pub width: f64,
+    /// How far the protective field reaches in front of the body (m).
+    pub field_margin: f64,
+    /// False if the factsheet has no protective field and `field_margin` is the
+    /// simulator's default.
+    pub field_from_factsheet: bool,
+    /// Body outline in the robot frame (x forward, y left), from the kinematic center.
+    pub shape: Shape,
+}
+
+impl TypeRef {
+    /// A rectangle body centred on the kinematic center, for tests.
+    #[cfg(test)]
+    pub fn test_rect(name: &str, kinematics: Kinematics, length: f64, width: f64) -> TypeRef {
+        let (manufacturer, series) = name.split_once('/').unwrap_or(("ACME", name));
+        TypeRef {
+            name: name.into(),
+            manufacturer: manufacturer.into(),
+            series: series.into(),
+            kinematics,
+            length,
+            width,
+            field_margin: 0.3,
+            field_from_factsheet: false,
+            shape: Shape::Rect {
+                cx: 0.0,
+                cy: 0.0,
+                half_length: length / 2.0,
+                half_width: width / 2.0,
+            },
+        }
+    }
 }
 
 /// Where a node is for one robot type.
@@ -42,22 +77,52 @@ enum Place {
     Outside,
 }
 
+/// The result of the analysis for one robot type: what the findings and the
+/// start-node check are built from.
+pub struct Analysis {
+    pub graph: Graph,
+    /// Per graph edge: may the type drive it (edge and both end nodes allow it).
+    pub usable: Vec<bool>,
+    /// Per graph node.
+    place: Vec<Place>,
+    /// Edges where the turn rule blocks every way on.
+    blocked: Vec<usize>,
+}
+
+impl Analysis {
+    /// Is the node in the biggest connected set of the type (graph node index)?
+    pub fn node_in_main(&self, node: usize) -> bool {
+        self.place.get(node) == Some(&Place::Main)
+    }
+}
+
 /// Run the check for one robot type on the whole LIF file (all layouts form one
 /// graph: lift edges lead from a layout to another). Findings are reported per layout.
 pub fn check_type(lif: &Lif, t: &TypeRef) -> Vec<Finding> {
-    let graph = match Graph::from_lif(lif) {
-        Ok(g) => g,
-        Err(e) => {
-            return vec![
-                Finding::new(
-                    Level::Error,
-                    CHECK,
-                    format!("the layout cannot be turned into a graph, so reachability is not checked: {e}"),
-                )
-                .robot(&t.name),
-            ];
+    match analyze(lif, t) {
+        Ok(a) => {
+            let mut out = Vec::new();
+            for layout in lif.origins.iter().flat_map(|o| &o.layouts) {
+                report_turns(layout, &a.graph, &a.blocked, &a.usable, t, &mut out);
+                report_layout(layout, &a.graph, &a.place, t, &mut out);
+            }
+            out
         }
-    };
+        Err(f) => vec![f],
+    }
+}
+
+/// Build the edge graph of the type and find its biggest connected set. The
+/// error is a finding: the layout cannot be turned into a graph.
+pub fn analyze(lif: &Lif, t: &TypeRef) -> Result<Analysis, Finding> {
+    let graph = Graph::from_lif(lif).map_err(|e| {
+        Finding::new(
+            Level::Error,
+            CHECK,
+            format!("the layout cannot be turned into a graph, so reachability is not checked: {e}"),
+        )
+        .robot(&t.name)
+    })?;
     let ne = graph.edges.len();
     let usable: Vec<bool> = (0..ne)
         .map(|e| graph.edge_allows(e, &t.manufacturer, &t.series))
@@ -119,12 +184,12 @@ pub fn check_type(lif: &Lif, t: &TypeRef) -> Vec<Finding> {
         }
     }
 
-    let mut out = Vec::new();
-    for layout in lif.origins.iter().flat_map(|o| &o.layouts) {
-        report_turns(layout, &graph, &blocked, &usable, t, &mut out);
-        report_layout(layout, &graph, &place, t, &mut out);
-    }
-    out
+    Ok(Analysis {
+        graph,
+        usable,
+        place,
+        blocked,
+    })
 }
 
 /// One finding per layout: the arrivals the turn rule blocks (check name `turn`),
@@ -315,12 +380,7 @@ mod tests {
     use crate::finding::PlaceKind;
 
     fn x1(kinematics: Kinematics) -> TypeRef {
-        TypeRef {
-            name: "ACME/X1".into(),
-            manufacturer: "ACME".into(),
-            series: "X1".into(),
-            kinematics,
-        }
+        TypeRef::test_rect("ACME/X1", kinematics, 1.0, 0.6)
     }
 
     /// Layout with nodes N0.. at the given points, edges `(from, to)` all usable by

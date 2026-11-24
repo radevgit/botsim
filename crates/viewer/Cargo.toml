@@ -12,3 +12,5 @@ botsim-check = { path = "../check" }
 botsim-export = { path = "../export" }
 botsim-record = { path = "../record" }
 eframe = "0.37.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

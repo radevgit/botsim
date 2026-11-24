@@ -42,7 +42,9 @@
 //! serial_prefix = "R"            # serials R-001, R-002, ...
 //! factsheet = "diff_robot.factsheet.json"
 //! start_nodes = ["A", "B"]       # one per robot, so this also sets the count
-//! start_heading = 0.0            # optional, radians, default 0
+//! start_heading = 0.0            # optional, radians, default 0; or "road": face along
+//!                                # the first road that leaves the start node
+//! # start_headings = [0.0, 1.57] # optional: one heading per start node instead
 //! action_time = 2.0              # seconds an action takes, unless listed below
 //! zone_requests = "on_release"   # optional: when to request a RELEASE zone:
 //!                                # "on_release" (default) or "on_horizon"
@@ -144,6 +146,17 @@ pub struct Scenario {
     /// every node (slower, as before S66).
     #[serde(default = "yes")]
     pub drive_through_nodes: bool,
+    /// Route with load (baseline): metres added to the cost of an edge for each
+    /// other robot that holds it or the node it ends at, when a route is planned,
+    /// so that an empty parallel lane is preferred to a busy one. Default 0 (the
+    /// plain shortest route).
+    #[serde(default)]
+    pub route_load_weight: f64,
+    /// Route with load, second part (baseline): metres added to the cost of an edge
+    /// for each robot that has recently waited on the node it ends at (a moving
+    /// average over 60 s). Default 0.
+    #[serde(default)]
+    pub route_wait_weight: f64,
     /// Without this section nothing is disturbed.
     #[serde(default)]
     pub disturbances: Option<DisturbancesConfig>,
@@ -283,6 +296,58 @@ pub struct JobsConfig {
     pub stations: Vec<String>,
 }
 
+/// The `start_heading` of a robot group: an angle in radians for all robots, or
+/// `"road"` to face along the road that leaves the start node.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StartHeading {
+    Angle(f64),
+    Road,
+}
+
+impl Default for StartHeading {
+    fn default() -> Self {
+        StartHeading::Angle(0.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for StartHeading {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Angle(f64),
+            Text(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Angle(a) => Ok(StartHeading::Angle(a)),
+            Raw::Text(t) if t == "road" => Ok(StartHeading::Road),
+            Raw::Text(t) => Err(serde::de::Error::custom(format!(
+                "start_heading must be a number or \"road\", not \"{t}\""
+            ))),
+        }
+    }
+}
+
+/// The heading (radians) a robot of type (`manufacturer`, `series`) starts with on
+/// `node` so that it faces along the road: the direction at the start of the first
+/// edge in the layout that leaves the node and that the type may drive (an edge
+/// between maps comes last). `None` if no such edge leaves the node.
+pub fn road_heading(
+    graph: &botsim_core::graph::Graph,
+    node: botsim_core::graph::NodeIdx,
+    manufacturer: &str,
+    series: &str,
+) -> Option<f64> {
+    let usable = |e: &&botsim_core::graph::EdgeIdx| graph.edge_allows(**e, manufacturer, series);
+    let edges = graph.out_edges(node);
+    let e = edges
+        .iter()
+        .filter(usable)
+        .find(|&&e| !graph.edges[e].map_transition)
+        .or_else(|| edges.iter().find(usable))?;
+    Some(graph.edge_directions(*e, manufacturer, series).0)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RobotGroup {
@@ -290,8 +355,16 @@ pub struct RobotGroup {
     pub serial_prefix: String,
     pub factsheet: PathBuf,
     pub start_nodes: Vec<String>,
+    /// How the robots of the group face at the start: a number (radians, 0 = east,
+    /// the same for all) or `"road"` (each faces along the first road that leaves
+    /// its start node and that its type may drive; see [`road_heading`]). Default 0.
     #[serde(default)]
-    pub start_heading: f64,
+    pub start_heading: StartHeading,
+    /// One heading (radians) for each start node, in the same order; instead of
+    /// `start_heading` when it is not empty. Must have as many entries as
+    /// `start_nodes`.
+    #[serde(default)]
+    pub start_headings: Vec<f64>,
     pub action_time: f64,
     #[serde(default)]
     pub action_times: BTreeMap<String, f64>,
@@ -404,8 +477,16 @@ impl Scenario {
             if g.start_nodes.is_empty() {
                 return invalid(at("start_nodes is empty"));
             }
-            if !g.start_heading.is_finite() {
+            if let StartHeading::Angle(a) = g.start_heading
+                && !a.is_finite()
+            {
                 return invalid(at("start_heading must be a finite number"));
+            }
+            if !g.start_headings.is_empty() && g.start_headings.len() != g.start_nodes.len() {
+                return invalid(at("start_headings needs one entry for each start node"));
+            }
+            if g.start_headings.iter().any(|a| !a.is_finite()) {
+                return invalid(at("start_headings must be finite numbers"));
             }
             non_negative(&at("action_time"), g.action_time)?;
             for (t, v) in &g.action_times {
@@ -673,8 +754,19 @@ impl Scenario {
                     Some(d) => spec.with_speed_factor(d.next_speed_factor()),
                     None => spec.clone(),
                 };
+                let heading = match (g.start_headings.get(i), g.start_heading) {
+                    (Some(&a), _) | (None, StartHeading::Angle(a)) => a,
+                    // a node without a road: east, as the default
+                    (None, StartHeading::Road) => road_heading(
+                        world.graph(),
+                        start,
+                        &factsheet.manufacturer,
+                        &factsheet.type_specification.series_name,
+                    )
+                    .unwrap_or(0.0),
+                };
                 world
-                    .add_robot(id.clone(), spec, times.clone(), start, g.start_heading)
+                    .add_robot(id.clone(), spec, times.clone(), start, heading)
                     .map_err(|e| ScenarioError::Invalid(e.to_string()))?;
                 // S41: when this robot type requests RELEASE zones
                 let timing = match g.zone_requests {

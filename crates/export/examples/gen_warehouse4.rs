@@ -74,7 +74,12 @@ const EAST_ROWS: [(f64, bool); 6] = [
 
 /// Where the sidings of the goods-in bays on the west side begin (y); each is 8 m
 /// long and runs south (the left side of the ring road runs south).
+/// (With a street across the west part the fourth was at 40, not 66.)
 const WEST_BAYS: [f64; 5] = [120.0, 100.0, 87.0, 66.0, 52.0];
+
+/// The row of cells of the west part (an index into `NET_Y`, 3: y = 62 to 80) that is a street
+/// across the hall instead of loops and racks; none (the user did not want it).
+const STREET_ROW: usize = 99;
 /// The goods-in bays on the left side of the ring (outside it), each `(from, apex, to)`: not
 /// where a lane change joins the ring (the lane changes start at y = 41.2, 75.2 and 109.2).
 const GOODS_IN_BAYS: [(P, P, P); 5] = [
@@ -120,6 +125,14 @@ const CROSSING_ARCS: bool = true;
 /// than one robot can be on a road (the baseline gives an edge to one robot).
 const MAX_EDGE: f64 = 6.0;
 
+/// How far the stop of a pocket (the loading lane beside a road) is from the road (m). The racks
+/// are `POCKET_OFFSET + 1.0` from the road: a forklift's side (0.7 m) and some room.
+const POCKET_OFFSET: f64 = 1.8;
+
+/// The same on the narrow roads (small robots only: the biggest, X1, is 1.2 m long, so 2.5
+/// lengths is 3 m).
+const NARROW_MAX_EDGE: f64 = 2.95;
+
 /// The radii (m) a turn arc may have, biggest first; an arc gets the biggest one that the
 /// roads have room for, and `TURN_RADIUS` if none. A 90 degree arc passes r (sqrt(2) - 1) from
 /// the corner node: 2.5 m for 6 m (1.45 m for `TURN_RADIUS`).
@@ -128,6 +141,15 @@ const ARC_RADII: [f64; 3] = [3.0, 3.0, 3.0];
 /// The shortest tangent (m) of a turn arc: the arc starts and ends at least this far
 /// from the corner node (a forklift is 2.4 m long).
 const MIN_TANGENT: f64 = 3.0;
+
+/// A node put in a long straight edge is at least this far (m) from the corner of any arc.
+const SPLIT_CLEAR: f64 = MIN_TANGENT;
+
+/// The loops' corners are 1.8 m from the ring and from the column copy, and two of them (the
+/// two loops above and below a street) are 3.6 m apart: no node fits in the 8.4 m round them,
+/// so a piece may be this much (m) longer than the limit to jump over them (before, the edges
+/// beside the loops stayed 10 to 34 m long: one robot at a time on each).
+const SPLIT_EXTRA: f64 = 5.0;
 
 /// The smallest arc (m) at a corner of a narrow road, where the roads are too short for
 /// the arcs of `TURN_RADIUS`; only the small robots drive there.
@@ -225,8 +247,22 @@ fn aisle_stops() -> Vec<(String, P)> {
         }
     }
     for k in 0..V_AISLES {
+        // the shortcuts that end on this aisle: its own (to the next aisle) and the one from
+        // the aisle before; the stop is not within 3.5 m of either (a robot waiting there
+        // would stand beside the half circle)
+        let mut avoid = vec![v_shortcut_y(k)];
+        if k >= 1 {
+            avoid.push(v_shortcut_y(k - 1));
+        }
         for (a, b) in v_row_parts(k) {
-            out.push((format!("LV{k}"), (v_x(k), (a + b) / 2.0)));
+            let mid = (a + b) / 2.0;
+            let clear = |y: f64| avoid.iter().all(|s| (y - s).abs() >= 3.5);
+            // the point nearest the middle that is clear, 0.1 m steps, inside the part
+            let y = (0..=((b - a) * 5.0) as usize)
+                .flat_map(|i| [mid - i as f64 * 0.1, mid + i as f64 * 0.1])
+                .find(|&y| y >= a + 1.0 && y <= b - 1.0 && clear(y))
+                .unwrap_or(mid);
+            out.push((format!("LV{k}"), (v_x(k), y)));
         }
     }
     out
@@ -469,28 +505,54 @@ impl Net {
         for e in edges {
             let (a, b) = (self.nodes[e.a], self.nodes[e.b]);
             let length = (b.0 - a.0).hypot(b.1 - a.1);
+            // (on a narrow road the robots are small: 2.5 lengths of the biggest of them, 3 m)
+            let is_narrow = narrow(((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0));
+            let max = if is_narrow { NARROW_MAX_EDGE } else { max };
+            // the shortest piece: the longest robot there plus its protective field
+            let shortest = if is_narrow { 1.6 } else { 2.8 };
             if e.curve.is_some() || length <= max {
                 self.edges.push(e);
                 continue;
             }
-            let pieces = (length / max).ceil() as usize;
-            let mut from = e.a;
-            for k in 1..pieces {
-                let f = k as f64 / pieces as f64;
-                let at = (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f);
-                if corners
+            // from the start: the next node as far along as `max` allows, where no arc has its
+            // corner within `MIN_TANGENT` (0.25 m steps); no piece is shorter than `shortest`
+            let point = |s: f64| (a.0 + (b.0 - a.0) * s / length, a.1 + (b.1 - a.1) * s / length);
+            // (on a narrow road the robots are small, 1.2 m at most: 1.5 m from a corner is enough)
+            let clear = if is_narrow { 1.5 } else { SPLIT_CLEAR };
+            let allowed = |s: f64| {
+                let at = point(s);
+                !corners
                     .iter()
-                    .any(|c| (c.0 - at.0).hypot(c.1 - at.1) < MIN_TANGENT)
-                {
-                    continue;
+                    .any(|c| (c.0 - at.0).hypot(c.1 - at.1) < clear)
+            };
+            let mut from = e.a;
+            let mut at = 0.0;
+            while length - at > max {
+                let far = (at + max).min(length - shortest);
+                let mut s = (far * 4.0).floor() / 4.0;
+                while s >= at + shortest && !allowed(s) {
+                    s -= 0.25;
                 }
-                let to = self.node(at);
+                if s < at + shortest {
+                    // no node fits within `max` (the corners of the loops beside the road): the
+                    // next allowed place up to `SPLIT_EXTRA` further
+                    let far = (at + max + SPLIT_EXTRA).min(length - shortest);
+                    s = (far * 4.0).floor() / 4.0;
+                    while s > at + max && !allowed(s) {
+                        s -= 0.25;
+                    }
+                    if s <= at + max {
+                        break; // no room for a node: the edge stays long here
+                    }
+                }
+                let to = self.node(point(s));
                 self.edges.push(Edge {
                     a: from,
                     b: to,
                     curve: None,
                 });
                 from = to;
+                at = s;
             }
             self.edges.push(Edge {
                 a: from,
@@ -588,10 +650,29 @@ impl Net {
                         // on a narrow road (used by the small robots only) the arc may
                         // be smaller, down to `NARROW_RADIUS`, to fit between two turns
                         let room = |len: f64, turns: bool| {
-                            if turns { (len - 0.5) / 2.0 } else { len - 0.5 }
+                            // (no 0.5 m piece left between two arcs: the arcs meet, or the
+                            // arc starts at the node: pieces of 0.2-0.6 m put nodes next
+                            // to the corners of the arcs)
+                            if turns { len / 2.0 } else { len }
                         };
                         let fit = room(len_in, turning[a]).min(room(len_out, turning[b]));
-                        if !narrow(p) || fit / (turn / 2.0).tan() < NARROW_RADIUS {
+                        // (where a wall lane joins the ring road the arc may be smaller too:
+                        // the lane is only 6 m long and has an arc at its other end)
+                        // (and at the corners of the road: the road is 6 m from the ring)
+                        let lane_joint = LANES_X.iter().any(|&x| (p.0 - x).abs() < 0.01)
+                            && [RING, 4.0, H - 4.0, H - RING]
+                                .iter()
+                                .any(|&y| (p.1 - y).abs() < 0.01);
+                        // (and where a row leaves the column at x = 100, which has a lane
+                        // change a few metres away: not less than 2 m, a forklift needs 1.7 m)
+                        let min_radius = if narrow(p) || lane_joint {
+                            NARROW_RADIUS
+                        } else if (p.0 - WEST_X[3]).abs() < 0.01 {
+                            2.0
+                        } else {
+                            continue;
+                        };
+                        if fit / (turn / 2.0).tan() < min_radius {
                             continue;
                         }
                         t = fit;
@@ -645,16 +726,12 @@ impl Net {
     /// roads keeps its node: it is where they exclude each other.)
     fn remove_corner_nodes(&mut self) {
         let mut gone = vec![false; self.edges.len()];
-        let mut added: Vec<Edge> = Vec::new();
         for &j in &self.corners {
             let touching: Vec<usize> = (0..self.edges.len())
-                .filter(|&i| self.edges[i].a == j || self.edges[i].b == j)
+                .filter(|&i| !gone[i] && (self.edges[i].a == j || self.edges[i].b == j))
                 .collect();
             // only straight roads meet at the corner
-            if touching
-                .iter()
-                .any(|&i| self.edges[i].curve.is_some() || gone[i])
-            {
+            if touching.iter().any(|&i| self.edges[i].curve.is_some()) {
                 continue;
             }
             let dir = |i: usize| {
@@ -676,17 +753,24 @@ impl Net {
             for &i in &touching {
                 gone[i] = true;
             }
+            // (the new edge goes into the list at once: the corner at its far end, if it
+            // is one too, then finds it there, and its corner is taken out as well)
+            let mut new_edges: Vec<Edge> = Vec::new();
             for &i in &ins {
                 for &o in &outs {
                     let (di, d_o) = (dir(i), dir(o));
                     if di.0 * d_o.0 + di.1 * d_o.1 > 0.9999 {
-                        added.push(Edge {
+                        new_edges.push(Edge {
                             a: self.edges[i].a,
                             b: self.edges[o].b,
                             curve: None,
                         });
                     }
                 }
+            }
+            for e in new_edges {
+                self.edges.push(e);
+                gone.push(false);
             }
         }
         let old = std::mem::take(&mut self.edges);
@@ -695,7 +779,6 @@ impl Net {
             .enumerate()
             .filter(|(i, _)| !gone[*i])
             .map(|(_, e)| e)
-            .chain(added)
             .collect();
         self.compact();
         // the arcs at the junctions that kept their corner node
@@ -816,19 +899,27 @@ fn narrow(p: P) -> bool {
     // (the top ring road at y = H - RING is the way out of the north labyrinth: wide)
     // (warehouse 3: the serpentines start further east, the outer lines of the double net at
     // y = 10 and y = 130 are streets, not wall lanes; the wall lanes are at y = 4 and 136)
-    let north = (117.0..196.0).contains(&p.0) && (88.0..H - RING - 0.3).contains(&p.1);
-    let middle = (103.5..139.5).contains(&p.0) && (14.0..66.0).contains(&p.1);
-    let lane = p.1 < 7.0 || p.1 > H - 7.0;
+    // (from x = 101: the way in from the column at x = 100 along y = 90 is the labyrinth's, for
+    // the small robots only; the wide robots would drive in and not come out)
+    // (the arc from the top ring road down to the column at x = 100, at y = 127..130, is wide)
+    let north = ((100.5..117.0).contains(&p.0) && (88.0..127.0).contains(&p.1))
+        || ((117.0..196.0).contains(&p.0) && (88.0..H - RING - 0.3).contains(&p.1));
+    let middle = (100.5..139.5).contains(&p.0) && (14.0..66.0).contains(&p.1);
+    // (only the shelving stops beside the roads along the walls, at y = 2.5 and H - 2.5, and
+    // their links: the roads themselves, at y = 4, are for all robots)
+    let lane = p.1 < 3.7 || p.1 > H - 3.7;
     north || middle || lane
 }
 
 /// The robot types that may drive an edge.
 fn edge_types(net: &Net, e: &Edge) -> Vec<Value> {
-    let narrow = narrow(edge_middle(net, e));
     // an arc at a crossing is for the three-wheel robots only
     let crossing = net
         .crossing_arcs
         .contains(&arc_key(net.nodes[e.a], net.nodes[e.b]));
+    // (an arc that starts or ends on a narrow road is narrow: nobody wide gets to its end)
+    let narrow = narrow(edge_middle(net, e))
+        || (crossing && (narrow(net.nodes[e.a]) || narrow(net.nodes[e.b])));
     TYPES
         .iter()
         .filter(|t| !(narrow && WIDE.contains(t)))
@@ -949,7 +1040,10 @@ fn scenario(net: &Net) -> String {
          time_step = 0.05\n\
          start_time = 2026-11-22T10:00:00Z\n\
          lif = \"warehouse4.lif.json\"\n\
-         deadlock_timeout = 20.0\n"
+         deadlock_timeout = 20.0\n\
+         # route with load: each other robot on an edge (or at the node it ends at) makes the\n\
+         # edge 5 m longer for the route, so that the empty parallel lane is preferred\n\
+         route_load_weight = 5.0\n"
     );
     for (k, (prefix, factsheet, action, _)) in FLEET.iter().enumerate() {
         let _ = write!(
@@ -963,7 +1057,7 @@ fn scenario(net: &Net) -> String {
         }
         let _ = write!(
             s,
-            "]\naction_time = 1.0\n\n[robot.action_times]\npick = {action:?}\ndrop = {action:?}\n"
+            "]\n# each robot faces along the road that leaves its start node\nstart_heading = \"road\"\naction_time = 1.0\n\n[robot.action_times]\npick = {action:?}\ndrop = {action:?}\n"
         );
     }
     let stations: Vec<String> = net
@@ -1254,8 +1348,29 @@ struct Loop {
 }
 
 /// The radius (m) of the arcs at the corners of the loops (a forklift needs 1.7 m for its
-/// full speed).
-const LOOP_R: f64 = 3.0;
+/// full speed). 2.0 m (it was 3.0): the sides are 2 m longer, so that a lane change (an
+/// S-curve of 8 m) ends before the corner arc and not on its start (user, 2026-11-24).
+const LOOP_R: f64 = 2.0;
+
+/// The road the loops of column `i` of the west part have on their right, row `j`: for the last
+/// column the second road beside the column at x = 100 where there is one (`COLUMN_COPY`),
+/// else the column itself.
+fn column_x(i: usize, j: usize) -> f64 {
+    if i == NET_X.len() - 2 && COLUMN_COPY_ROWS.contains(&j) {
+        COLUMN_COPY_X
+    } else {
+        NET_X[i + 1]
+    }
+}
+
+/// The second road beside the column at x = 100: 3.6 m west of it (the loops are 1.8 m west of
+/// it), from y = 112 to y = 40 (rows 2 to 5 of the loops), with bridges to the column.
+const COLUMN_COPY_X: f64 = 96.4;
+const COLUMN_COPY_ROWS: std::ops::RangeInclusive<usize> = 1..=6;
+/// The bridges between the column and its copy (10 m long S-curves, driving south):
+/// `(y on the column, true: from the column to the copy)`; the end on the column is not near the
+/// junctions of the column (at y = 130, 90, 84, 74, 66, 37, 10).
+const COLUMN_BRIDGES: [(f64, bool); 4] = [(122.0, true), (98.0, false), (58.0, true), (28.0, false)];
 
 /// The loops of all the cells of the west part. Neighbours turn in opposite directions (a
 /// chessboard), so that the two sides that face each other in a street run the same way.
@@ -1264,11 +1379,14 @@ fn loops() -> Vec<Loop> {
     let mut out = Vec::new();
     for (i, x) in NET_X.windows(2).enumerate() {
         for (j, y) in NET_Y.windows(2).enumerate() {
+            if j == STREET_ROW {
+                continue;
+            }
             out.push(Loop {
                 i,
                 j,
                 x0: x[0] + h,
-                x1: x[1] - h,
+                x1: column_x(i, j) - h,
                 y0: y[0] + h,
                 y1: y[1] - h,
                 cw: (i + j).is_multiple_of(2),
@@ -1301,10 +1419,14 @@ fn loop_sides(l: &Loop) -> [(P, P); 4] {
 
 /// How far a lane change goes along the street (m) between two lanes `gap` apart (an S-curve
 /// of two arcs of about 3 m needs 8 m for 3.6 m, 6 m for 1.8 m); a change that would end less
-/// than 2.4 m (a forklift is that long) before the end of the side goes to the end of it.
+/// than 2.8 m (a forklift is 2.4 m long and has a field) before the end of the side goes to the
+/// end of it. If the side is a little too short for the full S-curve the change gets shorter
+/// (down to 6 m, radius about 1.7 m for 3.6 m) so that 2.8 m of the side are left after it:
+/// pieces of 2.4 m (it was 2.4) were too short for a forklift and its field.
 fn change_along(gap: f64, length: f64) -> f64 {
-    let base = if gap > 3.0 { 8.0 } else { 6.0 };
-    if length - base < 2.4 { length } else { base }
+    let base: f64 = if gap > 3.0 { 8.0 } else { 6.0 };
+    let along = base.min(length - 2.8);
+    if along >= 6.0 { along } else { length }
 }
 
 /// The lane changes of the loops: `(from, to, direction)` for `Net::s_link`. Between two
@@ -1354,14 +1476,15 @@ fn lane_changes() -> Vec<(P, P, P)> {
             let (top, bottom) = (loop_sides(l)[1], loop_sides(&m)[3]);
             let d = if l.cw { (1.0, 0.0) } else { (-1.0, 0.0) };
             let length = (l.x1 - l.x0) - 2.0 * LOOP_R;
-            // (one change: north along the even columns, south along the odd ones)
+            // (one change: north along the even columns, south along the odd ones; the
+            // corner cell (0, 0) would have two ways out and none in: its change goes south)
             changes(
                 top.0,
                 bottom.0,
                 d,
                 length,
                 m.y0 - l.y1,
-                l.i.is_multiple_of(2),
+                l.i.is_multiple_of(2) != (l.i == 0 && (l.j == 0 || find(l.i, l.j - 1).is_none())),
                 true,
             );
         }
@@ -1576,17 +1699,10 @@ fn vertical_labyrinth(net: &mut Net) {
     }
     // the two roads along the outside go on to the roads that enter and leave the
     // labyrinth, so that a robot can pass it without winding through it:
-    // - the top road goes on east and leaves to the node where the column at x = 140
-    //   meets the boulevard, by an arc and a link at 45 degrees;
-    let y_top = V_TOP + r;
-    let corner_x = V_XCOL - (66.0 - y_top); // where y = y_top meets the link
-    net.line((v_x(V_AISLES - 2) + r, y_top), (corner_x - t, y_top));
-    net.arc(
-        (corner_x - t, y_top),
-        (corner_x, y_top),
-        (corner_x + d, y_top + d),
-    );
-    net.line((corner_x + d, y_top + d), (V_XCOL, 66.0));
+    // - (the top road used to go on east and leave to the node where the column at x = 140
+    //   meets the boulevard, by an arc and a link at 45 degrees; taken out: it put six
+    //   roads and the arcs of the crossing into one point, and the labyrinth has its way
+    //   out in the last half circle)
     // - the bottom road starts from the entry link (it leaves it by an arc that turns
     //   45 degrees to the east); its other end is the last half circle, which lands
     //   on the column
@@ -1749,12 +1865,33 @@ const SHARED_LANES: bool = true;
 /// lanes are 3.6 m apart, a shorter S-curve would be too sharp.
 const CROSSOVER_MIN_GAP: f64 = 5.5;
 
-/// How far from the junctions at the ends of a cell a loading lane begins and ends (m): room
-/// for the turn arcs.
-const LANE_MARGIN: f64 = 5.0;
+/// How far from the junctions at the ends of a cell a loading lane begins and ends (m): the
+/// turn arc of the junction (3 m) and a road of 2.8 m after it, a forklift and its field
+/// (at 5 m the road between the arc and the lane was 2 m long). Less than 3.5 m and the arc
+/// does not fit.
+const LANE_MARGIN: f64 = 5.8;
 
 /// The distance between the stops of a loading lane (m): a forklift is 2.4 m long.
 const STOP_GAP: f64 = 4.0;
+
+/// The bridges between the ring road and the road along the south wall: `(x, true)` leaves the
+/// ring at x for the road (12 m long), `(x, false)` leaves the road for the ring.
+const BRIDGES_SOUTH: [(f64, bool); 5] = [
+    (80.0, false),
+    (108.0, true),
+    (124.0, false),
+    (146.0, true),
+    (162.0, false),
+];
+
+/// The same along the north wall (the roads run west): from x down to x - 12.
+const BRIDGES_NORTH: [(f64, bool); 5] = [
+    (182.0, false),
+    (140.0, true),
+    (124.0, false),
+    (100.0, true),
+    (84.0, false),
+];
 
 /// Where along the shelving of the lanes at the south and north walls the stops are (x).
 const WALL_STOPS_X: [f64; 3] = [70.0, 110.0, 150.0];
@@ -1765,7 +1902,9 @@ const WALL_STOPS_X: [f64; 3] = [70.0, 110.0, 150.0];
 fn shelf_pockets() -> Vec<Pocket> {
     let mut out = Vec::new();
     // the lanes along the south wall (they run east) and the north wall (west)
-    for (station, y, bulge, east) in [("WALL-S", 4.0, -1.8, true), ("WALL-N", H - 4.0, 1.8, false)]
+    // (the stop is 1.5 m from the lane: at 1.8 m a small robot that turns into the pocket
+    // dips into the shelving, which is 0.3 to 1.8 m from the wall)
+    for (station, y, bulge, east) in [("WALL-S", 4.0, -1.5, true), ("WALL-N", H - 4.0, 1.5, false)]
     {
         for xc in WALL_STOPS_X {
             let (a, b) = if east {
@@ -1808,7 +1947,10 @@ fn cell_pockets(
     let (lo, hi) = if xr - xl - 2.0 * LANE_MARGIN >= 8.0 {
         (xl + LANE_MARGIN, xr - LANE_MARGIN)
     } else {
-        (cx - 4.0, cx + 4.0)
+        // (a short cell: the lane keeps `LANE_MARGIN` from the junctions, the S-curves
+        // get shorter, see `cell_lanes_vertical`)
+        let half = ((xr - xl) / 2.0 - LANE_MARGIN).clamp(3.0, 4.0);
+        (cx - half, cx + half)
     };
     // the stops, STOP_GAP apart, evenly between the two S-curves (4 m long each)
     let room = hi - lo - 8.0;
@@ -1820,7 +1962,7 @@ fn cell_pockets(
             .map(|k| lo + 4.0 + room * k as f64 / (n - 1) as f64)
             .collect()
     };
-    for (y, bulge) in [(yb, 1.8), (yt, -1.8)] {
+    for (y, bulge) in [(yb, POCKET_OFFSET), (yt, -POCKET_OFFSET)] {
         let ring = (y - RING).abs() < 1e-9 || (y - (H - RING)).abs() < 1e-9;
         // not in the corners of the ring road, and not where a lane along the wall
         // branches off it (4 m clear of the branch, for the arc)
@@ -1912,13 +2054,23 @@ fn cell_lanes_vertical(
     let (lo, hi) = if yt - yb - 2.0 * LANE_MARGIN >= 8.0 {
         (yb + LANE_MARGIN, yt - LANE_MARGIN)
     } else {
-        (cy - 4.0, cy + 4.0)
+        // (a short cell: the lane keeps `LANE_MARGIN` from the junctions and its S-curves
+        // get shorter, 3.2 m for the 18 m cells: radius 1.9 m, a forklift needs 1.7 m)
+        let half = ((yt - yb) / 2.0 - LANE_MARGIN).clamp(3.0, 4.0);
+        (cy - half, cy + half)
     };
-    for (x, bulge) in [(xl, 1.8), (xr, -1.8)] {
+    for (x, bulge) in [(xl, POCKET_OFFSET), (xr, -POCKET_OFFSET)] {
         // the ring is the way round on its side
         if (x - RING).abs() < 1e-9 || (x - (W - RING)).abs() < 1e-9 {
             continue;
         }
+        // (beside the column at x = 140 the lane starts where the shortcut arcs of the middle
+        // labyrinth land, 4 m from the middle of the cell: these keep the long S-curves)
+        let (lo, hi) = if (x - V_XCOL).abs() < 1e-9 {
+            (cy - 4.0, cy + 4.0)
+        } else {
+            (lo, hi)
+        };
         let north = runs_north(x);
         let (a, b) = if north {
             ((x, lo), (x, hi))
@@ -2021,6 +2173,27 @@ fn build_net() -> Net {
     // top ring to the bottom one; the boulevard and the entries of the labyrinths branch off it)
     loop_net(&mut net);
     net.line((WEST_X[3], y1), (WEST_X[3], y0));
+    // the copy of the column, beside it on the west, with bridges (S-curves of 10 m: the road is
+    // 3.6 m from the column) from the column to the copy and back. The copy goes from y = 112
+    // (a bridge from the column at 122) to y = 40 (a bridge back to the column at 30)
+    net.line((COLUMN_COPY_X, 112.0), (COLUMN_COPY_X, 38.0));
+    for (y, to_copy) in COLUMN_BRIDGES {
+        let (from, to) = if to_copy {
+            ((WEST_X[3], y), (COLUMN_COPY_X, y - 10.0))
+        } else {
+            ((COLUMN_COPY_X, y + 10.0), (WEST_X[3], y))
+        };
+        net.s_link(from, to, (0.0, -1.0));
+    }
+    // (a street across the west part in line with the boulevard was tried here: `STREET_ROW`;
+    // the user wanted duplicates of the ring roads at the top and the bottom instead)
+    if STREET_ROW < NET_Y.len() - 1 {
+        for &(y, east) in &EAST_ROWS {
+            if y == 66.0 || y == 74.0 {
+                road(&mut net, (x0, y), (RIGHT_EDGE_X, y), east);
+            }
+        }
+    }
 
     // the east grid and the boulevard: rows from x = 140 (the boulevard and the top
     // row from x = 100) to the ring; columns from the bottom ring up to the top row
@@ -2191,7 +2364,11 @@ fn build_net() -> Net {
         }
     }
 
-    // narrow lanes along the south wall (east) and the north wall (west)
+    // a second road beside the ring road along the south wall (east, like the ring there) and
+    // along the north wall (west): the same for all robots, with a bridge now and then (an
+    // S-curve of 12 m) from one road to the other and back. The robots going across the hall
+    // are not all on the one lane of the ring any more. (The shelving stops along the wall
+    // are pockets off this road, narrow: small robots only.)
     let [lw, le] = LANES_X;
     net.line((lw, y0), (lw, 4.0));
     net.line((lw, 4.0), (le, 4.0));
@@ -2199,6 +2376,26 @@ fn build_net() -> Net {
     net.line((le, y1), (le, H - 4.0));
     net.line((le, H - 4.0), (lw, H - 4.0));
     net.line((lw, H - 4.0), (lw, y1));
+    // bridges, `(x where it starts, true: from the ring to the road)`; the end of the bridge on
+    // the road is not within 7 m of a shelving stop (`WALL_STOPS_X`)
+    let bridge = 12.0;
+    for (x, to_road) in BRIDGES_SOUTH {
+        let (from, to) = if to_road {
+            ((x, y0), (x + bridge, 4.0))
+        } else {
+            ((x, 4.0), (x + bridge, y0))
+        };
+        net.s_link(from, to, (1.0, 0.0));
+    }
+    // (the north road and ring run west: the bridges go from x down to x - 12)
+    for (x, to_road) in BRIDGES_NORTH {
+        let (from, to) = if to_road {
+            ((x, y1), (x - bridge, H - 4.0))
+        } else {
+            ((x, H - 4.0), (x - bridge, y1))
+        };
+        net.s_link(from, to, (-1.0, 0.0));
+    }
 
     net.split_at_nodes();
     net.remove_shared_roads();
@@ -2374,14 +2571,21 @@ impl Shapes {
         const GAP: f64 = 0.1;
         let (a, b) = ab;
         let count = (((b - a) + GAP) / (BAY + GAP)).floor().max(1.0) as usize;
-        let used = count as f64 * BAY + (count - 1) as f64 * GAP;
+        // (racks are stretched to fill the length: the stops at the ends of a block are then
+        // close to a rack, not 1.2 m or more from the nearest one)
+        let bay = if matches!(kind, GeometryKind::Rack) && (b - a) + GAP >= BAY + GAP {
+            ((b - a) + GAP) / count as f64 - GAP
+        } else {
+            BAY
+        };
+        let used = count as f64 * bay + (count - 1) as f64 * GAP;
         let start = a + ((b - a) - used) / 2.0;
         for i in 0..count {
-            let p = start + i as f64 * (BAY + GAP);
+            let p = start + i as f64 * (bay + GAP);
             let r = if along_x {
-                (p, cd.0, p + BAY, cd.1)
+                (p, cd.0, p + bay, cd.1)
             } else {
-                (cd.0, p, cd.1, p + BAY)
+                (cd.0, p, cd.1, p + bay)
             };
             self.polygon(format!("{name}-{i}"), kind, r);
         }
@@ -2421,10 +2625,17 @@ impl Shapes {
             return;
         }
         let pairs = (((cross.1 - cross.0) + 1.2) / PITCH).floor().max(1.0) as usize;
-        let used = pairs as f64 * PITCH - 1.2;
+        // (with two or more pairs the aisles between them are widened to fill the block: the
+        // first and the last pair are then at the edge, next to the lane)
+        let pitch = if pairs >= 2 {
+            ((cross.1 - cross.0) + 1.2) / pairs as f64
+        } else {
+            PITCH
+        };
+        let used = pairs as f64 * pitch - 1.2;
         let start = cross.0 + ((cross.1 - cross.0) - used) / 2.0;
         for p in 0..pairs {
-            let c = start + p as f64 * PITCH;
+            let c = start + p as f64 * pitch;
             for (side, lo_hi) in [(c, c + DEPTH), (c + DEPTH + 0.1, c + PAIR)]
                 .into_iter()
                 .enumerate()
@@ -2459,7 +2670,10 @@ fn cells(xs: &[f64], ys: &[f64], inset: f64) -> Vec<(usize, usize, R)> {
 
 fn build_geometry() -> GeometryFile {
     let mut s = Shapes::default();
-    let inset = 2.0;
+    // racks of the east grid and the middle: this far from the road. A forklift (1.4 m wide)
+    // at a stop in a pocket stands 1.8 m beside the road, so its side reaches 2.5 m (a bit
+    // more on the S-curve into the pocket): 2.0 m put it into the racks
+    let inset = POCKET_OFFSET + 1.0;
 
     // the walls
     let wall = [(0.0, 0.0), (W, 0.0), (W, H), (0.0, H), (0.0, 0.0)]
@@ -2500,6 +2714,11 @@ fn build_geometry() -> GeometryFile {
     // racks)
     let west_inset = DOUBLE_HALF + 1.4;
     for (i, j, r) in cells(&WEST_BOUNDS_X, &WEST_BOUNDS_Y, west_inset) {
+        if j == STREET_ROW {
+            continue;
+        }
+        // (the loops beside the copy of the column are narrower: so are the racks)
+        let r = (r.0, r.1, r.2 - (NET_X[i + 1] - column_x(i, j)), r.3);
         let name = format!("w{i}{j}");
         if is_staging(i, j) {
             let (cx, cy) = ((r.0 + r.2) / 2.0, (r.1 + r.3) / 2.0);
@@ -2636,6 +2855,35 @@ fn build_geometry() -> GeometryFile {
 
 // --------------------------------------------------------------- the output
 
+/// The groups of roads for the table of the use of the roads (the viewer's "Usage" and
+/// `usage_report`): boxes `[x0, y0, x1, y1]`, an edge belongs to the first group with its middle
+/// in a box.
+fn groups_json() -> Value {
+    let (w, h, ring) = (W, H, RING);
+    let band = |y: f64, half: f64| [0.0, y - half, w, y + half];
+    // the bridges of the column: the middle of each is half way between its two ends
+    let column_bridges: Vec<Value> = COLUMN_BRIDGES
+        .iter()
+        .map(|&(y, to_copy)| {
+            let mid = if to_copy { y - 5.0 } else { y + 5.0 };
+            json!([COLUMN_COPY_X + 1.0, mid - 1.5, WEST_X[3] - 1.0, mid + 1.5])
+        })
+        .collect();
+    json!([
+        {"name": "wall road", "boxes": [band(4.0, 0.3), band(h - 4.0, 0.3)]},
+        {"name": "bridges wall-ring", "boxes": [[0.0, 4.4, w, ring - 0.4], [0.0, h - ring + 0.4, w, h - 4.4]]},
+        {"name": "ring bottom/top", "boxes": [band(ring, 0.3), band(h - ring, 0.3)]},
+        {"name": "column x=100", "boxes": [[WEST_X[3] - 0.3, ring, WEST_X[3] + 0.3, h - ring]]},
+        {"name": "column copy", "boxes": [[COLUMN_COPY_X - 0.3, 38.0, COLUMN_COPY_X + 0.3, 112.0]]},
+        {"name": "bridges column", "boxes": column_bridges},
+        {"name": "west loops", "boxes": [[ring + 0.5, ring + 0.5, WEST_X[3] - 1.0, h - ring - 0.5]]},
+        {"name": "boulevard", "boxes": [[140.0, 65.7, w - ring, 66.3], [140.0, 73.7, w - ring, 74.3], [140.0, 83.7, w - ring, 84.3]]},
+        {"name": "north serpentine", "boxes": [[WEST_X[3] + 0.5, 88.0, 196.0, h - ring - 1.0]]},
+        {"name": "middle serpentine", "boxes": [[WEST_X[3] + 0.5, 14.0, 140.0, 66.0]]},
+        {"name": "east grid", "boxes": [[140.0, ring, w - ring + 6.0, h - ring]]},
+    ])
+}
+
 fn write(path: &Path, value: &Value) {
     let mut text = serde_json::to_string_pretty(value).expect("serializes");
     text.push('\n');
@@ -2712,6 +2960,10 @@ fn main() {
     write(
         &root.join("scenarios/warehouse4.geometry.json"),
         &geometry_json,
+    );
+    write(
+        &root.join("scenarios/warehouse4.groups.json"),
+        &groups_json(),
     );
 
     // the preview: the layout and the geometry, drawn the way the exporter does

@@ -3,6 +3,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use botsim_record::GeometryFile;
 use botsim_scenario::Scenario;
 use vda5050::factsheet::Factsheet;
 use vdma_lif::Lif;
@@ -14,6 +15,8 @@ pub struct Inputs {
     pub lif: Lif,
     /// One entry per `[[robot]]` group of the scenario, in the same order.
     pub fleet: Vec<FleetType>,
+    /// Walls, racks and shelves (optional): without them there is no clearance check.
+    pub geometry: Option<GeometryFile>,
 }
 
 /// A robot type of the fleet: one `[[robot]]` group and its factsheet.
@@ -82,7 +85,23 @@ pub fn load(scenario_path: &Path) -> Result<Inputs, LoadError> {
         scenario,
         lif,
         fleet,
+        geometry: None,
     })
+}
+
+/// [`load`], and the geometry file too if a path is given.
+pub fn load_with_geometry(
+    scenario_path: &Path,
+    geometry_path: Option<&Path>,
+) -> Result<Inputs, LoadError> {
+    let mut inputs = load(scenario_path)?;
+    if let Some(p) = geometry_path {
+        inputs.geometry = Some(GeometryFile::load(p).map_err(|e| LoadError {
+            path: p.to_path_buf(),
+            message: e.to_string(),
+        })?);
+    }
+    Ok(inputs)
 }
 
 #[cfg(test)]

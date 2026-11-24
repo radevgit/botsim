@@ -18,16 +18,21 @@ time_step = 0.05
 start_time = 2026-11-22T10:00:00Z
 lif = "warehouse4.lif.json"
 deadlock_timeout = 20.0
+# route with load: each other robot on an edge (or at the node it ends at) makes the
+# edge 5 m longer for the route, so that the empty parallel lane is preferred
+route_load_weight = 5.0
 
 [[robot]]
 manufacturer = "ACME"
 serial_prefix = "Y"
 factsheet = "forklift.factsheet.json"
 start_nodes = [
-    "N644", "N445", "N534", "N623", "N479", "N424", "N657", "N513",
-    "N581", "N437", "N526", "N505", "N518", "N408", "N497", "N442",
-    "N675", "N476", "N421", "N510", "N599", "N455", "N688", "N544",
+    "N555", "N500", "N445", "N534", "N479", "N513", "N547", "N636",
+    "N492", "N670", "N526", "N471", "N649", "N539", "N484", "N518",
+    "N463", "N696", "N442", "N531", "N476", "N709", "N510", "N599",
 ]
+# each robot faces along the road that leaves its start node
+start_heading = "road"
 action_time = 1.0
 
 [robot.action_times]
@@ -39,10 +44,12 @@ manufacturer = "ACME"
 serial_prefix = "X"
 factsheet = "diff_robot.factsheet.json"
 start_nodes = [
-    "N699", "N696", "N400", "N633", "N489", "N578", "N468", "N502",
-    "N447", "N536", "N481", "N460", "N693", "N494", "N439", "N672",
-    "N528", "N473", "N418", "N685", "N541", "N486", "N664", "N520",
+    "N717", "N489", "N434", "N523", "N468", "N502", "N536", "N625",
+    "N481", "N714", "N570", "N515", "N460", "N638", "N672", "N528",
+    "N473", "N706", "N562", "N507", "N685", "N575", "N520", "N465",
 ]
+# each robot faces along the road that leaves its start node
+start_heading = "road"
 action_time = 1.0
 
 [robot.action_times]
@@ -54,9 +61,11 @@ manufacturer = "ACME"
 serial_prefix = "T"
 factsheet = "three_wheel.factsheet.json"
 start_nodes = [
-    "N466", "N500", "N589", "N678", "N458", "N492", "N615", "N649",
-    "N450", "N484", "N573",
+    "N466", "N699", "N644", "N589", "N568", "N615", "N560", "N662",
+    "N552", "N544", "N578",
 ]
+# each robot faces along the road that leaves its start node
+start_heading = "road"
 action_time = 1.0
 
 [robot.action_times]
@@ -68,10 +77,12 @@ manufacturer = "ACME"
 serial_prefix = "O"
 factsheet = "omni_robot.factsheet.json"
 start_nodes = [
-    "N609", "N465", "N410", "N588", "N533", "N622", "N478", "N711",
-    "N457", "N546", "N402", "N669", "N525", "N614", "N470", "N559",
-    "N415", "N449", "N538",
+    "N554", "N499", "N732", "N567", "N512", "N601", "N457", "N546",
+    "N491", "N436", "N559", "N504", "N682", "N483", "N572", "N551",
+    "N496", "N729", "N475",
 ]
+# each robot faces along the road that leaves its start node
+start_heading = "road"
 action_time = 1.0
 
 [robot.action_times]
@@ -83,9 +94,11 @@ manufacturer = "ACME"
 serial_prefix = "C"
 factsheet = "small_robot.factsheet.json"
 start_nodes = [
-    "N661", "N517", "N462", "N585", "N441", "N530", "N619", "N708",
-    "N509", "N598", "N454", "N488",
+    "N564", "N653", "N454", "N543", "N488", "N611", "N467", "N556",
+    "N679", "N535", "N480", "N548",
 ]
+# each robot faces along the road that leaves its start node
+start_heading = "road"
 action_time = 1.0
 
 [robot.action_times]

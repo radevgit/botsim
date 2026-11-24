@@ -670,6 +670,19 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   speed limit is not part of the route cost (length only). **The length of an
   edge with a curve is the length of the curve** (S74), which can differ between
   types (a type may have a trajectory on the edge, another a straight line).
+- **Route with load (S91, brief request of 2026-11-23):** the shortest route is
+  the same every time, so an equally long parallel lane was never chosen. With
+  the scenario setting `route_load_weight` (metres, default 0 = off, same routes as
+  before) the cost of an edge, when a route is planned, is its length plus the
+  weight for each **other** robot that holds the edge and for each that holds the
+  node it ends at (so 0 to 2 times the weight). It applies when a job is assigned
+  and in the timeout re-route (§9, S53), which can now find the empty lane. Load
+  is the current reservations. **Waiting average (S93):** the setting
+  `route_wait_weight` (metres, default 0) adds to an edge the weight times the
+  moving average (time constant 60 s) of how many robots waited on the node the
+  edge ends at (1.0 = one robot waiting all the time), so routes also avoid places
+  far ahead where robots keep waiting. Both are off by default. Deterministic. Not
+  applied to the choice of the nearest robot; the lift and door rules are unchanged.
 - **Turns (S73):** for a type that cannot make every turn (a three-wheel robot,
   or a differential robot where the layout bars some rotation, §2) the route is
   searched over edges: an edge may follow another only if `Graph::can_follow` says the
@@ -913,6 +926,15 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 - Optional `deadlock_timeout` (seconds, default 30), `safety_stop` (default
   true, §7a), `drive_through_nodes` (default true, §2) and `message_delay`
   (seconds, default 0, §1a).
+- **Start heading (S96):** per robot group `start_heading` is a number (radians, 0 =
+  east, the same for all, default 0) or `"road"`: each robot faces the start
+  direction of the first edge in the layout that leaves its start node and that its
+  type may drive (an edge between maps only if there is no other; no such edge:
+  east). `start_headings = [...]` gives one heading for each start node instead
+  (the count must match `start_nodes`). `botsim_scenario::road_heading` gives the
+  heading for a node, for the checker.
+- Optional `route_load_weight` and `route_wait_weight` (metres, default 0, §9
+  "Route with load").
 - **Debug option `stop_at_first_deadlock`** (**S59**, default `false`): the run
   ends in the step in which the first deadlock is reported (that is after the
   deadlock timeout, §10), so the situation can be looked at (who is in the

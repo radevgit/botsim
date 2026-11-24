@@ -67,6 +67,10 @@ use vda5050::responses::Responses;
 /// 30 s a deadlock needs to be reported).
 pub const REROUTE_AFTER_SECONDS: f64 = 10.0;
 
+/// The time constant of the waiting average per node that the route cost uses
+/// (route with load).
+pub const WAIT_AVERAGE_SECONDS: f64 = 60.0;
+
 /// A robot that has been held this long at the end of its released route by a
 /// robot that is stuck behind it goes first (S77, my choice: before the re-route).
 /// Extra distance (m) kept between the body swept by a turn on the spot and a stopped robot.
@@ -142,6 +146,16 @@ impl TypeRouting {
             turns: self.turns.as_ref(),
         }
     }
+
+    /// Like [`mover`](Self::mover), with another cost per edge (the length plus the
+    /// load penalty).
+    fn mover_with<'a>(&'a self, cost: &'a [f64]) -> Mover<'a> {
+        Mover {
+            ok: &self.ok,
+            cost,
+            turns: self.turns.as_ref(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -199,6 +213,15 @@ pub struct Controller {
     /// How many times a robot was let go first, ahead of the robot stuck behind it
     /// (S77).
     give_ways: usize,
+    /// Metres of route cost added for every robot that holds an edge, or the node
+    /// it ends at, when a route is planned; 0 (default) is the plain shortest route.
+    load_weight: f64,
+    /// Metres of route cost added per robot that has recently waited on the node an
+    /// edge ends at (see `node_wait`); 0 (default) is off.
+    wait_weight: f64,
+    /// For each node, how many robots stood waiting on it, as a moving average over
+    /// [`WAIT_AVERAGE_SECONDS`] (1.0 = one robot waiting all the time).
+    node_wait: Vec<f64>,
 }
 
 impl Controller {
@@ -275,7 +298,49 @@ impl Controller {
             unserviceable: std::collections::HashSet::new(),
             reroutes: 0,
             give_ways: 0,
+            load_weight: 0.0,
+            wait_weight: 0.0,
+            node_wait: vec![0.0; world.graph().nodes.len()],
         }
+    }
+
+    /// Route with load, second part: every edge also costs `weight` metres for each
+    /// robot that has recently waited on the node it ends at (a moving average over
+    /// [`WAIT_AVERAGE_SECONDS`]), so that routes avoid places where robots keep
+    /// waiting, also far ahead of a robot. 0 turns it off; a negative or non-finite
+    /// weight is taken as 0.
+    pub fn set_wait_weight(&mut self, weight: f64) {
+        self.wait_weight = if weight.is_finite() && weight > 0.0 {
+            weight
+        } else {
+            0.0
+        };
+    }
+
+    /// Route with load: when a route is planned (at the start of a job and after a
+    /// wait timeout), every edge costs its length plus `weight` metres for each
+    /// other robot that holds the edge and for each that holds the node it ends at,
+    /// so that an equally long empty lane is preferred to a busy one. 0 turns it
+    /// off. A negative or non-finite weight is taken as 0.
+    pub fn set_load_weight(&mut self, weight: f64) {
+        self.load_weight = if weight.is_finite() && weight > 0.0 {
+            weight
+        } else {
+            0.0
+        };
+    }
+
+    /// The route cost of every edge for a robot of type `t` that is not `robot`:
+    /// the length plus the load penalty. `None` if the load weight is 0 (use the
+    /// plain lengths).
+    fn loaded_cost(&self, t: usize, robot: usize) -> Option<Vec<f64>> {
+        loaded_cost(
+            &self.types[t].cost,
+            &self.graph,
+            &self.reservations,
+            (self.load_weight, self.wait_weight, &self.node_wait),
+            robot,
+        )
     }
 
     /// How many times a robot's route was changed because another robot held the
@@ -340,6 +405,22 @@ impl Controller {
         else {
             return;
         };
+
+        // the waiting average of the nodes (only needed for the route cost)
+        if self.wait_weight > 0.0 {
+            let keep = (-elapsed / WAIT_AVERAGE_SECONDS).exp();
+            for w in &mut self.node_wait {
+                *w *= keep;
+            }
+            for (i, state) in states.iter().enumerate() {
+                if self.robots[i].work.is_some()
+                    && is_waiting(state)
+                    && let Some(n) = self.node_of(state)
+                {
+                    self.node_wait[n] += 1.0 - keep;
+                }
+            }
+        }
 
         for (i, state) in states.iter().enumerate() {
             self.update_work(world, i, state, tick, elapsed);
@@ -482,12 +563,23 @@ impl Controller {
         };
         if stuck && work.blocked_seconds >= REROUTE_AFTER_SECONDS {
             work.blocked_seconds = 0.0; // try again after another timeout
+            let loaded = loaded_cost(
+                &self.types[slot.type_idx].cost,
+                &self.graph,
+                &self.reservations,
+                (self.load_weight, self.wait_weight, &self.node_wait),
+                i,
+            );
+            let mover = match &loaded {
+                Some(c) => self.types[slot.type_idx].mover_with(c),
+                None => self.types[slot.type_idx].mover(),
+            };
             if let Some(plan) = reroute(
                 &self.graph,
                 &self.reservations,
                 &self.lifts,
                 &self.doors,
-                &self.types[slot.type_idx].mover(),
+                &mover,
                 i,
                 &work.plan,
                 at,
@@ -739,7 +831,12 @@ impl Controller {
             // the first robot in that order that has a plan for the job
             let chosen = order.iter().find_map(|&(_, i, k)| {
                 let (_, node) = free[k];
-                let mover = self.types[self.robots[i].type_idx].mover();
+                let t = self.robots[i].type_idx;
+                let loaded = self.loaded_cost(t, i);
+                let mover = match &loaded {
+                    Some(c) => self.types[t].mover_with(c),
+                    None => self.types[t].mover(),
+                };
                 // the robot's heading matters if it cannot turn on the spot (S73)
                 let arrival = states[i]
                     .mobile_robot_position
@@ -892,16 +989,9 @@ impl Controller {
             });
             let wide = same_route || on_h_way;
             let near = dx.hypot(dy) <= if wide { 5.0 } else { 4.0 };
-            // X standing on H's way may head any way as long as it does not face H
-            let faces_away = angle_between(px.theta, (-dy).atan2(-dx)) >= 90f64.to_radians();
-            let same_way = angle_between(px.theta, ph.theta) <= 45f64.to_radians()
-                || same_route
-                || (on_h_way && faces_away);
-            let limit = if wide { 100.0 } else { 60.0 };
-            let ahead = off_heading <= f64::to_radians(limit);
-            // X may have to turn on the spot to drive off; its body then sweeps
-            // through the angles to the start of the edge and must not touch H (a
-            // forklift turning 1.7 m from a stopped robot hit it, warehouse 4, 309 s)
+            // the way X will head once it is released: along its next edge (a robot
+            // standing on a node has not turned to the edge yet; warehouse 4, O-008
+            // stood facing west, 117° from T-008, while its edge ran 45°)
             let start = self
                 .graph
                 .edge_directions(
@@ -910,6 +1000,16 @@ impl Controller {
                     &self.robots[i].series,
                 )
                 .0;
+            // X standing on H's way may head any way as long as it does not face H
+            let faces_away = angle_between(start, (-dy).atan2(-dx)) >= 90f64.to_radians();
+            let same_way = angle_between(start, ph.theta) <= 45f64.to_radians()
+                || same_route
+                || (on_h_way && faces_away);
+            let limit = if wide { 100.0 } else { 60.0 };
+            let ahead = off_heading <= f64::to_radians(limit);
+            // X may have to turn on the spot to drive off; its body then sweeps
+            // through the angles to the start of the edge and must not touch H (a
+            // forklift turning 1.7 m from a stopped robot hit it, warehouse 4, 309 s)
             let turns = angle_between(px.theta, start) > 15f64.to_radians();
             let clear = !turns
                 || turn_is_clear(
@@ -1082,6 +1182,35 @@ fn order_error(state: &State, order_id: &str) -> Option<ErrorType> {
             .copied()
             .find(|t| t.as_str() == e.error_type)
             .unwrap_or(ErrorType::ValidationFailure),
+    )
+}
+
+/// The route cost of every edge for `robot`: `cost` plus `reserved` for each other
+/// robot that holds the edge and each that holds the node it ends at, plus `waited`
+/// times the waiting average of that node. `weights` is (`reserved`, `waited`,
+/// `node_wait`). `None` if both weights are 0.
+fn loaded_cost(
+    cost: &[f64],
+    graph: &Graph,
+    reservations: &Reservations,
+    weights: (f64, f64, &[f64]),
+    robot: usize,
+) -> Option<Vec<f64>> {
+    let (reserved, waited, node_wait) = weights;
+    if reserved <= 0.0 && waited <= 0.0 {
+        return None;
+    }
+    let other = |h: Option<usize>| h.is_some_and(|h| h != robot);
+    Some(
+        cost.iter()
+            .enumerate()
+            .map(|(e, &c)| {
+                let end = graph.edges[e].end;
+                let n = usize::from(other(reservations.edge_holder(e)))
+                    + usize::from(other(reservations.node_holder(end)));
+                c + reserved * n as f64 + waited * node_wait[end]
+            })
+            .collect(),
     )
 }
 

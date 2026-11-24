@@ -245,7 +245,12 @@ pub fn run_with(
 ) -> Result<Summary, ScenarioError> {
     let ticks = ticks_for(scenario.duration, scenario.time_step);
     let mut generator = scenario.job_generator(world.graph())?;
-    let mut controller = generator.as_ref().map(|_| Controller::new(&world));
+    let mut controller = generator.as_ref().map(|_| {
+        let mut c = Controller::new(&world);
+        c.set_load_weight(scenario.route_load_weight);
+        c.set_wait_weight(scenario.route_wait_weight);
+        c
+    });
     let mut created = 0;
     let mut clock = StepClock::default();
     let mut stopped_at_first_deadlock = false;

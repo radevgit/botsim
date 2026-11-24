@@ -32,9 +32,12 @@ cargo run --release -p botsim-check -- --geometry scenarios/warehouse4.geometry.
 ```
 
 Static checks of the LIF layout for the fleet of a scenario, without running a
-simulation. Prints findings as text; add `--json` for JSON. Exit code 0: no
-errors, 1: errors found, 2: usage or load error. `--geometry` is optional (the
-clearance check does not exist yet).
+simulation. Prints findings as text; add `--json` for JSON, and
+`--conflicts conflicts.json` to also write the conflict map (which pairs of edges
+two robots must not use at the same time, per pair of robot types). Exit code 0: no
+errors, 1: errors found, 2: usage or load error. `--geometry` is optional: with
+the geometry file the swept robot outlines are also checked against walls, racks
+and shelves.
 
 ## Workspace
 
@@ -42,7 +45,7 @@ clearance check does not exist yet).
 - `crates/baseline` — the bundled baseline controller (`botsim-baseline`)
 - `crates/scenario` — the scenario file (TOML): `Scenario`, `load`, `build_world` (`botsim-scenario`); shared by the runner and the checker
 - `crates/runner` — CLI and JSON summary (`botsim-runner`); re-exports the scenario crate as `botsim_runner::scenario`
-- `crates/check` — static layout checker and CLI (`botsim-check`)
+- `crates/check` — static layout checker, library and CLI (`botsim-check`); the list of checks is in `crates/check/README.md`
 - `docs/rules.md` — the rules the simulator and the baseline follow, with the decisions behind them
 - `scenarios/` — example scenarios
 
