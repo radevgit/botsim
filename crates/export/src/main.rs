@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use botsim_export::{ExportOptions, export_frames};
-use botsim_record::read_recording;
+use botsim_record::read_recording_partial;
 
 const USAGE: &str = "usage: botsim-export <recording.jsonl> <out-dir> [--map <mapId>] \
 [--size WxH] [--fps N] [--speed X] [--from <seconds>] [--to <seconds>] [--no-clock]";
@@ -71,7 +71,14 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             path => positional.push(PathBuf::from(path)),
         }
     }
-    let [recording, out_dir] = <[PathBuf; 2]>::try_from(positional).map_err(|_| String::new())?;
+    let [recording, out_dir] = <[PathBuf; 2]>::try_from(positional.clone()).map_err(|_| {
+        let seen: Vec<String> = positional.iter().map(|p| format!("'{}'", p.display())).collect();
+        format!(
+            "needs a recording and an output directory, and nothing else without a -- name; got {}: {}",
+            positional.len(),
+            seen.join(" ")
+        )
+    })?;
     Ok(Args {
         recording,
         out_dir,
@@ -106,8 +113,25 @@ fn main() -> ExitCode {
 fn run(args: &Args) -> Result<String, String> {
     let file = File::open(&args.recording)
         .map_err(|e| format!("cannot read {}: {e}", args.recording.display()))?;
-    let recording = read_recording(BufReader::new(file))
+    // (a run that was stopped leaves a recording whose last line is cut off: the viewer shows
+    // it, so the export draws what there is)
+    let (recording, cut) = read_recording_partial(BufReader::new(file))
         .map_err(|e| format!("{}: {e}", args.recording.display()))?;
+    if cut {
+        let last = recording.snapshots.last().map_or(0.0, |s| s.time);
+        eprintln!(
+            "note: {} is cut off (the run was stopped while it was written): drawing what there is, up to {last:.1} s",
+            args.recording.display()
+        );
+    }
+    if let (Some(to), Some(last)) = (args.options.to, recording.snapshots.last()) {
+        if to > last.time {
+            eprintln!(
+                "note: --to {to} is after the end of the recording ({:.1} s): the frames after it all show the last snapshot",
+                last.time
+            );
+        }
+    }
     let s = export_frames(&recording, &args.out_dir, &args.options).map_err(|e| e.to_string())?;
     Ok(format!(
         "wrote {} frames {}x{} of map {} to {} (simulated {:.1} s to {:.1} s, {} fps, speed {})",
