@@ -53,7 +53,11 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut positional = Vec::new();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        match arg.as_str() {
+        // (a space left over from a line break in a pasted command is not an argument)
+        if arg.trim().is_empty() {
+            continue;
+        }
+        match arg.trim() {
             "--map" => options.map = Some(value::<String>(&mut it, "--map", "a map id")?),
             "--size" => {
                 let text: String = value(&mut it, "--size", "WIDTHxHEIGHT, e.g. 1920x1080")?;
