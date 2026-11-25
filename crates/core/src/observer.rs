@@ -71,7 +71,7 @@ pub struct Snapshot {
     pub robots: Vec<RobotSnapshot>,
     /// What the controller holds, if it publishes it (the baseline does).
     pub reservations: Vec<Reservation>,
-    /// `waiter` stands still and waits, and `blocker` stands on its next node.
+    /// Who waits for whom now, by the rule of [`crate::deadlock`].
     pub blocking: Vec<Blocking>,
     /// Pairs of robots that overlap right now.
     pub overlapping: Vec<(usize, usize)>,

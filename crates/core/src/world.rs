@@ -27,7 +27,7 @@ use vda5050::order::Order;
 use vda5050::state::State;
 
 use crate::actions::ActionTimes;
-use crate::collision::{Body, overlap, place};
+use crate::collision::{Body, gap, overlap, place};
 use crate::deadlock::{DEFAULT_TIMEOUT_SECONDS, DeadlockDetector};
 use crate::disturbances::{DisturbanceError, StopGenerator, StopSpec, check_duration_variation};
 use crate::door::{Door, DoorError, DoorSpec, DoorStatus};
@@ -41,6 +41,7 @@ use crate::observer::{Blocking, Observer, Reservation, RobotSnapshot, RobotStatu
 use crate::robot::{Reception, Robot, START_NODE_TOLERANCE};
 use crate::spec::RobotSpec;
 use crate::state_report::Header;
+use crate::waiting::{HeldBack, Wait, WaitReason};
 use crate::zone_requests::ZoneRequestTiming;
 use crate::zones::Zones;
 
@@ -62,6 +63,10 @@ impl RobotId {
         }
     }
 }
+
+/// A robot that the protective field stops again within this time after it last held
+/// it is still in the same safety stop (see [`World::safety_stops`]).
+pub const SAFETY_STOP_GAP_SECONDS: f64 = 1.0;
 
 /// What the batteries of a run show (see [`World::battery_report`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -162,6 +167,8 @@ struct Entry {
     /// The state messages the controller asked for, with the tick they were made
     /// at (only with a message delay, S58).
     seen: VecDeque<(u64, State)>,
+    /// The last step in which the protective field stopped the robot.
+    obstructed_tick: Option<u64>,
 }
 
 /// A message on its way to a robot (S58).
@@ -186,6 +193,8 @@ pub struct World {
     stops: Option<(u64, StopSpec)>,
     /// How many random stops started so far.
     stops_started: usize,
+    /// Safety stops counted so far ([`World::safety_stops`]).
+    safety_stops: usize,
     /// Seed and variation of the random action durations; robots added later get them too.
     duration_variation: Option<(u64, f64)>,
     graph: Graph,
@@ -198,11 +207,14 @@ pub struct World {
     /// Robot index pairs that overlapped after the last step.
     touching: HashSet<(usize, usize)>,
     deadlocks: DeadlockDetector,
-    /// Who waited for whom after the last step.
-    waits_for: Vec<Option<usize>>,
+    /// Who waited, why and for whom after the last step.
+    waits: Vec<Option<Wait>>,
     /// For a robot stopped by its protective field after the last step: the robot
-    /// in the field (the one with the lowest index if there are several).
+    /// in the field (the nearest if there are several).
     field_blocker: Vec<Option<usize>>,
+    /// For each robot, why the controller holds it back and who causes it; `None`
+    /// until a controller publishes.
+    held_back: Option<Vec<Option<HeldBack>>>,
     /// What the controller has published for the observer.
     reservations: Vec<Reservation>,
     observer: Option<Box<dyn Observer>>,
@@ -270,9 +282,11 @@ impl World {
             deadlocks: DeadlockDetector::new(DEFAULT_TIMEOUT_SECONDS, dt),
             stops: None,
             stops_started: 0,
+            safety_stops: 0,
             duration_variation: None,
-            waits_for: Vec::new(),
+            waits: Vec::new(),
             field_blocker: Vec::new(),
+            held_back: None,
             reservations: Vec::new(),
             observer: None,
             observer_every: 1,
@@ -470,6 +484,7 @@ impl World {
             next_header_id: 0,
             stops,
             seen: VecDeque::new(),
+            obstructed_tick: None,
         });
         Ok(())
     }
@@ -506,6 +521,15 @@ impl World {
     /// How many random stops have started so far.
     pub fn random_stops(&self) -> usize {
         self.stops_started
+    }
+
+    /// How many safety stops there were: a robot driving or turning was stopped by
+    /// its protective field. A new stop of the same robot less than
+    /// [`SAFETY_STOP_GAP_SECONDS`] after the field last held it counts as the same
+    /// one (the field gets shorter as the robot brakes, so it can let go and catch
+    /// again). Random stops are not counted.
+    pub fn safety_stops(&self) -> usize {
+        self.safety_stops
     }
 
     /// The robots in the order they were added.
@@ -1038,6 +1062,20 @@ impl World {
         self.reservations = reservations;
     }
 
+    /// The controller says, robot by robot (in the order they were added), why it
+    /// holds the robot back and which robots cause it; `None` where it does not.
+    /// It holds until published again. Once a controller has published, release,
+    /// zone, lift and door waits come only from it (see [`crate::waiting`]).
+    pub fn publish_held_back(&mut self, held_back: Vec<Option<HeldBack>>) {
+        self.held_back = Some(held_back);
+    }
+
+    /// Who waited in the last step, why and for whom, robot by robot in the order
+    /// they were added (see [`crate::waiting`]). Empty before the first step.
+    pub fn waits(&self) -> &[Option<Wait>] {
+        &self.waits
+    }
+
     /// The world as it is now.
     pub fn snapshot(&self) -> Snapshot {
         let header = plain_header();
@@ -1109,10 +1147,13 @@ impl World {
         let mut overlapping: Vec<(usize, usize)> = self.touching.iter().copied().collect();
         overlapping.sort_unstable();
         let blocking = self
-            .waits_for
+            .waits
             .iter()
             .enumerate()
-            .filter_map(|(waiter, b)| b.map(|blocker| Blocking { waiter, blocker }))
+            .filter_map(|(waiter, w)| {
+                let blocker = w.and_then(|w| w.blocker)?;
+                Some(Blocking { waiter, blocker })
+            })
             .collect();
         let deadlocks = self
             .deadlocks
@@ -1146,8 +1187,28 @@ impl World {
         }
     }
 
-    /// Who waits for whom, from the robots' state messages (the rule is in
-    /// [`crate::deadlock`]).
+    /// The body of robot `i` where it is now.
+    fn body(&self, i: usize) -> Body {
+        let e = &self.robots[i];
+        let p = e.robot.pose();
+        place(e.robot.shape(), p.x, p.y, p.heading)
+    }
+
+    /// The robot of `others` nearest to robot `i` (the smallest gap between the
+    /// bodies, at equal gaps the one added first); `None` if there is none.
+    fn nearest(&self, i: usize, others: &[usize]) -> Option<usize> {
+        let mine = self.body(i);
+        others
+            .iter()
+            .copied()
+            .filter(|&j| j != i && j < self.robots.len())
+            .map(|j| (gap(&mine, &self.body(j)), j))
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+            .map(|(_, j)| j)
+    }
+
+    /// Who waits, why and for whom (the rule is in [`crate::waiting`]), from the
+    /// robots' state messages; then look for deadlocks among these waits.
     fn check_deadlocks(&mut self) {
         let header = plain_header();
         // a robot in a lift cabin stands on no node (map = none)
@@ -1185,7 +1246,7 @@ impl World {
                 released_by.insert(n.node_id.as_str(), j);
             }
         }
-        let waits_for: Vec<Option<usize>> = self
+        let waits: Vec<Option<Wait>> = self
             .robots
             .iter()
             .enumerate()
@@ -1196,11 +1257,22 @@ impl World {
                 if e.robot.is_obstructed()
                     && let Some(j) = self.field_blocker.get(i).copied().flatten()
                 {
-                    return Some(j);
+                    return Some(Wait {
+                        reason: WaitReason::SafetyStop,
+                        blocker: Some(j),
+                    });
                 }
                 let next = state.node_states.first()?;
-                if !(is_waiting(state) || e.robot.is_obstructed()) {
+                if !is_waiting(state) {
                     return None;
+                }
+                // with a controller, its word; without, the two rules below
+                if let Some(held_back) = &self.held_back {
+                    let held = held_back.get(i)?.as_ref()?;
+                    return Some(Wait {
+                        reason: held.reason,
+                        blocker: self.nearest(i, &held.blockers),
+                    });
                 }
                 let node = &self.graph.nodes[self.graph.node_idx(&next.node_id)?];
                 // the robot with the lowest index on the node (within the tolerance)
@@ -1221,16 +1293,22 @@ impl World {
                     })
                     .min();
                 // else the node is reserved, though empty: its holder has it released
-                standing.or_else(|| {
+                let blocker = standing.or_else(|| {
                     released_by
                         .get(next.node_id.as_str())
                         .copied()
                         .filter(|&j| j != i)
+                });
+                blocker.map(|j| Wait {
+                    reason: WaitReason::Release,
+                    blocker: Some(j),
                 })
             })
             .collect();
+        let waits_for: Vec<Option<usize>> =
+            waits.iter().map(|w| w.and_then(|w| w.blocker)).collect();
         self.deadlocks.observe(self.tick, &waits_for);
-        self.waits_for = waits_for;
+        self.waits = waits;
     }
 
     /// All collisions so far, oldest first. One entry per contact: it is added
@@ -1320,7 +1398,7 @@ impl World {
             for i in 0..self.robots.len() {
                 let field = self.robots[i].robot.protective_field(self.dt);
                 let blocker = match (field, &bodies[i]) {
-                    (Some(f), Some((map, _))) => {
+                    (Some(f), Some((map, own))) => {
                         let r = orect_bounding_rect(&f);
                         self.broad.query_intersecting(
                             r.p1.x - PAD,
@@ -1330,20 +1408,34 @@ impl World {
                             &mut hits,
                         );
                         let field = Body::Rect(f);
+                        // the nearest robot in the field (at equal gaps the one
+                        // added first)
                         hits.iter()
                             .map(|&h| robot_of[h])
-                            .filter(|&j| {
-                                j != i
-                                    && bodies[j]
-                                        .as_ref()
-                                        .is_some_and(|(m, b)| m == map && overlap(&field, b))
+                            .filter(|&j| j != i)
+                            .filter_map(|j| {
+                                let (m, b) = bodies[j].as_ref()?;
+                                (m == map && overlap(&field, b)).then(|| (gap(own, b), j))
                             })
-                            .min()
+                            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+                            .map(|(_, j)| j)
                     }
                     _ => None,
                 };
                 self.field_blocker[i] = blocker;
                 self.robots[i].robot.set_obstructed(blocker.is_some());
+            }
+            // count the safety stops that begin
+            let gap = (SAFETY_STOP_GAP_SECONDS / self.dt).round() as u64;
+            for e in &mut self.robots {
+                if e.robot.is_obstructed() {
+                    if e.obstructed_tick
+                        .is_none_or(|t| self.tick.saturating_sub(t) > gap)
+                    {
+                        self.safety_stops += 1;
+                    }
+                    e.obstructed_tick = Some(self.tick);
+                }
             }
         }
     }

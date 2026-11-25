@@ -1,5 +1,6 @@
 //! Seeded transport jobs: from a pickup node to a drop node, created at a set
-//! rate between a list of job nodes.
+//! rate between a list of job nodes, or from a list of pickup places to a list of
+//! drop places ([`JobGenerator::between_groups`]).
 //!
 //! Random numbers come from our own small generator (SplitMix64), not a crate,
 //! so a seed gives the same jobs on every platform and in every future version.
@@ -71,6 +72,10 @@ pub enum JobError {
     BadRate(f64),
     /// `rate × dt` is above 1: at most one job per step can be created.
     RateTooHighForStep,
+    /// A list of pickup or drop places is empty.
+    EmptyGroup,
+    /// A node is both a pickup and a drop place.
+    SharedNode,
 }
 
 impl fmt::Display for JobError {
@@ -84,6 +89,12 @@ impl fmt::Display for JobError {
                     "job rate is too high for the time step (more than 1 job per step)"
                 )
             }
+            JobError::EmptyGroup => {
+                write!(f, "jobs need at least one pickup place and one drop place")
+            }
+            JobError::SharedNode => {
+                write!(f, "a node cannot be both a pickup and a drop place")
+            }
         }
     }
 }
@@ -95,7 +106,11 @@ pub struct JobGenerator {
     rng: Rng,
     /// The places jobs start and end at; each is a list of nodes where it can be
     /// reached (one node for a plain node, the interaction nodes of a station).
+    /// With `drops` set these are the pickup places only.
     places: Vec<Vec<NodeIdx>>,
+    /// Jobs go from `places` to these, and with `true` also the other way round;
+    /// `None`: between any two of `places`.
+    drops: Option<(Vec<Vec<NodeIdx>>, bool)>,
     /// Probability of a new job in one step.
     p_step: f64,
     next_id: u64,
@@ -132,26 +147,50 @@ impl JobGenerator {
         rate_per_hour: f64,
         dt: f64,
     ) -> Result<JobGenerator, JobError> {
-        let mut unique: Vec<Vec<NodeIdx>> = Vec::new();
-        for p in places {
-            if !p.is_empty() && !unique.contains(p) {
-                unique.push(p.clone());
-            }
-        }
+        let unique = unique_places(places);
         if unique.len() < 2 {
             return Err(JobError::TooFewNodes);
-        }
-        if !(rate_per_hour.is_finite() && rate_per_hour >= 0.0) {
-            return Err(JobError::BadRate(rate_per_hour));
-        }
-        let p_step = rate_per_hour / 3600.0 * dt;
-        if p_step > 1.0 {
-            return Err(JobError::RateTooHighForStep);
         }
         Ok(JobGenerator {
             rng: Rng::stream(seed, "jobs"),
             places: unique,
-            p_step,
+            drops: None,
+            p_step: per_step(rate_per_hour, dt)?,
+            next_id: 1,
+        })
+    }
+
+    /// Jobs from one group of places to another: picked up at one of `pickups`,
+    /// dropped at one of `drops`, each drawn evenly. With `both_directions` each job
+    /// is, with equal chance, that way round or the reverse (picked up at one of
+    /// `drops`, dropped at one of `pickups`). The two groups must not share a node.
+    /// Per job the random numbers are drawn in this order: the direction (only with
+    /// `both_directions`), the place of `pickups`, the place of `drops`, then the
+    /// node of the pickup place and of the drop place if they have several.
+    pub fn between_groups(
+        seed: u64,
+        pickups: &[Vec<NodeIdx>],
+        drops: &[Vec<NodeIdx>],
+        both_directions: bool,
+        rate_per_hour: f64,
+        dt: f64,
+    ) -> Result<JobGenerator, JobError> {
+        let (pickups, drops) = (unique_places(pickups), unique_places(drops));
+        if pickups.is_empty() || drops.is_empty() {
+            return Err(JobError::EmptyGroup);
+        }
+        if pickups
+            .iter()
+            .flatten()
+            .any(|n| drops.iter().flatten().any(|m| m == n))
+        {
+            return Err(JobError::SharedNode);
+        }
+        Ok(JobGenerator {
+            rng: Rng::stream(seed, "jobs"),
+            places: pickups,
+            drops: Some((drops, both_directions)),
+            p_step: per_step(rate_per_hour, dt)?,
             next_id: 1,
         })
     }
@@ -161,18 +200,31 @@ impl JobGenerator {
         if self.rng.next_f64() >= self.p_step {
             return None;
         }
-        let n = self.places.len();
-        let pickup = self.rng.below(n);
-        let mut drop = self.rng.below(n - 1);
-        if drop >= pickup {
-            drop += 1; // skip the pickup: drop is uniform over the others
-        }
+        let (from, to) = match &self.drops {
+            // between any two places
+            None => {
+                let n = self.places.len();
+                let from = self.rng.below(n);
+                let mut to = self.rng.below(n - 1);
+                if to >= from {
+                    to += 1; // skip the pickup: drop is uniform over the others
+                }
+                (&self.places[from], &self.places[to])
+            }
+            // from a pickup place to a drop place, or back
+            Some((drops, both)) => {
+                let reverse = *both && self.rng.below(2) == 1;
+                let a = &self.places[self.rng.below(self.places.len())];
+                let b = &drops[self.rng.below(drops.len())];
+                if reverse { (b, a) } else { (a, b) }
+            }
+        };
         let node_of = |rng: &mut Rng, place: &[NodeIdx]| match place {
             [only] => *only,
             _ => place[rng.below(place.len())],
         };
-        let pickup = node_of(&mut self.rng, &self.places[pickup]);
-        let drop = node_of(&mut self.rng, &self.places[drop]);
+        let pickup = node_of(&mut self.rng, from);
+        let drop = node_of(&mut self.rng, to);
         let job = Job {
             id: self.next_id,
             pickup,
@@ -182,4 +234,27 @@ impl JobGenerator {
         self.next_id += 1;
         Some(job)
     }
+}
+
+/// The places without empty ones and without identical lists, in their order.
+fn unique_places(places: &[Vec<NodeIdx>]) -> Vec<Vec<NodeIdx>> {
+    let mut unique: Vec<Vec<NodeIdx>> = Vec::new();
+    for p in places {
+        if !p.is_empty() && !unique.contains(p) {
+            unique.push(p.clone());
+        }
+    }
+    unique
+}
+
+/// The probability of a new job in one step of `dt` seconds.
+fn per_step(rate_per_hour: f64, dt: f64) -> Result<f64, JobError> {
+    if !(rate_per_hour.is_finite() && rate_per_hour >= 0.0) {
+        return Err(JobError::BadRate(rate_per_hour));
+    }
+    let p_step = rate_per_hour / 3600.0 * dt;
+    if p_step > 1.0 {
+        return Err(JobError::RateTooHighForStep);
+    }
+    Ok(p_step)
 }

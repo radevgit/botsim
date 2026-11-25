@@ -1,0 +1,65 @@
+# M1, delay variant "short" (stops of 5 to 15 s, 6 per hour of driving).
+# Everything else is as in m1.toml. FROZEN, see there.
+name = "m1-short"
+seed = 1
+duration = 7200.0
+time_step = 0.05
+start_time = 2026-11-25T10:00:00Z
+lif = "m1.lif.json"
+deadlock_timeout = 20.0
+conflict_clearance = 0.10
+# route with load: each other robot on an edge (or at the node it ends at) makes the
+# edge 5 m longer for the route, so that robots spread over the corridors
+route_load_weight = 5.0
+
+# 12 robots, each starts in its own parking lay-by
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "Y"            # forklift, 2.4 m x 1.4 m
+factsheet = "forklift.factsheet.json"
+start_nodes = ["KB1", "KT1"]
+start_heading = "road"
+action_time = 1.0
+
+[robot.action_times]
+pick = 8.0
+drop = 8.0
+
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "X"            # carrier, 1.2 m x 0.8 m
+factsheet = "diff_robot.factsheet.json"
+start_nodes = ["KB2", "KB3", "KT2", "KT3"]
+start_heading = "road"
+action_time = 1.0
+
+[robot.action_times]
+pick = 5.0
+drop = 5.0
+
+[[robot]]
+manufacturer = "ACME"
+serial_prefix = "C"            # small robot, 0.5 m x 0.5 m
+factsheet = "small_robot.factsheet.json"
+start_nodes = ["KB4", "KB5", "KB6", "KT4", "KT5", "KT6"]
+start_heading = "road"
+action_time = 1.0
+
+[robot.action_times]
+pick = 3.0
+drop = 3.0
+
+# between the pick stations (top) and the drop stations (bottom), in both directions
+[jobs]
+rate_per_hour = 90.0
+pickup_stations = ["P1", "P2", "P3", "P4"]
+drop_stations = ["D1", "D2", "D3", "D4"]
+both_directions = true
+
+[disturbances]
+enabled = true
+speed_variation = 0.05
+action_variation = 0.2
+stops_per_hour = 6.0
+stop_seconds_min = 5.0
+stop_seconds_max = 15.0

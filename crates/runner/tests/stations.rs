@@ -85,6 +85,68 @@ fn wrong_job_places_are_refused() {
     assert!(e.contains("two stations"), "{e}");
 }
 
+/// The (pickup, drop) node ids of the jobs of a long run of the generator.
+fn pairs(jobs: &str) -> BTreeSet<(String, String)> {
+    let s = Scenario::from_toml(&text(jobs)).unwrap();
+    let w = s.build_world(&dir()).unwrap();
+    let mut g = s.job_generator(w.graph()).unwrap().unwrap();
+    let id = |n: usize| w.graph().nodes[n].id.clone();
+    (0..400_000)
+        .filter_map(|t| g.step(t))
+        .map(|j| (id(j.pickup), id(j.drop)))
+        .collect()
+}
+
+#[test]
+fn pickup_and_drop_stations_give_jobs_from_one_list_to_the_other() {
+    let lists = "rate_per_hour = 60.0\n\
+        pickup_stations = [\"Goods-In\"]\n\
+        drop_stations = [\"Rack-B\", \"Goods-Out\"]";
+    let forward = pairs(lists);
+    let expect: BTreeSet<_> = [("P0", "P2"), ("P0", "P3")]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+    assert_eq!(forward, expect);
+    // with both directions the way back appears too, and nothing else
+    let both = pairs(&format!("{lists}\nboth_directions = true"));
+    let expect: BTreeSet<_> = [("P0", "P2"), ("P0", "P3"), ("P2", "P0"), ("P3", "P0")]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+    assert_eq!(both, expect);
+}
+
+#[test]
+fn bad_pickup_and_drop_lists_are_refused_with_the_reason() {
+    let bad = |jobs: &str| match Scenario::from_toml(&text(jobs)) {
+        Err(e) => e.to_string(),
+        Ok(s) => s
+            .build_world(&dir())
+            .and_then(|w| s.job_generator(w.graph()).map(|_| ()))
+            .unwrap_err()
+            .to_string(),
+    };
+    let rate = "rate_per_hour = 60.0\n";
+    let e = bad(&format!("{rate}pickup_stations = [\"Goods-In\"]"));
+    assert!(e.contains("go together"), "{e}");
+    let e = bad(&format!(
+        "{rate}pickup_stations = [\"Goods-In\"]\ndrop_stations = [\"Goods-In\"]"
+    ));
+    assert!(e.contains("both a pickup and a drop"), "{e}");
+    let e = bad(&format!(
+        "{rate}pickup_stations = [\"Goods-In\"]\ndrop_stations = [\"Nowhere\"]"
+    ));
+    assert!(e.contains("Nowhere"), "{e}");
+    let e = bad(&format!(
+        "{rate}stations = [\"Rack-A\", \"Rack-B\"]\n\
+         pickup_stations = [\"Goods-In\"]\ndrop_stations = [\"Goods-Out\"]"
+    ));
+    assert!(e.contains("without nodes or stations"), "{e}");
+    let e = bad(&format!("{rate}both_directions = true"));
+    assert!(e.contains("needs pickup_stations"), "{e}");
+}
+
 #[test]
 fn a_layout_without_stations_needs_nodes_for_its_jobs() {
     // the ring of the jobs test has no stations

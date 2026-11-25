@@ -11,6 +11,7 @@
 
 use botsim_baseline::conflicts::{ConflictInput, NodeConflictInput};
 use botsim_baseline::controller::{ChargePolicy, Controller};
+use botsim_baseline::policy::TrafficPolicy;
 use botsim_core::jobs::Job;
 use botsim_core::lift::DoorState;
 use botsim_core::world::World;
@@ -38,6 +39,9 @@ pub struct Summary {
     pub deadlocks: Vec<DeadlockSummary>,
     /// Random stops that started (0 without disturbances).
     pub random_stops: usize,
+    /// Times a robot was stopped by its protective field (stops of one robot less
+    /// than 1 s apart count once; see `World::safety_stops`).
+    pub safety_stops: usize,
     /// The loaded zone set; left out without `zone_set` in the scenario.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zone_set: Option<ZoneSetSummary>,
@@ -50,6 +54,10 @@ pub struct Summary {
     /// The batteries; left out when no robot has a battery model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery: Option<BatterySummary>,
+    /// Parking of idle robots; left out if the layout has no parking places (or no
+    /// controller runs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parking: Option<ParkingSummary>,
     pub jobs: JobsSummary,
     pub metrics: MetricsSummary,
     pub robots: Vec<RobotSummary>,
@@ -75,6 +83,18 @@ pub struct BatterySummary {
     /// Simulated seconds free robots below the low limit waited for a charger (all
     /// robots together).
     pub waiting_for_charger_seconds: f64,
+}
+
+/// Idle robots and parking places (U13).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ParkingSummary {
+    /// Parking places of the layout (interaction nodes of `parking` stations).
+    pub places: usize,
+    /// Trips to a parking place the controller started.
+    pub trips: usize,
+    /// Times a robot without a job got no place and stayed where it was (counted
+    /// once until it gets a route again).
+    pub no_free_place: usize,
 }
 
 /// How long the controller took per step (real time, not simulated time).
@@ -171,6 +191,9 @@ pub struct JobsSummary {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MetricsSummary {
     pub throughput_per_hour: f64,
+    /// Mean time of a finished job, from the moment a robot got it to its end
+    /// (the time it waited for a robot is not in it); `null` if none was finished.
+    pub job_time_avg_seconds: Option<f64>,
     pub waiting_avg_seconds: Option<f64>,
     pub waiting_max_seconds: Option<f64>,
 }
@@ -267,13 +290,41 @@ pub fn run(scenario: &Scenario, world: World) -> Result<Summary, ScenarioError> 
 /// from the layout and the factsheets) goes to the controller.
 pub fn run_with(
     scenario: &Scenario,
+    world: World,
+    measure_time: bool,
+) -> Result<Summary, ScenarioError> {
+    run_controller(scenario, world, measure_time, Controller::new)
+}
+
+/// Like [`run`], with the traffic rules of `policy` instead of the baseline's: the
+/// controller dispatches as usual and asks `policy` who may go now (see
+/// [`botsim_baseline::policy`]). The policy gets the same conflict lists the baseline
+/// gets, computed by the runner (unless the scenario says
+/// `conflict_reservation = false`). Without a `[jobs]` section no controller runs and
+/// the policy is not used. To record the run, attach the observer to `world` first,
+/// as for [`run`].
+pub fn run_with_policy(
+    scenario: &Scenario,
+    world: World,
+    policy: Box<dyn TrafficPolicy>,
+) -> Result<Summary, ScenarioError> {
+    run_controller(scenario, world, false, |w| {
+        Controller::with_policy(w, policy)
+    })
+}
+
+/// The run itself; `make` builds the controller for the world.
+fn run_controller<P: TrafficPolicy>(
+    scenario: &Scenario,
     mut world: World,
     measure_time: bool,
+    make: impl FnOnce(&World) -> Controller<P>,
 ) -> Result<Summary, ScenarioError> {
     let ticks = ticks_for(scenario.duration, scenario.time_step);
     let mut generator = scenario.job_generator(world.graph())?;
-    let mut controller = generator.as_ref().map(|_| {
-        let mut c = Controller::new(&world);
+    // (a controller only with jobs)
+    let mut controller = generator.is_some().then(|| {
+        let mut c = make(&world);
         c.set_load_weight(scenario.route_load_weight);
         c.set_wait_weight(scenario.route_wait_weight);
         // robots with a low battery go to a charger (only with chargers in the world)
@@ -288,8 +339,8 @@ pub fn run_with(
             && let Some(path) = &scenario.source
         {
             let (edges, nodes) = conflict_input(scenario, path);
-            c.set_conflicts(&edges);
-            c.set_node_conflicts(&nodes);
+            c.policy_mut().conflicts(&edges);
+            c.policy_mut().node_conflicts(&nodes);
         }
         c
     });
@@ -329,6 +380,14 @@ pub fn run_with(
                 },
                 MetricsSummary {
                     throughput_per_hour: m.throughput_per_hour,
+                    job_time_avg_seconds: (!c.completed().is_empty()).then(|| {
+                        let ticks: u64 = c
+                            .completed()
+                            .iter()
+                            .map(|d| d.finished_tick.saturating_sub(d.assigned_tick))
+                            .sum();
+                        round_micro(ticks as f64 * world.dt() / c.completed().len() as f64)
+                    }),
                     waiting_avg_seconds: m.waiting_avg_seconds.map(round_micro),
                     waiting_max_seconds: m.waiting_max_seconds.map(round_micro),
                 },
@@ -345,6 +404,7 @@ pub fn run_with(
             },
             MetricsSummary {
                 throughput_per_hour: 0.0,
+                job_time_avg_seconds: None,
                 waiting_avg_seconds: None,
                 waiting_max_seconds: None,
             },
@@ -403,7 +463,16 @@ pub fn run_with(
         scenario: scenario.name.clone(),
         deadlock_count: deadlocks.len(),
         deadlocks,
+        parking: controller
+            .as_ref()
+            .filter(|c| c.parking_places() > 0)
+            .map(|c| ParkingSummary {
+                places: c.parking_places(),
+                trips: c.park_trips(),
+                no_free_place: c.no_free_parking(),
+            }),
         random_stops: world.random_stops(),
+        safety_stops: world.safety_stops(),
         battery: world.battery_report().map(|b| BatterySummary {
             robots: b.robots,
             ran_empty: b.ran_empty,

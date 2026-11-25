@@ -58,6 +58,9 @@
 //! nodes = ["A", "C"]             # where jobs start and end (>= 2 different), or
 //! # stations = ["S1", "S2"]       # LIF stations instead (not both); with neither:
 //! #                               # between all the stations of the layout
+//! # pickup_stations = ["P1"]      # or: jobs from these stations to the drop
+//! # drop_stations = ["D1", "D2"]  # stations (both lists, no nodes / stations)
+//! # both_directions = true        # and also back, with equal chance
 //! ```
 //!
 //! ```toml
@@ -327,6 +330,19 @@ pub struct JobsConfig {
     /// of the layout.
     #[serde(default)]
     pub stations: Vec<String>,
+    /// Station ids where jobs are picked up; with `drop_stations`, instead of
+    /// `nodes` and `stations`: a job goes from one of these stations to one of the
+    /// drop stations.
+    #[serde(default)]
+    pub pickup_stations: Vec<String>,
+    /// Station ids where those jobs are dropped (none of them a pickup station).
+    #[serde(default)]
+    pub drop_stations: Vec<String>,
+    /// With `pickup_stations` and `drop_stations`: also make jobs the other way
+    /// round (picked up at a drop station, dropped at a pickup station), with equal
+    /// chance. Default `false`.
+    #[serde(default)]
+    pub both_directions: bool,
 }
 
 /// The `start_heading` of a robot group: an angle in radians for all robots, or
@@ -579,6 +595,30 @@ impl Scenario {
             if !j.nodes.is_empty() && j.nodes.len() < 2 {
                 return invalid("[jobs] nodes needs at least two nodes".into());
             }
+            if !j.pickup_stations.is_empty() || !j.drop_stations.is_empty() {
+                if j.pickup_stations.is_empty() || j.drop_stations.is_empty() {
+                    return invalid("[jobs] pickup_stations and drop_stations go together".into());
+                }
+                if !j.nodes.is_empty() || !j.stations.is_empty() {
+                    return invalid(
+                        "[jobs] use pickup_stations and drop_stations without nodes or stations"
+                            .into(),
+                    );
+                }
+                if let Some(s) = j
+                    .pickup_stations
+                    .iter()
+                    .find(|s| j.drop_stations.contains(s))
+                {
+                    return invalid(format!(
+                        "[jobs] station \"{s}\" is both a pickup and a drop station"
+                    ));
+                }
+            } else if j.both_directions {
+                return invalid(
+                    "[jobs] both_directions needs pickup_stations and drop_stations".into(),
+                );
+            }
         }
         if self.robots.is_empty() {
             return invalid("at least one [[robot]] group is needed".into());
@@ -617,6 +657,32 @@ impl Scenario {
         };
         let too_few =
             |e: botsim_core::jobs::JobError| ScenarioError::Invalid(format!("[jobs] {e}"));
+        if !j.pickup_stations.is_empty() {
+            let places = |ids: &[String]| -> Result<Vec<Vec<_>>, ScenarioError> {
+                ids.iter()
+                    .map(|id| {
+                        graph
+                            .station_idx(id)
+                            .map(|s| graph.stations[s].interaction_nodes.clone())
+                            .ok_or_else(|| {
+                                ScenarioError::Invalid(format!(
+                                    "[jobs] station \"{id}\" is not in the layout"
+                                ))
+                            })
+                    })
+                    .collect()
+            };
+            return JobGenerator::between_groups(
+                self.seed,
+                &places(&j.pickup_stations)?,
+                &places(&j.drop_stations)?,
+                j.both_directions,
+                j.rate_per_hour,
+                self.time_step,
+            )
+            .map(Some)
+            .map_err(too_few);
+        }
         if j.nodes.is_empty() {
             // between stations: the listed ones, or all of the layout
             let stations: Vec<usize> = if j.stations.is_empty() {

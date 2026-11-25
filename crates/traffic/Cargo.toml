@@ -1,0 +1,16 @@
+[package]
+name = "botsim-traffic"
+description = "Passing order for mixed VDA 5050 robot fleets, free of collisions and deadlocks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors = ["radevgit"]
+
+[dependencies]
+botsim-sweep = { path = "../sweep" }
+vdma-lif = "0.1.0"
+
+[dev-dependencies]
+serde_json = "1"

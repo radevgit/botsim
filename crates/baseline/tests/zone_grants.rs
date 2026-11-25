@@ -263,6 +263,61 @@ fn busy_ring_with(zones_on: bool, by_message: bool, delay: u64) -> (usize, Vec<S
 }
 
 #[test]
+fn a_robot_that_waits_for_a_zone_names_the_robot_that_has_it() {
+    let mut grants = ZoneGrants::new(zones(&ring()));
+    // robot 0 gets zone a, robot 2 stands in it without a grant; robot 1 waits
+    let robots = [
+        robot(vec![request("r0", "a")]),
+        robot(vec![request("r1", "a")]),
+        robot(vec![]),
+    ];
+    grants.decide(&robots);
+    assert_eq!(grants.blockers(1), vec![0]);
+    assert_eq!(grants.blockers(0), Vec::<usize>::new());
+    let robots = [
+        robot(vec![request("r0", "a")]),
+        robot(vec![request("r1", "a")]),
+        inside(5.0, vec![]),
+    ];
+    grants.decide(&robots);
+    assert_eq!(grants.blockers(1), vec![0, 2]);
+}
+
+#[test]
+fn in_a_run_zone_waits_are_named_with_their_blocker() {
+    let g = ring();
+    let nodes: Vec<_> = (0..4)
+        .map(|i| g.node_idx(&format!("N{i}")).unwrap())
+        .collect();
+    let f: Factsheet =
+        serde_json::from_str(include_str!("data/diff_robot.factsheet.json")).unwrap();
+    let spec = RobotSpec::from_factsheet(&f).unwrap();
+    let z = zones(&g);
+    let mut w = World::new(g, DT, 0).unwrap();
+    w.set_zones(z);
+    for (i, &n) in [nodes[0], nodes[1], nodes[3]].iter().enumerate() {
+        let id = RobotId::new("ACME", &format!("R-{}", i + 1));
+        let times = ActionTimes::new(1.0).with("pick", 5.0).with("drop", 5.0);
+        w.add_robot(id, spec.clone(), times, n, 0.0).unwrap();
+    }
+    let mut c = Controller::new(&w);
+    let mut gen_ = JobGenerator::new(5, &nodes, 240.0, DT).unwrap();
+    let (mut zone_waits, mut named) = (0, 0);
+    for t in 0..24_000u64 {
+        let new: Vec<Job> = gen_.step(t).into_iter().collect();
+        c.step(&mut w, new);
+        w.step();
+        for wait in w.waits().iter().flatten() {
+            if wait.reason == botsim_core::waiting::WaitReason::Zone {
+                zone_waits += 1;
+                named += usize::from(wait.blocker.is_some());
+            }
+        }
+    }
+    assert!(named > 0, "{named} of {zone_waits} zone waits named");
+}
+
+#[test]
 fn never_two_robots_inside_one_release_zone_and_the_work_gets_done() {
     let (done, snaps) = busy_ring(true);
     assert!(done > 20, "{done} jobs done");

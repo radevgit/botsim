@@ -137,9 +137,15 @@ fn the_second_robot_waits_before_the_entrance_until_the_lift_is_free() {
     let mut jobs = Some(vec![job(&g, 1, "N2", "N101"), job(&g, 2, "N1", "N102")]);
 
     let mut seen_waiting = false;
+    let mut named_the_owner = false;
+    let for_the_lift = botsim_core::waiting::Wait {
+        reason: botsim_core::waiting::WaitReason::Lift,
+        blocker: Some(0),
+    };
     for _ in 0..16000 {
         c.step(&mut w, jobs.take().unwrap_or_default());
         w.step();
+        named_the_owner |= w.waits().get(1) == Some(&Some(for_the_lift));
         // while R-1 is in the cabin, R-2 stands on N1 (x = 0), not on the entrance
         if w.lift_rider("L1").unwrap() == Some(&id(1)) {
             let p = w.pose(&id(2)).unwrap();
@@ -148,6 +154,7 @@ fn the_second_robot_waits_before_the_entrance_until_the_lift_is_free() {
         }
     }
     assert!(seen_waiting);
+    assert!(named_the_owner, "R-2 waits for the lift R-1 owns");
     assert_eq!(c.completed().len(), 2, "both jobs are done");
     assert_eq!(map_of(&w, 1), LEVEL_2);
     assert_eq!(map_of(&w, 2), LEVEL_2);

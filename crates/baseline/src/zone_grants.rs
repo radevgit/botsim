@@ -51,6 +51,8 @@ pub struct ZoneGrants {
     granted: Vec<Entry>,
     /// Requests that were told QUEUED already.
     told_queued: HashSet<(usize, String)>,
+    /// `(waiting robot, robot that keeps a zone from it)`, as of the last decision.
+    kept_from: Vec<(usize, usize)>,
 }
 
 impl ZoneGrants {
@@ -60,7 +62,23 @@ impl ZoneGrants {
             queue: Vec::new(),
             granted: Vec::new(),
             told_queued: HashSet::new(),
+            kept_from: Vec::new(),
         }
+    }
+
+    /// The robots that kept a zone from `robot` at the last decision: those with a
+    /// grant for a zone it waits for, and those standing inside it; sorted, each
+    /// once.
+    pub fn blockers(&self, robot: usize) -> Vec<usize> {
+        let mut found: Vec<usize> = self
+            .kept_from
+            .iter()
+            .filter(|(r, _)| *r == robot)
+            .map(|&(_, b)| b)
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        found
     }
 
     /// Who holds which zone now: `(robot, zone index)`.
@@ -118,6 +136,7 @@ impl ZoneGrants {
         // answer in queue order
         let mut answers = Vec::new();
         let waiting = std::mem::take(&mut self.queue);
+        self.kept_from.clear();
         for e in waiting {
             let free = !self
                 .granted
@@ -134,6 +153,21 @@ impl ZoneGrants {
                 });
                 self.granted.push(e);
             } else {
+                let holders = self
+                    .granted
+                    .iter()
+                    .filter(|g| g.zone == e.zone)
+                    .map(|g| g.robot);
+                let standing = inside
+                    .iter()
+                    .filter(|(_, zs)| zs.contains(&e.zone))
+                    .map(|(r, _)| *r);
+                self.kept_from.extend(
+                    holders
+                        .chain(standing)
+                        .filter(|&r| r != e.robot)
+                        .map(|r| (e.robot, r)),
+                );
                 if self.told_queued.insert((e.robot, e.request.clone())) {
                     answers.push(Answer {
                         robot: e.robot,

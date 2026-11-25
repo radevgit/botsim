@@ -281,4 +281,13 @@ fn robots_going_opposite_ways_through_a_door_in_a_one_lane_corridor_do_not_pass(
     run_no_check(&mut w, &mut c, jobs, 20000);
     assert!(c.completed().len() < 2, "{} done", c.completed().len());
     assert!(w.collisions().is_empty());
+    // one waits for the door the other owns, the other for the node held by it
+    let waits: Vec<_> = w.waits().iter().flatten().collect();
+    assert_eq!(waits.len(), 2, "{waits:?}");
+    let door = waits
+        .iter()
+        .filter(|w| w.reason == botsim_core::waiting::WaitReason::Door);
+    assert_eq!(door.count(), 1, "{waits:?}");
+    assert!(waits.iter().all(|w| w.blocker.is_some()), "{waits:?}");
+    assert_eq!(w.deadlocks().len(), 1);
 }

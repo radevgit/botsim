@@ -111,6 +111,15 @@ impl DoorDesk {
         }
     }
 
+    /// The other robot that owns the door [`DoorDesk::window`] keeps `robot` waiting
+    /// for at plan node `from`, the end of its released route (the door of the edge
+    /// that starts there); `None` if no door does.
+    pub fn held_by(&self, robot: usize, plan: &Plan, from: usize) -> Option<usize> {
+        let door = *self.door_of.get(plan.edges.get(from)?)?;
+        let owner = self.owners[door].as_ref()?.robot;
+        (owner != robot).then_some(owner)
+    }
+
     /// Does a door guard this layout edge?
     pub fn is_guarded(&self, edge: EdgeIdx) -> bool {
         self.door_of.contains_key(&edge)

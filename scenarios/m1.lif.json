@@ -1,0 +1,5377 @@
+{
+  "metaInformation": {
+    "creator": "radevgit",
+    "exportTimestamp": "2026-11-25T10:00:00.000Z",
+    "lifId": "m1",
+    "lifVersion": "2.0.0"
+  },
+  "origins": [
+    {
+      "layouts": [
+        {
+          "edges": [
+            {
+              "edgeId": "BI01-BI00",
+              "endNodeId": "BI00",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI01"
+            },
+            {
+              "edgeId": "BO00-BO01",
+              "endNodeId": "BO01",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO00"
+            },
+            {
+              "edgeId": "BI02-BI01",
+              "endNodeId": "BI01",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI02"
+            },
+            {
+              "edgeId": "BO01-BO02",
+              "endNodeId": "BO02",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO01"
+            },
+            {
+              "edgeId": "BI03-BI02",
+              "endNodeId": "BI02",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI03"
+            },
+            {
+              "edgeId": "BO02-BO03",
+              "endNodeId": "BO03",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO02"
+            },
+            {
+              "edgeId": "BI04-BI03",
+              "endNodeId": "BI03",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI04"
+            },
+            {
+              "edgeId": "BO03-BO04",
+              "endNodeId": "BO04",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO03"
+            },
+            {
+              "edgeId": "BI05-BI04",
+              "endNodeId": "BI04",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI05"
+            },
+            {
+              "edgeId": "BO04-BO05",
+              "endNodeId": "BO05",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO04"
+            },
+            {
+              "edgeId": "BI06-BI05",
+              "endNodeId": "BI05",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI06"
+            },
+            {
+              "edgeId": "BO05-BO06",
+              "endNodeId": "BO06",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO05"
+            },
+            {
+              "edgeId": "BI07-BI06",
+              "endNodeId": "BI06",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI07"
+            },
+            {
+              "edgeId": "BO06-BO07",
+              "endNodeId": "BO07",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO06"
+            },
+            {
+              "edgeId": "BI08-BI07",
+              "endNodeId": "BI07",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI08"
+            },
+            {
+              "edgeId": "BO07-BO08",
+              "endNodeId": "BO08",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO07"
+            },
+            {
+              "edgeId": "BI09-BI08",
+              "endNodeId": "BI08",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI09"
+            },
+            {
+              "edgeId": "BO08-BO09",
+              "endNodeId": "BO09",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO08"
+            },
+            {
+              "edgeId": "BI10-BI09",
+              "endNodeId": "BI09",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI10"
+            },
+            {
+              "edgeId": "BO09-BO10",
+              "endNodeId": "BO10",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO09"
+            },
+            {
+              "edgeId": "BI11-BI10",
+              "endNodeId": "BI10",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI11"
+            },
+            {
+              "edgeId": "BO10-BO11",
+              "endNodeId": "BO11",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO10"
+            },
+            {
+              "edgeId": "BI12-BI11",
+              "endNodeId": "BI11",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI12"
+            },
+            {
+              "edgeId": "BO11-BO12",
+              "endNodeId": "BO12",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO11"
+            },
+            {
+              "edgeId": "BI13-BI12",
+              "endNodeId": "BI12",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI13"
+            },
+            {
+              "edgeId": "BO12-BO13",
+              "endNodeId": "BO13",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO12"
+            },
+            {
+              "edgeId": "BI14-BI13",
+              "endNodeId": "BI13",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI14"
+            },
+            {
+              "edgeId": "BO13-BO14",
+              "endNodeId": "BO14",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO13"
+            },
+            {
+              "edgeId": "BI00-BO00",
+              "endNodeId": "BO00",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI00"
+            },
+            {
+              "edgeId": "BI03-BO03",
+              "endNodeId": "BO03",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI03"
+            },
+            {
+              "edgeId": "BI09-BO09",
+              "endNodeId": "BO09",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI09"
+            },
+            {
+              "edgeId": "BO05-BI05",
+              "endNodeId": "BI05",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO05"
+            },
+            {
+              "edgeId": "BO11-BI11",
+              "endNodeId": "BI11",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO11"
+            },
+            {
+              "edgeId": "BO14-BI14",
+              "endNodeId": "BI14",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BO14"
+            },
+            {
+              "edgeId": "BI03-D1",
+              "endNodeId": "D1",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI03"
+            },
+            {
+              "edgeId": "D1-BI02",
+              "endNodeId": "BI02",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "D1"
+            },
+            {
+              "edgeId": "BI05-D2",
+              "endNodeId": "D2",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI05"
+            },
+            {
+              "edgeId": "D2-BI04",
+              "endNodeId": "BI04",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "D2"
+            },
+            {
+              "edgeId": "BI09-D3",
+              "endNodeId": "D3",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI09"
+            },
+            {
+              "edgeId": "D3-BI08",
+              "endNodeId": "BI08",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "D3"
+            },
+            {
+              "edgeId": "BI11-D4",
+              "endNodeId": "D4",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI11"
+            },
+            {
+              "edgeId": "D4-BI10",
+              "endNodeId": "BI10",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "D4"
+            },
+            {
+              "edgeId": "BI00-KB1",
+              "endNodeId": "KB1",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI00"
+            },
+            {
+              "edgeId": "KB1-BI00",
+              "endNodeId": "BI00",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "KB1"
+            },
+            {
+              "edgeId": "BI01-KB2",
+              "endNodeId": "KB2",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI01"
+            },
+            {
+              "edgeId": "KB2-BI01",
+              "endNodeId": "BI01",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "KB2"
+            },
+            {
+              "edgeId": "BI02-KB3",
+              "endNodeId": "KB3",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI02"
+            },
+            {
+              "edgeId": "KB3-BI02",
+              "endNodeId": "BI02",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "KB3"
+            },
+            {
+              "edgeId": "BI12-KB4",
+              "endNodeId": "KB4",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI12"
+            },
+            {
+              "edgeId": "KB4-BI12",
+              "endNodeId": "BI12",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "KB4"
+            },
+            {
+              "edgeId": "BI13-KB5",
+              "endNodeId": "KB5",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI13"
+            },
+            {
+              "edgeId": "KB5-BI13",
+              "endNodeId": "BI13",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "KB5"
+            },
+            {
+              "edgeId": "BI14-KB6",
+              "endNodeId": "KB6",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI14"
+            },
+            {
+              "edgeId": "KB6-BI14",
+              "endNodeId": "BI14",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "KB6"
+            },
+            {
+              "edgeId": "TI00-TI01",
+              "endNodeId": "TI01",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI00"
+            },
+            {
+              "edgeId": "TO01-TO00",
+              "endNodeId": "TO00",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO01"
+            },
+            {
+              "edgeId": "TI01-TI02",
+              "endNodeId": "TI02",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI01"
+            },
+            {
+              "edgeId": "TO02-TO01",
+              "endNodeId": "TO01",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO02"
+            },
+            {
+              "edgeId": "TI02-TI03",
+              "endNodeId": "TI03",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI02"
+            },
+            {
+              "edgeId": "TO03-TO02",
+              "endNodeId": "TO02",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO03"
+            },
+            {
+              "edgeId": "TI03-TI04",
+              "endNodeId": "TI04",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI03"
+            },
+            {
+              "edgeId": "TO04-TO03",
+              "endNodeId": "TO03",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO04"
+            },
+            {
+              "edgeId": "TI04-TI05",
+              "endNodeId": "TI05",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI04"
+            },
+            {
+              "edgeId": "TO05-TO04",
+              "endNodeId": "TO04",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO05"
+            },
+            {
+              "edgeId": "TI05-TI06",
+              "endNodeId": "TI06",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI05"
+            },
+            {
+              "edgeId": "TO06-TO05",
+              "endNodeId": "TO05",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO06"
+            },
+            {
+              "edgeId": "TI06-TI07",
+              "endNodeId": "TI07",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI06"
+            },
+            {
+              "edgeId": "TO07-TO06",
+              "endNodeId": "TO06",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO07"
+            },
+            {
+              "edgeId": "TI07-TI08",
+              "endNodeId": "TI08",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI07"
+            },
+            {
+              "edgeId": "TO08-TO07",
+              "endNodeId": "TO07",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO08"
+            },
+            {
+              "edgeId": "TI08-TI09",
+              "endNodeId": "TI09",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI08"
+            },
+            {
+              "edgeId": "TO09-TO08",
+              "endNodeId": "TO08",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO09"
+            },
+            {
+              "edgeId": "TI09-TI10",
+              "endNodeId": "TI10",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI09"
+            },
+            {
+              "edgeId": "TO10-TO09",
+              "endNodeId": "TO09",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO10"
+            },
+            {
+              "edgeId": "TI10-TI11",
+              "endNodeId": "TI11",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI10"
+            },
+            {
+              "edgeId": "TO11-TO10",
+              "endNodeId": "TO10",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO11"
+            },
+            {
+              "edgeId": "TI11-TI12",
+              "endNodeId": "TI12",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI11"
+            },
+            {
+              "edgeId": "TO12-TO11",
+              "endNodeId": "TO11",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO12"
+            },
+            {
+              "edgeId": "TI12-TI13",
+              "endNodeId": "TI13",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI12"
+            },
+            {
+              "edgeId": "TO13-TO12",
+              "endNodeId": "TO12",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO13"
+            },
+            {
+              "edgeId": "TI13-TI14",
+              "endNodeId": "TI14",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI13"
+            },
+            {
+              "edgeId": "TO14-TO13",
+              "endNodeId": "TO13",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO14"
+            },
+            {
+              "edgeId": "TI14-TO14",
+              "endNodeId": "TO14",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI14"
+            },
+            {
+              "edgeId": "TI11-TO11",
+              "endNodeId": "TO11",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI11"
+            },
+            {
+              "edgeId": "TI05-TO05",
+              "endNodeId": "TO05",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI05"
+            },
+            {
+              "edgeId": "TO09-TI09",
+              "endNodeId": "TI09",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO09"
+            },
+            {
+              "edgeId": "TO03-TI03",
+              "endNodeId": "TI03",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO03"
+            },
+            {
+              "edgeId": "TO00-TI00",
+              "endNodeId": "TI00",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TO00"
+            },
+            {
+              "edgeId": "TI03-P1",
+              "endNodeId": "P1",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI03"
+            },
+            {
+              "edgeId": "P1-TI04",
+              "endNodeId": "TI04",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "P1"
+            },
+            {
+              "edgeId": "TI05-P2",
+              "endNodeId": "P2",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI05"
+            },
+            {
+              "edgeId": "P2-TI06",
+              "endNodeId": "TI06",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "P2"
+            },
+            {
+              "edgeId": "TI09-P3",
+              "endNodeId": "P3",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI09"
+            },
+            {
+              "edgeId": "P3-TI10",
+              "endNodeId": "TI10",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "P3"
+            },
+            {
+              "edgeId": "TI11-P4",
+              "endNodeId": "P4",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI11"
+            },
+            {
+              "edgeId": "P4-TI12",
+              "endNodeId": "TI12",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "P4"
+            },
+            {
+              "edgeId": "TI00-KT1",
+              "endNodeId": "KT1",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI00"
+            },
+            {
+              "edgeId": "KT1-TI00",
+              "endNodeId": "TI00",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "KT1"
+            },
+            {
+              "edgeId": "TI01-KT2",
+              "endNodeId": "KT2",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI01"
+            },
+            {
+              "edgeId": "KT2-TI01",
+              "endNodeId": "TI01",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "KT2"
+            },
+            {
+              "edgeId": "TI02-KT3",
+              "endNodeId": "KT3",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI02"
+            },
+            {
+              "edgeId": "KT3-TI02",
+              "endNodeId": "TI02",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "KT3"
+            },
+            {
+              "edgeId": "TI12-KT4",
+              "endNodeId": "KT4",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI12"
+            },
+            {
+              "edgeId": "KT4-TI12",
+              "endNodeId": "TI12",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "KT4"
+            },
+            {
+              "edgeId": "TI13-KT5",
+              "endNodeId": "KT5",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI13"
+            },
+            {
+              "edgeId": "KT5-TI13",
+              "endNodeId": "TI13",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "KT5"
+            },
+            {
+              "edgeId": "TI14-KT6",
+              "endNodeId": "KT6",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI14"
+            },
+            {
+              "edgeId": "KT6-TI14",
+              "endNodeId": "TI14",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "KT6"
+            },
+            {
+              "edgeId": "BI04-TI04",
+              "endNodeId": "TI04",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI04"
+            },
+            {
+              "edgeId": "TI04-BI04",
+              "endNodeId": "BI04",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI04"
+            },
+            {
+              "edgeId": "BI06-TI06",
+              "endNodeId": "TI06",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI06"
+            },
+            {
+              "edgeId": "TI06-BI06",
+              "endNodeId": "BI06",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI06"
+            },
+            {
+              "edgeId": "BI08-TI08",
+              "endNodeId": "TI08",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI08"
+            },
+            {
+              "edgeId": "TI08-BI08",
+              "endNodeId": "BI08",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI08"
+            },
+            {
+              "edgeId": "BI10-TI10",
+              "endNodeId": "TI10",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "BI10"
+            },
+            {
+              "edgeId": "TI10-BI10",
+              "endNodeId": "BI10",
+              "mobileRobotTypeEdgeProperties": [
+                {
+                  "mobileRobotOrientations": [
+                    0.0
+                  ],
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ],
+                  "orientationType": "TANGENTIAL"
+                }
+              ],
+              "startNodeId": "TI10"
+            }
+          ],
+          "layoutId": "L1",
+          "layoutVersion": "1",
+          "nodes": [
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI00",
+              "nodePosition": {
+                "x": -1.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO00",
+              "nodePosition": {
+                "x": -1.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI01",
+              "nodePosition": {
+                "x": 2.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO01",
+              "nodePosition": {
+                "x": 2.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI02",
+              "nodePosition": {
+                "x": 5.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO02",
+              "nodePosition": {
+                "x": 5.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI03",
+              "nodePosition": {
+                "x": 8.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO03",
+              "nodePosition": {
+                "x": 8.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI04",
+              "nodePosition": {
+                "x": 11.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO04",
+              "nodePosition": {
+                "x": 11.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI05",
+              "nodePosition": {
+                "x": 14.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO05",
+              "nodePosition": {
+                "x": 14.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI06",
+              "nodePosition": {
+                "x": 17.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO06",
+              "nodePosition": {
+                "x": 17.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI07",
+              "nodePosition": {
+                "x": 20.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO07",
+              "nodePosition": {
+                "x": 20.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI08",
+              "nodePosition": {
+                "x": 23.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO08",
+              "nodePosition": {
+                "x": 23.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI09",
+              "nodePosition": {
+                "x": 26.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO09",
+              "nodePosition": {
+                "x": 26.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI10",
+              "nodePosition": {
+                "x": 29.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO10",
+              "nodePosition": {
+                "x": 29.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI11",
+              "nodePosition": {
+                "x": 32.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO11",
+              "nodePosition": {
+                "x": 32.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI12",
+              "nodePosition": {
+                "x": 35.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO12",
+              "nodePosition": {
+                "x": 35.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI13",
+              "nodePosition": {
+                "x": 38.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO13",
+              "nodePosition": {
+                "x": 38.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BI14",
+              "nodePosition": {
+                "x": 41.0,
+                "y": 3.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "BO14",
+              "nodePosition": {
+                "x": 41.0,
+                "y": 0.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "D1",
+              "nodePosition": {
+                "x": 8.0,
+                "y": 6.25
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "D2",
+              "nodePosition": {
+                "x": 14.0,
+                "y": 6.25
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "D3",
+              "nodePosition": {
+                "x": 26.0,
+                "y": 6.25
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "D4",
+              "nodePosition": {
+                "x": 32.0,
+                "y": 6.25
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "KB1",
+              "nodePosition": {
+                "x": -1.0,
+                "y": 6.25
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "KB2",
+              "nodePosition": {
+                "x": 2.0,
+                "y": 6.25
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "KB3",
+              "nodePosition": {
+                "x": 5.0,
+                "y": 6.25
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "KB4",
+              "nodePosition": {
+                "x": 35.0,
+                "y": 6.25
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "KB5",
+              "nodePosition": {
+                "x": 38.0,
+                "y": 6.25
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "KB6",
+              "nodePosition": {
+                "x": 41.0,
+                "y": 6.25
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI00",
+              "nodePosition": {
+                "x": -1.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO00",
+              "nodePosition": {
+                "x": -1.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI01",
+              "nodePosition": {
+                "x": 2.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO01",
+              "nodePosition": {
+                "x": 2.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI02",
+              "nodePosition": {
+                "x": 5.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO02",
+              "nodePosition": {
+                "x": 5.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI03",
+              "nodePosition": {
+                "x": 8.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO03",
+              "nodePosition": {
+                "x": 8.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI04",
+              "nodePosition": {
+                "x": 11.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO04",
+              "nodePosition": {
+                "x": 11.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI05",
+              "nodePosition": {
+                "x": 14.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO05",
+              "nodePosition": {
+                "x": 14.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI06",
+              "nodePosition": {
+                "x": 17.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO06",
+              "nodePosition": {
+                "x": 17.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI07",
+              "nodePosition": {
+                "x": 20.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO07",
+              "nodePosition": {
+                "x": 20.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI08",
+              "nodePosition": {
+                "x": 23.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO08",
+              "nodePosition": {
+                "x": 23.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI09",
+              "nodePosition": {
+                "x": 26.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO09",
+              "nodePosition": {
+                "x": 26.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI10",
+              "nodePosition": {
+                "x": 29.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO10",
+              "nodePosition": {
+                "x": 29.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI11",
+              "nodePosition": {
+                "x": 32.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO11",
+              "nodePosition": {
+                "x": 32.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI12",
+              "nodePosition": {
+                "x": 35.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO12",
+              "nodePosition": {
+                "x": 35.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI13",
+              "nodePosition": {
+                "x": 38.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO13",
+              "nodePosition": {
+                "x": 38.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TI14",
+              "nodePosition": {
+                "x": 41.0,
+                "y": 23.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "TO14",
+              "nodePosition": {
+                "x": 41.0,
+                "y": 26.0
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "P1",
+              "nodePosition": {
+                "x": 8.0,
+                "y": 19.75
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "P2",
+              "nodePosition": {
+                "x": 14.0,
+                "y": 19.75
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "P3",
+              "nodePosition": {
+                "x": 26.0,
+                "y": 19.75
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "P4",
+              "nodePosition": {
+                "x": 32.0,
+                "y": 19.75
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "KT1",
+              "nodePosition": {
+                "x": -1.0,
+                "y": 19.75
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "KT2",
+              "nodePosition": {
+                "x": 2.0,
+                "y": 19.75
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "KT3",
+              "nodePosition": {
+                "x": 5.0,
+                "y": 19.75
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "KT4",
+              "nodePosition": {
+                "x": 35.0,
+                "y": 19.75
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "KT5",
+              "nodePosition": {
+                "x": 38.0,
+                "y": 19.75
+              }
+            },
+            {
+              "mapId": "M",
+              "mobileRobotTypeNodeProperties": [
+                {
+                  "mobileRobotTypes": [
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "X1"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "Y2"
+                    },
+                    {
+                      "manufacturer": "ACME",
+                      "seriesName": "C5"
+                    }
+                  ]
+                }
+              ],
+              "nodeId": "KT6",
+              "nodePosition": {
+                "x": 41.0,
+                "y": 19.75
+              }
+            }
+          ],
+          "stations": [
+            {
+              "interactionNodeIds": [
+                "D1"
+              ],
+              "stationId": "D1",
+              "stationType": "drop"
+            },
+            {
+              "interactionNodeIds": [
+                "D2"
+              ],
+              "stationId": "D2",
+              "stationType": "drop"
+            },
+            {
+              "interactionNodeIds": [
+                "D3"
+              ],
+              "stationId": "D3",
+              "stationType": "drop"
+            },
+            {
+              "interactionNodeIds": [
+                "D4"
+              ],
+              "stationId": "D4",
+              "stationType": "drop"
+            },
+            {
+              "interactionNodeIds": [
+                "KB1"
+              ],
+              "stationId": "KB1",
+              "stationType": "parking"
+            },
+            {
+              "interactionNodeIds": [
+                "KB2"
+              ],
+              "stationId": "KB2",
+              "stationType": "parking"
+            },
+            {
+              "interactionNodeIds": [
+                "KB3"
+              ],
+              "stationId": "KB3",
+              "stationType": "parking"
+            },
+            {
+              "interactionNodeIds": [
+                "KB4"
+              ],
+              "stationId": "KB4",
+              "stationType": "parking"
+            },
+            {
+              "interactionNodeIds": [
+                "KB5"
+              ],
+              "stationId": "KB5",
+              "stationType": "parking"
+            },
+            {
+              "interactionNodeIds": [
+                "KB6"
+              ],
+              "stationId": "KB6",
+              "stationType": "parking"
+            },
+            {
+              "interactionNodeIds": [
+                "P1"
+              ],
+              "stationId": "P1",
+              "stationType": "pick"
+            },
+            {
+              "interactionNodeIds": [
+                "P2"
+              ],
+              "stationId": "P2",
+              "stationType": "pick"
+            },
+            {
+              "interactionNodeIds": [
+                "P3"
+              ],
+              "stationId": "P3",
+              "stationType": "pick"
+            },
+            {
+              "interactionNodeIds": [
+                "P4"
+              ],
+              "stationId": "P4",
+              "stationType": "pick"
+            },
+            {
+              "interactionNodeIds": [
+                "KT1"
+              ],
+              "stationId": "KT1",
+              "stationType": "parking"
+            },
+            {
+              "interactionNodeIds": [
+                "KT2"
+              ],
+              "stationId": "KT2",
+              "stationType": "parking"
+            },
+            {
+              "interactionNodeIds": [
+                "KT3"
+              ],
+              "stationId": "KT3",
+              "stationType": "parking"
+            },
+            {
+              "interactionNodeIds": [
+                "KT4"
+              ],
+              "stationId": "KT4",
+              "stationType": "parking"
+            },
+            {
+              "interactionNodeIds": [
+                "KT5"
+              ],
+              "stationId": "KT5",
+              "stationType": "parking"
+            },
+            {
+              "interactionNodeIds": [
+                "KT6"
+              ],
+              "stationId": "KT6",
+              "stationType": "parking"
+            }
+          ]
+        }
+      ],
+      "originId": "O1"
+    }
+  ]
+}

@@ -1,21 +1,16 @@
 //! Deadlock detection (user decision S35). The simulator only observes and
 //! reports; resolving a deadlock is the controller's job.
 //!
-//! **Wait-for rule** (the world builds it from the robots' state messages): robot
-//! A *waits for* robot B if
-//! - A is stopped by its protective field and B is the robot in the field (a
-//!   *safety wait*, S76); or
-//! - A stands still with an order still ahead of it, is not busy with an action,
-//!   and B stands on A's next node, or has A's next node released ahead of it
-//!   (a *reservation wait*: the node is reserved though B is not there yet, S76).
+//! **Wait-for rule:** robot A *waits for* robot B if the world names B as the
+//! blocker of A's wait, whatever its reason (see [`crate::waiting`]).
 //!
 //! A **deadlock** is a cycle of such waits (A waits for B, B waits for A, or a
-//! longer ring, with either kind of link) that lasts at least the timeout
-//! (default 30 s).
+//! longer ring, with any reasons) that lasts at least the timeout (default 30 s).
 //!
-//! Limits: one wait per robot (the first next node; the robot in the field). A
+//! Limits: one wait per robot (one blocker, though several robots may cause it). A
 //! robot that waits for a robot that is not itself waiting (e.g. one standing idle
-//! for ever) is not a deadlock by this rule.
+//! for ever) is not a deadlock by this rule, nor is a wait whose blocker is
+//! unknown.
 
 use std::collections::HashMap;
 

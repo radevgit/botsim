@@ -241,6 +241,24 @@ impl LiftDesk {
         wanted
     }
 
+    /// The other robot that owns the lift [`LiftDesk::window`] keeps `robot` waiting
+    /// for at plan node `from`, the end of its released route; `None` if no lift does.
+    pub fn held_by(&self, robot: usize, plan: &Plan, from: usize) -> Option<usize> {
+        for (k, &edge) in plan.edges.iter().enumerate().skip(from) {
+            let Some(&(l, a, _)) = self.rides.get(&edge) else {
+                continue;
+            };
+            if self.gate(plan, k, l, a) > from {
+                return None; // the route may go on up to the gate
+            }
+            let owner = self.owners[l].as_ref().map(|o| o.robot);
+            if let Some(other) = owner.filter(|&r| r != robot) {
+                return Some(other);
+            }
+        }
+        None
+    }
+
     /// Is this layout edge a lift ride?
     pub fn is_ride(&self, edge: EdgeIdx) -> bool {
         self.rides.contains_key(&edge)

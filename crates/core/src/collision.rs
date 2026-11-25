@@ -5,7 +5,10 @@
 //! and **touching counts as overlap** (togo's rule; circle–circle follows it).
 //! Different maps never overlap; the caller checks that.
 
-use togo::prelude::{Circle, OrientedRect, overlap_circle_orect, overlap_orect_orect, point};
+use togo::prelude::{
+    Circle, OrientedRect, dist_circle_orect, dist_orect_orect, overlap_circle_orect,
+    overlap_orect_orect, point,
+};
 
 use crate::spec::Shape;
 
@@ -33,6 +36,19 @@ pub fn place(shape: &Shape, x: f64, y: f64, heading: f64) -> Body {
             half_width,
         )),
         Shape::Circle { cx, cy, radius } => Body::Circle(Circle::new(at(cx, cy), radius)),
+    }
+}
+
+/// The shortest distance between the two bodies; 0 if they overlap or touch.
+pub fn gap(a: &Body, b: &Body) -> f64 {
+    match (a, b) {
+        (Body::Rect(a), Body::Rect(b)) => dist_orect_orect(a, b),
+        (Body::Circle(c), Body::Rect(r)) | (Body::Rect(r), Body::Circle(c)) => {
+            dist_circle_orect(c, r)
+        }
+        (Body::Circle(a), Body::Circle(b)) => {
+            ((a.c.x - b.c.x).hypot(a.c.y - b.c.y) - a.r - b.r).max(0.0)
+        }
     }
 }
 

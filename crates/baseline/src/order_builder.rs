@@ -90,6 +90,22 @@ impl Plan {
         Some(plan)
     }
 
+    /// This route up to node `at`, then the route `then`, which starts there. The
+    /// actions `then` has on its first node are dropped: a robot does not run the
+    /// actions of the node an order update starts at.
+    pub fn continued(&self, at: usize, then: Plan) -> Plan {
+        let at = at.min(self.last());
+        let mut plan = Plan {
+            nodes: self.nodes[..=at].to_vec(),
+            edges: self.edges[..at].to_vec(),
+            actions: self.actions[..=at].to_vec(),
+        };
+        plan.nodes.extend(then.nodes.into_iter().skip(1));
+        plan.edges.extend(then.edges);
+        plan.actions.extend(then.actions.into_iter().skip(1));
+        plan
+    }
+
     /// Index of the last node.
     pub fn last(&self) -> usize {
         self.edges.len()

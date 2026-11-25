@@ -32,6 +32,22 @@ fn cli(file: &Path) -> Vec<u8> {
 }
 
 #[test]
+fn the_summary_has_the_mean_job_time_and_the_safety_stops() {
+    let r = run_file("jobs.toml");
+    let mean = r.metrics.job_time_avg_seconds.expect("jobs were done");
+    // a job drives some metres of the ring: more than a few seconds, and it cannot
+    // be longer than the run; it includes the waiting of the job
+    assert!(mean > 5.0 && mean < r.duration, "{mean}");
+    assert!(mean >= r.metrics.waiting_avg_seconds.unwrap());
+    let json = serde_json::to_value(&r).unwrap();
+    assert!(json["safety_stops"].is_u64(), "{json}");
+    // without jobs there is no job time, and standing robots have no safety stop
+    let idle = run_file("two_robots.toml");
+    assert_eq!(idle.metrics.job_time_avg_seconds, None);
+    assert_eq!(idle.safety_stops, 0);
+}
+
+#[test]
 fn without_a_jobs_section_nothing_happens() {
     let r = run_file("two_robots.toml");
     assert_eq!(

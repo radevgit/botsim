@@ -644,6 +644,13 @@ how the controller uses them. Not enforced by the simulator yet.)
   The seed in the scenario fixes the sequence; the job random stream is
   separate from any future random feature.
 - At most one job per step is created.
+- **Pickup and drop lists (U11):** instead of `nodes` or `stations`, `[jobs]` can
+  give `pickup_stations` and `drop_stations` (both; no station in both): a job is
+  picked up at one of the first and dropped at one of the second, each drawn
+  evenly (a station with several interaction nodes draws its node as below). With
+  `both_directions = true` each job is, with equal chance, that way or the reverse.
+  Only the job generator changes; scenarios without the lists give the same jobs as
+  before.
 - **Stations (S60).** The LIF can list stations: logical places where a robot
   interacts with the environment (`stationId`, optional name and type, and the
   `interactionNodeIds` where the interaction takes place). They are read into
@@ -664,6 +671,23 @@ how the controller uses them. Not enforced by the simulator yet.)
 ## 9. Baseline controller
 
 The bundled controller talks to the robots only with VDA 5050 messages.
+
+**Dispatcher and traffic policy (U9).** The controller has two parts. The
+**dispatcher** (`botsim_baseline::controller`) gives jobs, plans and re-plans whole
+routes, sends charging trips, runs lifts and doors and builds and sends the messages.
+**Who may go now** is a `TrafficPolicy` (`botsim_baseline::policy`): how far each
+route is released (robot by robot, in the order of the robots, after a `cycle_start`
+with all of them), the wish for another route (with nodes to avoid), what happens
+after the releases (go-first), idle robots, RELEASE zone answers, and who holds a node
+or edge. The dispatcher never releases less than before nor past the window, a lift or
+a door, whatever the policy answers. The rules of this section about reservations,
+swept areas, go-first, the wait timeout and zone answers are the baseline's policy,
+`BaselinePolicy`. **They are frozen (U10):** only bug fixes (wrong behaviour against
+its own rules, panics, collisions caused by a bug); no new rules and no tuning,
+because the baseline is the reference other policies are measured against. The
+library runs a scenario with another policy with `botsim::summary::run_with_policy`
+(it gets the same conflict lists the baseline gets); the command line uses the
+baseline.
 
 - **Free robot**: no job; it stays where it is (**S31**). Its position is the
   layout node nearest to its reported position, within 0.1 m.
@@ -828,13 +852,20 @@ The bundled controller talks to the robots only with VDA 5050 messages.
     more of the route ahead, or fewer robots per street).
 - **Going first (S77, brief `baseline_deadlocks.md`, item 2).** A deadlock with a
   safety link: robot X stands at the end of its released route and waits for the
-  next node, which robot H has released; H is stopped (speed under 0.05 m/s) and
+  next node, which robot H has released; H is stopped (forward and sideways speed
+  under 0.05 m/s and turning under 0.05 rad/s; bug fix, step 103: a robot turning
+  on the spot counted as stopped, was gone first past, and then drove into the
+  robot that had taken its node) and
   X is right in front of it: within 4 m and 60° of H's heading, heading the same
   way (within 45°). H cannot move until X does. After `GIVE_WAY_AFTER_SECONDS`
   (5 s, my choice, before the 10 s re-route) X **takes the node and the edge over**
   (`Reservations::take_over_node/edge`): X holds them, its release goes on as
   usual, and H gets them back when X lets go of them (and not if H gave them up
-  itself). `Controller::give_ways()` counts it. **Not done head-on** (X heading
+  itself). While a node or edge on H's released way ahead is another robot's, H is
+  released **no further** (bug fix, step 97: H used to be released past X, drove
+  after it and hit it on a curve, warehouse 4 with charging, 770 s). What H had
+  released before the take-over stays released (a base cannot be taken back).
+  `Controller::give_ways()` counts it. **Not done head-on** (X heading
   against H): there both would run into each other; that needs a back-off to
   another node (not built). **Lane change / merge (brief update, X-011/O-018):**
   "same way" also holds when X's route after the node is the one H takes after it
@@ -911,6 +942,36 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 - Not yet: look-ahead beyond the window, robot types
   and per-type edge rules.
 
+### Parking idle robots (U13, S143)
+
+- Dispatcher behaviour, the same for every traffic policy (the user's exception to
+  the U10 freeze). **Parking places** are the interaction nodes of the layout
+  stations whose `stationType` is `parking` (any case), one robot each. A layout
+  without them: idle robots stay where they are, as before.
+- After the jobs of a cycle are given out, every robot left without one that does
+  not stand on a parking place is sent to a free one, the pair of robot and place
+  with the shortest route first. A place is free if no robot stands on it or holds
+  it and none is on its way there. The trip is an order `park-<n>` without actions;
+  it is not a job (not in completed, rejected or `in_progress`).
+- A robot that gets no place (none free, or no route to one) stays where it is; the
+  summary counts it once until it gets a route again (`parking.no_free_place`;
+  also `places`, `trips`; the section is left out without parking places).
+- A robot with a job leaves its place at once. A robot that refused a parking order
+  is not sent again until it has had a job. A robot below the critical battery charge
+  waits where it is, as before.
+- A robot **on its way** to a place can take a job (S144). It competes with the free
+  robots by route length: the released way it still has to drive, then the route from
+  its last released node to the pickup. The job **extends its order** (same order id
+  `park-<n>`, next `orderUpdateId`): the released part stays, the job's route
+  follows; the place is free again. The update releases nothing new; the next cycle
+  does. Not a candidate: its last released node is the pickup (a robot does not run
+  the actions of the node an update starts at), its order is not yet answered or is
+  being cancelled, it owns a lift or a door, or its battery is below the low limit.
+  A refused update cancels the order and gives the job up, as for any update (S70).
+- Fixed with it: after a route without an action at its end (a trip to a charger or
+  a parking place) the baseline kept the last edge and the node before it reserved
+  for good; it now gives back everything behind the robot when a route is done.
+
 ### Charging (charging brief step 2, first part; S129)
 
 - On only if the scenario has `charger_power_w` (chargers) and a battery model; the
@@ -939,6 +1000,14 @@ The bundled controller talks to the robots only with VDA 5050 messages.
 ## 10. Metrics
 
 - **Throughput**: finished jobs per simulated hour.
+- **Job time** (U11, `job_time_avg_seconds`): the mean, over finished jobs, of the
+  time from the moment a robot got the job until it finished it. The time a job
+  waited for a free robot is not in it.
+- **Safety stops** (U11, `safety_stops`): how many times a robot driving or turning
+  was stopped by its protective field. The field gets shorter while the robot
+  brakes and can let go and catch again, so a stop that begins less than 1 s
+  (`SAFETY_STOP_GAP_SECONDS`) after the field last held the same robot counts as
+  the same one. Random stops are counted apart (`random_stops`).
 - **Waiting** (**S32**): the time a robot stands still while it has a job and
   is not busy with an action (`pick`, `drop`, …); per job, reported as average
   and maximum over finished jobs. Jobs still running at the end are not
@@ -950,7 +1019,14 @@ The bundled controller talks to the robots only with VDA 5050 messages.
     not busy with an action, and B stands on A's next node (within 0.1 m) **or has
     that node released ahead of it** (reserved, though B is not there yet, **S76**);
   - (**safety wait**, **S76**) A is stopped by its protective field and B is the
-    robot in the field (the lowest index if several).
+    robot in the field (the lowest index if several);
+  - (**release wait**, step 105) as a reservation wait, with A's next node free: the
+    controller names B as the robot that keeps A from its next release
+    (`TrafficPolicy::blocker`, published with `World::publish_release_blockers`).
+    The baseline names the first of: the holder of the next node, of the edge to it,
+    of an edge whose swept area meets it, the other robot of a node-edge conflict.
+    Without it a wait for a swept area was invisible, and standstills went
+    unreported.
 
   A deadlock is a cycle of such waits (two robots head-on, a longer ring, with
   either kind of link) that lasts at least the timeout — 30 s, or
@@ -960,9 +1036,9 @@ The bundled controller talks to the robots only with VDA 5050 messages.
   and the freezes of the big layouts (a robot on a node waiting for nodes another
   robot has reserved, that robot stopped by the first one's body) were not
   reported (`deadlock_count` 0 with 80–105 of 112 robots frozen). Limits: one wait
-  per robot (the first next node, or the robot in the field), and a robot waiting
-  for a robot that is not itself waiting (e.g. one idle for ever) is not a
-  deadlock by this rule.
+  per robot (the first rule above that names a robot: a cycle through a second
+  holder of the same wait is missed), and a robot waiting for a robot that is not
+  itself waiting (e.g. one idle for ever) is not a deadlock by this rule.
 - **Controller time per step** (**S39**): the real (wall-clock) time of every
   controller step: number of steps, total, mean and maximum. It differs from
   run to run, so it is reported **only with `--timing`**; without the flag the

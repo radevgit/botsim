@@ -111,3 +111,50 @@ fn bad_input_is_refused() {
         JobError::RateTooHighForStep
     );
 }
+
+/// Pickup places 0 and 1; drop places 2 and the station with nodes 3 and 4.
+fn groups(both: bool) -> Result<JobGenerator, JobError> {
+    JobGenerator::between_groups(
+        9,
+        &[vec![0], vec![1]],
+        &[vec![2], vec![3, 4]],
+        both,
+        600.0,
+        DT,
+    )
+}
+
+#[test]
+fn jobs_between_groups_go_from_the_pickup_places_to_the_drop_places() {
+    let jobs = run(&mut groups(false).unwrap(), HOUR_TICKS);
+    assert!(jobs.len() > 300);
+    assert!(jobs.iter().all(|j| j.pickup < 2 && j.drop >= 2));
+    // every node of both groups is used
+    for n in 0..2 {
+        assert!(jobs.iter().any(|j| j.pickup == n));
+    }
+    for n in 2..5 {
+        assert!(jobs.iter().any(|j| j.drop == n));
+    }
+    assert_eq!(jobs, run(&mut groups(false).unwrap(), HOUR_TICKS));
+}
+
+#[test]
+fn with_both_directions_about_half_of_the_jobs_go_back() {
+    let jobs = run(&mut groups(true).unwrap(), HOUR_TICKS);
+    // every job crosses from one group to the other
+    assert!(jobs.iter().all(|j| (j.pickup < 2) != (j.drop < 2)));
+    let back = jobs.iter().filter(|j| j.pickup >= 2).count() as f64;
+    let share = back / jobs.len() as f64;
+    assert!((0.4..0.6).contains(&share), "{share} go back");
+}
+
+#[test]
+fn job_groups_must_not_be_empty_or_share_a_node() {
+    let new = |p: &[Vec<usize>], d: &[Vec<usize>]| {
+        JobGenerator::between_groups(1, p, d, true, 60.0, DT).unwrap_err()
+    };
+    assert_eq!(new(&[], &[vec![1]]), JobError::EmptyGroup);
+    assert_eq!(new(&[vec![1]], &[Vec::new()]), JobError::EmptyGroup);
+    assert_eq!(new(&[vec![1, 2]], &[vec![2]]), JobError::SharedNode);
+}

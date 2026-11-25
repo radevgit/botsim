@@ -123,6 +123,9 @@ fn a_robot_stops_before_a_robot_in_its_way_and_does_not_collide() {
     }
     assert!(w.collisions().is_empty(), "{:?}", w.collisions());
     assert!(saw_obstructed);
+    // one safety stop, although it lasts to the end (and the field may let go and
+    // catch again while the robot brakes)
+    assert_eq!(w.safety_stops(), 1);
 
     // both are 1.2 m long: R-1's front touches R-2's rear at x = 8.8; it stops before
     let p = x(&w, "R-1");
@@ -144,6 +147,7 @@ fn without_the_safety_stop_the_same_run_collides() {
         w.step();
     }
     assert_eq!(w.collisions().len(), 1);
+    assert_eq!(w.safety_stops(), 0);
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! The baseline controller: jobs go first come first served to the nearest
 //! free robot; the route is released node by node with a window of
-//! [`RELEASE_WINDOW`] nodes.
+//! [`RELEASE_WINDOW`](crate::order_builder::RELEASE_WINDOW) nodes.
 //!
 //! It sees the robots only through their VDA 5050 `state` messages and talks to
 //! them only with `order` messages, like any real controller. Call
@@ -39,51 +39,43 @@
 //! Not yet: deadlock resolution beyond that (robots can still wait for each other
 //! for ever when there is no way round), look-ahead beyond the window, robot types
 //! and edge rules, robots that fail.
+//!
+//! **Two parts** (brief `traffic_policy_slot.md`): this module is the dispatcher
+//! (jobs, routes, re-planning, charging, lifts, doors, messages). Who may go now
+//! (reservations, conflicts, go-first, the wait timeout, zone answers) is a
+//! [`TrafficPolicy`]; the rules above that say so are the baseline's,
+//! [`crate::baseline_policy`].
 
 use std::collections::VecDeque;
 
-use botsim_core::collision::{overlap, place};
 use botsim_core::errors::ErrorType;
 use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_core::jobs::Job;
 use botsim_core::metrics::{Metrics, is_waiting, summarize};
 use botsim_core::robot::Reception;
 use botsim_core::spec::{Kinematics, Shape};
+use botsim_core::waiting::{HeldBack, WaitReason};
 use botsim_core::world::{RobotId, World};
 use vda5050::order::Order;
-use vda5050::state::{ActionStatus, State};
+use vda5050::state::{ActionStatus, RequestStatus, State};
 
-use crate::conflicts::{ConflictInput, ConflictTable, Held, NodeConflictInput};
+use crate::baseline_policy::BaselinePolicy;
+pub use crate::baseline_policy::{
+    GIVE_WAY_AFTER_SECONDS, GIVE_WAY_HOLD_SECONDS, REROUTE_AFTER_SECONDS,
+};
+use crate::conflicts::{ConflictInput, NodeConflictInput};
 use crate::doors::DoorDesk;
 use crate::lifts::{LiftDesk, LiftRobot};
 use crate::node_grid::NodeGrid;
-use crate::order_builder::{OrderHeader, Plan, RELEASE_WINDOW, build_order_with};
+use crate::order_builder::{OrderHeader, Plan, build_order_with};
+use crate::policy::{Ask, Fleet, PolicyRobot, RouteView, Setup, TrafficPolicy};
 use crate::reservations::Reservations;
 use crate::route::{Arrival, Mover, Turns, distances_to, in_edges, plan_path, travel_lengths};
-use crate::zone_grants::{RobotView, ZoneGrants};
 use vda5050::responses::Responses;
-
-/// A robot that has been held at the end of its released route this long by
-/// other robots gets a new route around them (S53, my choice: well before the
-/// 30 s a deadlock needs to be reported).
-pub const REROUTE_AFTER_SECONDS: f64 = 10.0;
 
 /// The time constant of the waiting average per node that the route cost uses
 /// (route with load).
 pub const WAIT_AVERAGE_SECONDS: f64 = 60.0;
-
-/// A robot that has been held this long at the end of its released route by a
-/// robot that is stuck behind it goes first (S77, my choice: before the re-route).
-/// Extra distance (m) kept between the body swept by a turn on the spot and a stopped robot.
-const TURN_CLEARANCE: f64 = 0.05;
-
-pub const GIVE_WAY_AFTER_SECONDS: f64 = 5.0;
-
-/// Go-first takes the node or edge of a robot H only if H has had its route released
-/// and has not moved for this long (it is held by its protective field, not just
-/// released: warehouse 4, 1102 s, two robots were released onto the same node in the
-/// same second and drove into each other).
-pub const GIVE_WAY_HOLD_SECONDS: f64 = 2.0;
 
 /// How close (metres) a robot must be to a node to count as standing on it.
 pub const NODE_TOLERANCE: f64 = 0.1;
@@ -107,6 +99,29 @@ pub struct Rejected {
     pub reason: ErrorType,
 }
 
+/// What a route is for. The `job` of a trip is a stand-in (the robot's node and the
+/// goal), the route has no actions, and a trip is not counted as a completed or
+/// rejected job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    Job,
+    /// To a charger; on arrival the controller starts the charging.
+    Charge,
+    /// To a free parking place (U13).
+    Park,
+}
+
+impl Purpose {
+    /// The start of the order id.
+    fn order_prefix(self) -> &'static str {
+        match self {
+            Purpose::Job => "job",
+            Purpose::Charge => "charge",
+            Purpose::Park => "park",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Work {
     job: Job,
@@ -117,17 +132,8 @@ struct Work {
     released_through: usize,
     assigned_tick: u64,
     waiting_seconds: f64,
-    /// How long the robot has stood at the end of its released route because
-    /// the next node or edge is held by another robot (S53).
-    blocked_seconds: f64,
-    /// How long the robot has had a route released ahead of it and has not moved
-    /// (stopped by its protective field, or just released). Go-first takes a node
-    /// or edge from a robot only after [`GIVE_WAY_HOLD_SECONDS`] of it.
-    still_seconds: f64,
-    /// This is a trip to a charger, not a transport job: its `job` is a stand-in (the
-    /// robot's node and the charger node), it has no actions, it is not counted as a
-    /// completed or rejected job; at the end the controller starts the charging.
-    charge: bool,
+    /// A transport job, or a trip the dispatcher sends the robot on.
+    purpose: Purpose,
     /// The order was sent with a message delay and the robot's state has not
     /// shown it yet (S58): the controller does not know whether it was accepted.
     awaiting_ack: bool,
@@ -135,6 +141,19 @@ struct Work {
     /// cannot take a turn): the order was cancelled, and the job is given up as soon
     /// as the robot has stopped. Until then the robot keeps what it holds.
     cancelling: Option<ErrorType>,
+}
+
+/// A robot that a job can be given to.
+#[derive(Debug, Clone, Copy)]
+struct Candidate {
+    robot: usize,
+    /// Where its route to the pickup starts: the node it stands on, or the last
+    /// released node of its trip to a parking place.
+    from: NodeIdx,
+    /// Metres it still drives to get there.
+    ahead: f64,
+    /// It is on its way to a parking place: a job extends that order (S144).
+    parking: bool,
 }
 
 /// What a robot type may drive (S55): the layout lists the types that may use
@@ -181,8 +200,6 @@ struct Slot {
     /// Index into `Controller::types`.
     type_idx: usize,
     work: Option<Work>,
-    /// The robot's body outline (to check that a turn on the spot is clear).
-    shape: Shape,
     /// The series name of the robot's type (with the manufacturer in `id`).
     series: String,
     header_id: u32,
@@ -198,6 +215,10 @@ struct Slot {
     instant_header_id: u32,
     /// The robot stands on a charger and `startCharging` was sent: it gets no jobs.
     charging: bool,
+    /// It was counted as finding no free parking place; reset when it gets a route.
+    unparked: bool,
+    /// It refused an order to a parking place: not sent again until it has had a job.
+    park_refused: bool,
 }
 
 /// When the baseline sends robots to a charger (percent of the charge the robot
@@ -212,8 +233,10 @@ pub struct ChargePolicy {
     pub critical: f64,
 }
 
+/// The controller: the dispatcher, with the traffic rules behind `P` (by default the
+/// baseline's, [`BaselinePolicy`]).
 #[derive(Debug)]
-pub struct Controller {
+pub struct Controller<P: TrafficPolicy = BaselinePolicy> {
     graph: Graph,
     pending: VecDeque<Job>,
     robots: Vec<Slot>,
@@ -221,9 +244,8 @@ pub struct Controller {
     rejected: Vec<Rejected>,
     /// The tick of the previous control cycle.
     last_tick: u64,
-    reservations: Reservations,
-    /// Answers to RELEASE zone requests; `None` if the run has no zones.
-    zone_grants: Option<ZoneGrants>,
+    /// Who may go now.
+    policy: P,
     /// The zone set of the site, which the controller sends to every robot and
     /// enables (S62); `None` if the run has no zones.
     zone_set: Option<vda5050::zone_set::ZoneSet>,
@@ -241,9 +263,6 @@ pub struct Controller {
     unserviceable: std::collections::HashSet<(u64, usize)>,
     /// How many times a route was changed because the way was held (S53).
     reroutes: usize,
-    /// How many times a robot was let go first, ahead of the robot stuck behind it
-    /// (S77).
-    give_ways: usize,
     /// Metres of route cost added for every robot that holds an edge, or the node
     /// it ends at, when a route is planned; 0 (default) is the plain shortest route.
     load_weight: f64,
@@ -253,15 +272,6 @@ pub struct Controller {
     /// For each node, how many robots stood waiting on it, as a moving average over
     /// [`WAIT_AVERAGE_SECONDS`] (1.0 = one robot waiting all the time).
     node_wait: Vec<f64>,
-    /// The robot types as `manufacturer/seriesName`, by `Slot::type_idx`.
-    type_names: Vec<String>,
-    /// The type of each robot (`Slot::type_idx`), by robot index.
-    robot_types: Vec<usize>,
-    /// Edges whose swept outlines overlap; `None` reserves nodes and edges only.
-    conflicts: Option<ConflictTable>,
-    /// Robot → the edge it may be released onto although it conflicts with an edge
-    /// another robot holds (go-first, S77); cleared when it has been released.
-    waived: std::collections::HashMap<usize, EdgeIdx>,
     /// Sending robots to chargers; `None` (default) is off.
     charge_policy: Option<ChargePolicy>,
     /// The nodes of the stations of type `charger`.
@@ -273,15 +283,55 @@ pub struct Controller {
     /// Simulated seconds that free robots below the low limit have waited for a
     /// charger (all robots together).
     charge_wait_seconds: f64,
+    /// The parking places: the nodes of the stations of type `parking` (U13).
+    parking_nodes: Vec<NodeIdx>,
+    /// Parking place → the robot that is on its way there.
+    parking_targets: std::collections::HashMap<NodeIdx, usize>,
+    /// Trips to a parking place started so far (also the id of the stand-in jobs).
+    park_trips: usize,
+    /// How often a robot without a job got no parking place.
+    no_free_parking: usize,
 }
 
 impl Controller {
-    /// A controller for all robots now in `world`.
+    /// A controller with the baseline's traffic rules for all robots now in `world`.
     pub fn new(world: &World) -> Controller {
+        Controller::with_policy(world, BaselinePolicy::new(world.graph()))
+    }
+
+    /// Swept-area reservation of the baseline rules, see
+    /// [`BaselinePolicy::set_conflicts`].
+    pub fn set_conflicts(&mut self, input: &[ConflictInput]) -> usize {
+        self.policy.set_conflicts(input)
+    }
+
+    /// Node-edge conflicts of the baseline rules, see
+    /// [`BaselinePolicy::set_node_conflicts`].
+    pub fn set_node_conflicts(&mut self, input: &[NodeConflictInput]) -> usize {
+        self.policy.set_node_conflicts(input)
+    }
+
+    /// Who holds which node and edge.
+    pub fn reservations(&self) -> &Reservations {
+        self.policy.table()
+    }
+
+    /// How many times a robot went first, ahead of the robot stuck behind it
+    /// (S77, [`GIVE_WAY_AFTER_SECONDS`]).
+    pub fn give_ways(&self) -> usize {
+        self.policy.give_ways()
+    }
+}
+
+impl<P: TrafficPolicy> Controller<P> {
+    /// A controller for all robots now in `world` with the traffic rules of `policy`.
+    pub fn with_policy(world: &World, mut policy: P) -> Controller<P> {
         // the robot types (manufacturer, series) in the order they first appear
         let graph = world.graph();
         let mut keys: Vec<(String, String)> = Vec::new();
         let mut kinds: Vec<Kinematics> = Vec::new();
+        // the body outline of each robot, for the policy
+        let mut shapes: Vec<Shape> = Vec::new();
         let robots: Vec<Slot> = world
             .robot_ids()
             .filter_map(|id| {
@@ -297,11 +347,11 @@ impl Controller {
                     kinds.push(kinematics);
                     keys.len() - 1
                 });
+                shapes.push(shape);
                 Some(Slot {
                     id: id.clone(),
                     type_idx,
                     work: None,
-                    shape,
                     series,
                     header_id: 0,
                     response_header_id: 0,
@@ -310,6 +360,8 @@ impl Controller {
                     zone_set_header_id: 0,
                     instant_header_id: 0,
                     charging: false,
+                    unparked: false,
+                    park_refused: false,
                 })
             })
             .collect();
@@ -329,7 +381,24 @@ impl Controller {
                 }
             })
             .collect();
-        let robot_types: Vec<usize> = robots.iter().map(|s| s.type_idx).collect();
+        let type_names: Vec<String> = keys.iter().map(|(m, s)| format!("{m}/{s}")).collect();
+        let policy_robots: Vec<PolicyRobot> = robots
+            .iter()
+            .zip(shapes)
+            .map(|(slot, shape)| PolicyRobot {
+                id: slot.id.clone(),
+                series: slot.series.clone(),
+                type_idx: slot.type_idx,
+                shape,
+                omnidirectional: types[slot.type_idx].omnidirectional,
+            })
+            .collect();
+        policy.start(&Setup {
+            graph: world.graph(),
+            types: &type_names,
+            robots: &policy_robots,
+            zones: world.zones(),
+        });
         Controller {
             graph: world.graph().clone(),
             pending: VecDeque::new(),
@@ -337,8 +406,7 @@ impl Controller {
             completed: Vec::new(),
             rejected: Vec::new(),
             last_tick: world.tick(),
-            reservations: Reservations::new(world.graph()),
-            zone_grants: world.zones().cloned().map(ZoneGrants::new),
+            policy,
             zone_set: world.zones().map(|z| vda5050::zone_set::ZoneSet {
                 map_id: world.graph().maps[z.map].clone(),
                 zone_set_id: z.zone_set_id.clone(),
@@ -351,20 +419,36 @@ impl Controller {
             types,
             unserviceable: std::collections::HashSet::new(),
             reroutes: 0,
-            give_ways: 0,
             load_weight: 0.0,
             wait_weight: 0.0,
             node_wait: vec![0.0; world.graph().nodes.len()],
-            type_names: keys.iter().map(|(m, s)| format!("{m}/{s}")).collect(),
-            robot_types,
-            conflicts: None,
-            waived: std::collections::HashMap::new(),
             charge_policy: None,
             charger_nodes: Vec::new(),
             charger_targets: std::collections::HashMap::new(),
             charge_trips: 0,
             charge_wait_seconds: 0.0,
+            parking_nodes: station_nodes(world.graph(), "parking"),
+            parking_targets: std::collections::HashMap::new(),
+            park_trips: 0,
+            no_free_parking: 0,
         }
+    }
+
+    /// The parking places of the layout (U13): the interaction nodes of the stations
+    /// of type `parking`. With none, idle robots stay where they are.
+    pub fn parking_places(&self) -> usize {
+        self.parking_nodes.len()
+    }
+
+    /// Trips to a parking place started so far.
+    pub fn park_trips(&self) -> usize {
+        self.park_trips
+    }
+
+    /// How often a robot without a job found no free parking place (or none it can
+    /// reach) and stayed where it was; counted once until it gets a route again.
+    pub fn no_free_parking(&self) -> usize {
+        self.no_free_parking
     }
 
     /// Send robots to chargers (charging brief, step 2): a free robot whose reported
@@ -373,20 +457,7 @@ impl Controller {
     /// when it has arrived. Chargers are the stations of type `charger` (any case) of
     /// the layout. Returns the number of charger nodes (0: nothing will happen).
     pub fn set_charging(&mut self, policy: ChargePolicy) -> usize {
-        let mut nodes: Vec<NodeIdx> = self
-            .graph
-            .stations
-            .iter()
-            .filter(|s| {
-                s.station_type
-                    .as_deref()
-                    .is_some_and(|t| t.eq_ignore_ascii_case("charger"))
-            })
-            .flat_map(|s| s.interaction_nodes.iter().copied())
-            .collect();
-        nodes.sort_unstable();
-        nodes.dedup();
-        self.charger_nodes = nodes;
+        self.charger_nodes = station_nodes(&self.graph, "charger");
         self.charge_policy = Some(policy);
         self.charger_nodes.len()
     }
@@ -400,28 +471,6 @@ impl Controller {
     /// (all robots together; robots that are busy with a job are not counted).
     pub fn charge_wait_seconds(&self) -> f64 {
         self.charge_wait_seconds
-    }
-
-    /// Swept-area reservation (see [`crate::conflicts`]): from now on a robot is
-    /// released onto an edge only if no other robot holds an edge that conflicts with
-    /// it. Returns the number of conflicting edge pairs read.
-    pub fn set_conflicts(&mut self, input: &[ConflictInput]) -> usize {
-        let table = ConflictTable::new(&self.graph, &self.type_names, input);
-        let n = table.pairs();
-        self.conflicts = Some(table);
-        n
-    }
-
-    /// Node-edge conflicts for the swept-area reservation: a robot is not released
-    /// onto an edge that passes too close to a node another robot holds, nor to a node
-    /// where it would stand next to an edge another robot holds. Call after
-    /// [`Controller::set_conflicts`]; returns the number read (0 if that was not
-    /// called).
-    pub fn set_node_conflicts(&mut self, input: &[NodeConflictInput]) -> usize {
-        let Some(table) = self.conflicts.as_mut() else {
-            return 0;
-        };
-        table.add_node_conflicts(&self.graph, &self.type_names, input)
     }
 
     /// Route with load, second part: every edge also costs `weight` metres for each
@@ -457,27 +506,28 @@ impl Controller {
         loaded_cost(
             &self.types[t].cost,
             &self.graph,
-            &self.reservations,
+            &self.policy,
             (self.load_weight, self.wait_weight, &self.node_wait),
             robot,
         )
     }
 
-    /// How many times a robot's route was changed because another robot held the
-    /// way for longer than [`REROUTE_AFTER_SECONDS`].
+    /// How many times a robot's route was changed because the policy asked for it
+    /// (the baseline: another robot held the way for longer than
+    /// [`REROUTE_AFTER_SECONDS`]).
     pub fn reroutes(&self) -> usize {
         self.reroutes
     }
 
-    /// How many times a robot went first, ahead of the robot stuck behind it
-    /// (S77, [`GIVE_WAY_AFTER_SECONDS`]).
-    pub fn give_ways(&self) -> usize {
-        self.give_ways
+    /// The traffic policy.
+    pub fn policy(&self) -> &P {
+        &self.policy
     }
 
-    /// Who holds which node and edge.
-    pub fn reservations(&self) -> &Reservations {
-        &self.reservations
+    /// The traffic policy, e.g. to give it the conflict lists
+    /// ([`TrafficPolicy::conflicts`]).
+    pub fn policy_mut(&mut self) -> &mut P {
+        &mut self.policy
     }
 
     /// Throughput and waiting of the jobs done so far (see
@@ -500,9 +550,13 @@ impl Controller {
         &self.rejected
     }
 
-    /// Number of robots working on a job.
+    /// Number of robots working on a job (a trip to a charger counts, a trip to a
+    /// parking place does not).
     pub fn busy(&self) -> usize {
-        self.robots.iter().filter(|s| s.work.is_some()).count()
+        self.robots
+            .iter()
+            .filter(|s| s.work.as_ref().is_some_and(|w| w.purpose != Purpose::Park))
+            .count()
     }
 
     /// One control cycle: take the new jobs, read every robot's state, move
@@ -542,6 +596,13 @@ impl Controller {
             }
         }
 
+        // the policy sees everyone's progress before the releases
+        self.policy.cycle_start(&Fleet {
+            tick,
+            elapsed,
+            states: &states,
+            routes: &route_views(&self.robots),
+        });
         for (i, state) in states.iter().enumerate() {
             self.update_work(world, i, state, tick, elapsed);
         }
@@ -557,24 +618,80 @@ impl Controller {
                 }
             }
         }
-        self.go_first(&states);
+        self.policy.after_releases(&Fleet {
+            tick,
+            elapsed,
+            states: &states,
+            routes: &route_views(&self.robots),
+        });
         self.update_lifts(world, &states);
-        // a robot without a job holds the node it stands on (S34)
+        // the policy hears of every robot without a job and where it stands
         for (i, state) in states.iter().enumerate() {
             if self.robots[i].work.is_none()
                 && let Some(n) = self.node_of(state)
             {
-                self.reservations.reserve_node(n, i);
+                self.policy.idle(i, n);
             }
         }
         self.update_zone_sets(world, &states);
-        self.answer_zone_requests(world, &states);
+        self.answer_zone_requests(world, &states, tick, elapsed);
         self.dispatch(world, &states, tick, elapsed);
+        // why each robot is held back, and by whom (who waits for whom: deadlocks)
+        world.publish_held_back(self.held_back(&states));
 
         // tell the observer what is reserved (only if someone watches)
         if world.observing() {
-            world.publish_reservations(self.reservations.to_observer());
+            world.publish_reservations(self.policy.reservations());
         }
+    }
+
+    /// For each robot that stands still on its order: why it is held back, and by
+    /// whom (see [`botsim_core::waiting`]).
+    /// - Road released ahead of it and a zone request not granted: the zone, with
+    ///   the robots the policy names.
+    /// - At the end of its released route, with more to go: the lift or door another
+    ///   robot owns, else the release, with the policy's holder.
+    fn held_back(&self, states: &[State]) -> Vec<Option<HeldBack>> {
+        self.robots
+            .iter()
+            .zip(states)
+            .enumerate()
+            .map(|(i, (slot, state))| {
+                let work = slot.work.as_ref()?;
+                if work.cancelling.is_some()
+                    || state.order_id != work.order_id
+                    || !is_waiting(state)
+                {
+                    return None;
+                }
+                let at = (state.last_node_sequence_id / 2) as usize;
+                let rt = work.released_through;
+                let (reason, blockers) = if at < rt {
+                    let asks = state.zone_requests.iter().flatten().any(|q| {
+                        matches!(
+                            q.request_status,
+                            RequestStatus::Requested | RequestStatus::Queued
+                        )
+                    });
+                    if !asks {
+                        return None;
+                    }
+                    (WaitReason::Zone, self.policy.zone_blockers(i))
+                } else if at == rt && rt < work.plan.last() {
+                    if let Some(owner) = self.lifts.held_by(i, &work.plan, rt) {
+                        (WaitReason::Lift, vec![owner])
+                    } else if let Some(owner) = self.doors.held_by(i, &work.plan, rt) {
+                        (WaitReason::Door, vec![owner])
+                    } else {
+                        let holder = self.policy.blocker(i, &work.plan, rt);
+                        (WaitReason::Release, holder.into_iter().collect())
+                    }
+                } else {
+                    return None;
+                };
+                Some(HeldBack { reason, blockers })
+            })
+            .collect()
     }
 
     /// Release more of the route, or finish the job, for robot `i`.
@@ -591,21 +708,24 @@ impl Controller {
                     return;
                 };
                 give_back(
-                    &mut self.reservations,
+                    &mut self.policy,
                     &mut self.lifts,
                     &mut self.doors,
                     i,
                     &work.plan,
                     work.released_through,
                 );
-                if work.charge {
-                    self.charger_targets.retain(|_, r| *r != i);
-                } else {
-                    self.rejected.push(Rejected {
+                match work.purpose {
+                    Purpose::Job => self.rejected.push(Rejected {
                         job: work.job,
                         robot: slot.id.clone(),
                         reason,
-                    });
+                    }),
+                    Purpose::Charge => self.charger_targets.retain(|_, r| *r != i),
+                    Purpose::Park => {
+                        self.parking_targets.retain(|_, r| *r != i);
+                        slot.park_refused = true;
+                    }
                 }
             }
             return;
@@ -619,21 +739,24 @@ impl Controller {
                     return;
                 };
                 give_back(
-                    &mut self.reservations,
+                    &mut self.policy,
                     &mut self.lifts,
                     &mut self.doors,
                     i,
                     &work.plan,
                     work.released_through,
                 );
-                if work.charge {
-                    self.charger_targets.retain(|_, r| *r != i);
-                } else {
-                    self.rejected.push(Rejected {
+                match work.purpose {
+                    Purpose::Job => self.rejected.push(Rejected {
                         job: work.job,
                         robot: slot.id.clone(),
                         reason,
-                    });
+                    }),
+                    Purpose::Charge => self.charger_targets.retain(|_, r| *r != i),
+                    Purpose::Park => {
+                        self.parking_targets.retain(|_, r| *r != i);
+                        slot.park_refused = true;
+                    }
                 }
                 return;
             } else {
@@ -650,17 +773,26 @@ impl Controller {
             let Some(work) = slot.work.take() else {
                 return;
             };
-            if work.charge {
-                // arrived at the charger: start charging; no job was done
-                self.charger_targets.retain(|_, r| *r != i);
-                slot.charging = true;
-                send_instant(
-                    world,
-                    slot,
-                    "startCharging",
-                    &format!("charge-{}", work.order_id),
-                );
-                return;
+            self.policy.route_finished(i, &work.plan);
+            match work.purpose {
+                Purpose::Job => {}
+                Purpose::Charge => {
+                    // arrived at the charger: start charging; no job was done
+                    self.charger_targets.retain(|_, r| *r != i);
+                    slot.charging = true;
+                    send_instant(
+                        world,
+                        slot,
+                        "startCharging",
+                        &format!("charge-{}", work.order_id),
+                    );
+                    return;
+                }
+                Purpose::Park => {
+                    // the robot stands on its place now
+                    self.parking_targets.retain(|_, r| *r != i);
+                    return;
+                }
             }
             self.completed.push(Completed {
                 job: work.job,
@@ -677,84 +809,33 @@ impl Controller {
             work.waiting_seconds += elapsed;
         }
 
-        // the robot has driven on: give back what it has left behind (S34)
-        // (a route can pass the same node or edge again, e.g. a lap of a ring:
-        // what is still ahead stays reserved)
-        let ahead_nodes = &work.plan.nodes[at..=work.released_through];
-        let ahead_edges = &work.plan.edges[at..work.released_through];
-        // A node taken over from a robot in the way (S77) is held before it is
-        // released: it is the next node after the released ones. It is not given
-        // back while the route has it there, even if the route passed it earlier;
-        // but it is once the robot has driven on, also if the route has it again
-        // much later (a lap of a ring: it then held the node for the whole lap,
-        // warehouse 4, Y-007 held two nodes 158 m away).
-        let last = work.plan.last();
-        let next_nodes = &work.plan.nodes[at..=(work.released_through + 1).min(last)];
-        let next_edges = &work.plan.edges[at..(work.released_through + 1).min(last)];
-        for j in 0..at {
-            let (n, e) = (work.plan.nodes[j], work.plan.edges[j]);
-            if !ahead_nodes.contains(&n)
-                && !(self.reservations.is_taken_over_node(n, i) && next_nodes.contains(&n))
-            {
-                self.reservations.release_node(n, i);
-            }
-            if !ahead_edges.contains(&e)
-                && !(self.reservations.is_taken_over_edge(e, i) && next_edges.contains(&e))
-            {
-                self.reservations.release_edge(e, i);
-            }
-        }
-
-        // release as far as the window allows and nobody else holds the way
+        // ask the policy how far the route may be released now
         let from = work.released_through;
-        let wanted = work.plan.released_through(at, RELEASE_WINDOW);
+        let wanted = work.plan.released_through(at, self.policy.window());
         // a ride in the window needs its lift (S47)
         let wanted = self.lifts.window(i, &work.plan, at, from, wanted);
         // so does an edge through a door (S51)
         let wanted = self.doors.window(i, &work.plan, at, from, wanted);
-        let swept = self
-            .conflicts
-            .as_ref()
-            .map(|c| (c, self.robot_types.as_slice()));
-        let waived = self.waived.get(&i).copied();
-        let rt = reserve_up_to(
-            &mut self.reservations,
-            &work.plan,
-            i,
-            from,
-            wanted,
-            swept,
-            waived,
-        );
-        if rt > from {
-            self.waived.remove(&i);
-        }
+        let answer = self.policy.release(&Ask {
+            robot: i,
+            state,
+            route: &work.plan,
+            at,
+            released_through: from,
+            limit: wanted,
+            elapsed,
+        });
+        // (what is released cannot be taken back, and the limit holds)
+        let rt = answer.through.min(wanted).max(from);
         self.doors.settle(i, rt);
 
-        // Timeout re-routing (S53): the robot stands at the end of its released
-        // route and wants to go on, but another robot holds the way (not a lift
-        // or a door, which have their own rules).
-        let stuck = at == from && wanted > from && rt == from && is_waiting(state);
-        work.blocked_seconds = if stuck {
-            work.blocked_seconds + elapsed
-        } else {
-            0.0
-        };
-        let not_moving = state
-            .velocity
-            .as_ref()
-            .is_none_or(|v| v.vx.unwrap_or(0.0).abs() < 0.05);
-        work.still_seconds = if rt > at && not_moving {
-            work.still_seconds + elapsed
-        } else {
-            0.0
-        };
-        if stuck && work.blocked_seconds >= REROUTE_AFTER_SECONDS {
-            work.blocked_seconds = 0.0; // try again after another timeout
+        // the policy may ask for another route beyond what is released (S53)
+        let mut changed = false;
+        if let Some(wish) = answer.reroute {
             let loaded = loaded_cost(
                 &self.types[slot.type_idx].cost,
                 &self.graph,
-                &self.reservations,
+                &self.policy,
                 (self.load_weight, self.wait_weight, &self.node_wait),
                 i,
             );
@@ -764,41 +845,22 @@ impl Controller {
             };
             if let Some(plan) = reroute(
                 &self.graph,
-                &self.reservations,
+                &wish.avoid,
                 &self.lifts,
                 &self.doors,
                 &mover,
                 i,
                 &work.plan,
-                at,
+                rt,
             ) {
                 work.plan = plan;
-                work.update_id += 1;
-                let header = OrderHeader {
-                    robot: &slot.id,
-                    header_id: slot.header_id,
-                    timestamp: &world.timestamp(),
-                    order_id: &work.order_id,
-                    order_update_id: work.update_id,
-                };
-                // nothing new is released; the unreleased part of the route changes
-                let orient = self.types[slot.type_idx]
-                    .omnidirectional
-                    .then_some((slot.id.manufacturer.as_str(), slot.series.as_str()));
-                let msg = build_order_with(&self.graph, &header, &work.plan, from, from, orient);
-                slot.header_id += 1;
-                match deliver(world, msg) {
-                    Ok(_) => self.reroutes += 1,
-                    Err(reason) => {
-                        // the robot cannot drive the changed route: give the job up
-                        cancel_order(world, slot, reason);
-                        return;
-                    }
-                }
+                changed = true;
+                self.policy.route_changed(i, &work.plan);
             }
         }
 
-        if rt > from {
+        // one order update for a changed route and for newly released nodes
+        if changed || rt > from {
             work.update_id += 1;
             let header = OrderHeader {
                 robot: &slot.id,
@@ -813,10 +875,16 @@ impl Controller {
             let msg = build_order_with(&self.graph, &header, &work.plan, from, rt, orient);
             slot.header_id += 1;
             match deliver(world, msg) {
-                Ok(_) => work.released_through = rt,
+                Ok(_) => {
+                    work.released_through = rt;
+                    if changed {
+                        self.reroutes += 1;
+                    }
+                }
                 Err(reason) => {
                     // the robot cannot drive the next part (e.g. a car-like robot
-                    // that cannot take the turn): give the job up (S70)
+                    // that cannot take the turn) or the changed route: give the job
+                    // up (S70)
                     cancel_order(world, slot, reason);
                 }
             }
@@ -925,22 +993,20 @@ impl Controller {
         }
     }
 
-    /// Answer the RELEASE zone requests the robots state (see [`crate::zone_grants`]).
-    fn answer_zone_requests(&mut self, world: &mut World, states: &[State]) {
-        let Some(grants) = self.zone_grants.as_mut() else {
-            return;
-        };
-        let views: Vec<RobotView> = states
-            .iter()
-            .map(|s| RobotView {
-                requests: s.zone_requests.clone().unwrap_or_default(),
-                position: s
-                    .mobile_robot_position
-                    .as_ref()
-                    .and_then(|p| self.graph.map_idx(&p.map_id).map(|m| (m, p.x, p.y))),
-            })
-            .collect();
-        let answers = grants.decide(&views);
+    /// Send the policy's answers to the RELEASE zone requests the robots state.
+    fn answer_zone_requests(
+        &mut self,
+        world: &mut World,
+        states: &[State],
+        tick: u64,
+        elapsed: f64,
+    ) {
+        let answers = self.policy.zone_answers(&Fleet {
+            tick,
+            elapsed,
+            states,
+            routes: &route_views(&self.robots),
+        });
         // one `responses` message per robot
         for (i, slot) in self.robots.iter_mut().enumerate() {
             let mine: Vec<_> = answers
@@ -997,7 +1063,7 @@ impl Controller {
                     let t = self.robots[i].type_idx;
                     for &c in &self.charger_nodes {
                         // a charger is free if no robot holds it and none is on its way
-                        if self.reservations.node_holder(c).is_some()
+                        if self.policy.node_holder(c).is_some()
                             || self.charger_targets.contains_key(&c)
                         {
                             continue;
@@ -1030,20 +1096,38 @@ impl Controller {
             free.retain(|&(i, _)| states[i].power_supply.state_of_charge >= policy.critical);
         }
 
+        // jobs go to the free robots and to those on their way to a parking place
+        let mut candidates: Vec<Candidate> = free
+            .iter()
+            .map(|&(robot, from)| Candidate {
+                robot,
+                from,
+                ahead: 0.0,
+                parking: false,
+            })
+            .collect();
+        candidates
+            .extend((0..self.robots.len()).filter_map(|i| self.parking_candidate(i, &states[i])));
+
         let mut waiting = VecDeque::new();
         while let Some(job) = self.pending.pop_front() {
-            if free.is_empty() {
+            if candidates.is_empty() {
                 waiting.push_back(job); // nobody to give it to: no search needed
                 continue;
             }
-            // The nearest free robot that can do the job. One search backwards
+            // The nearest candidate that can do the job. One search backwards
             // from the pickup gives the route length from every node (S52), so
             // a job costs one search per robot type, not one per free robot. A
             // type may drive only some of the edges (S55), so its lengths differ.
             let mut dist: Vec<Option<Vec<f64>>> = vec![None; self.types.len()];
             let mut order: Vec<(i64, usize, usize)> = Vec::new();
-            for (k, &(i, node)) in free.iter().enumerate() {
+            for (k, c) in candidates.iter().enumerate() {
+                let i = c.robot;
                 let t = self.robots[i].type_idx;
+                // an order update does not run the actions of its first node
+                if c.parking && c.from == job.pickup {
+                    continue;
+                }
                 // A job whose drop cannot be reached from its pickup cannot be done
                 // by any robot of the type; the layout does not change, so ask only
                 // once (S52: it was retried against every free robot every cycle).
@@ -1070,7 +1154,7 @@ impl Controller {
                 let Some(dist_t) = dist[t].as_ref() else {
                     continue; // (computed just above)
                 };
-                let d = dist_t[node];
+                let d = dist_t[c.from] + c.ahead;
                 if d.is_finite() {
                     // smallest distance (to a nanometre); equal → the robot added first
                     order.push(((d * 1e9).round() as i64, i, k));
@@ -1079,31 +1163,206 @@ impl Controller {
             order.sort_unstable();
             // the first robot in that order that has a plan for the job
             let chosen = order.iter().find_map(|&(_, i, k)| {
-                let (_, node) = free[k];
+                let c = candidates[k];
                 let t = self.robots[i].type_idx;
                 let loaded = self.loaded_cost(t, i);
                 let mover = match &loaded {
                     Some(c) => self.types[t].mover_with(c),
                     None => self.types[t].mover(),
                 };
-                // the robot's heading matters if it cannot turn on the spot (S73)
-                let arrival = states[i]
-                    .mobile_robot_position
-                    .as_ref()
-                    .map_or(Arrival::Free, |p| Arrival::Heading(p.theta));
-                let plan = Plan::for_job_with(&self.graph, node, arrival, &job, |a, arr, b| {
+                // the trip to a parking place that the job continues, if any
+                let trip = self.robots[i].work.as_ref().filter(|_| c.parking);
+                // the robot's heading matters if it cannot turn on the spot (S73):
+                // on a trip, the way it will arrive at the last released node
+                let arrival = match trip {
+                    Some(w) if w.released_through > 0 => {
+                        Arrival::Edge(w.plan.edges[w.released_through - 1])
+                    }
+                    _ => states[i]
+                        .mobile_robot_position
+                        .as_ref()
+                        .map_or(Arrival::Free, |p| Arrival::Heading(p.theta)),
+                };
+                let plan = Plan::for_job_with(&self.graph, c.from, arrival, &job, |a, arr, b| {
                     self.lifts.route_from(&mover, arr, a, b)
                 })?;
-                Some((i, k, plan))
+                let plan = match trip {
+                    Some(w) => w.plan.continued(w.released_through, plan),
+                    None => plan,
+                };
+                Some((k, plan))
             });
-            let Some((i, k, plan)) = chosen else {
+            let Some((k, plan)) = chosen else {
                 waiting.push_back(job);
                 continue;
             };
-            free.remove(k);
-            self.assign(world, i, job, plan, tick, false);
+            let c = candidates.remove(k);
+            if c.parking {
+                self.extend_trip(world, c.robot, job, plan);
+            } else {
+                self.assign(world, &states[c.robot], c.robot, job, plan, Purpose::Job);
+            }
         }
         self.pending = waiting;
+        // the free robots that got nothing go to a parking place (U13)
+        let idle: Vec<(usize, NodeIdx)> = candidates
+            .iter()
+            .filter(|c| !c.parking)
+            .map(|c| (c.robot, c.from))
+            .collect();
+        self.park(world, states, &idle, tick);
+    }
+
+    /// Robot `i` as a candidate for a job while it is on its way to a parking place
+    /// (S144); `None` if it is not, or cannot take one now: its order is not yet
+    /// answered or is being cancelled, it owns a lift or a door (those claims depend
+    /// on the route), or its battery is below the low limit (it goes to a charger
+    /// once it is free).
+    fn parking_candidate(&self, i: usize, state: &State) -> Option<Candidate> {
+        let slot = &self.robots[i];
+        let work = slot.work.as_ref()?;
+        let low = self.charge_policy.map_or(0.0, |p| p.low);
+        if work.purpose != Purpose::Park
+            || work.cancelling.is_some()
+            || work.awaiting_ack
+            || state.order_id != work.order_id
+            || self.lifts.owns(i)
+            || self.doors.owns(i)
+            || !self.zones_ready(state)
+            || state.power_supply.state_of_charge < low
+        {
+            return None;
+        }
+        let at = (state.last_node_sequence_id / 2) as usize;
+        let released = work.plan.edges.get(at..work.released_through);
+        let cost = &self.types[slot.type_idx].cost;
+        Some(Candidate {
+            robot: i,
+            from: work.plan.nodes[work.released_through],
+            ahead: released.unwrap_or_default().iter().map(|&e| cost[e]).sum(),
+            parking: true,
+        })
+    }
+
+    /// Give `job` to robot `i` on its way to a parking place: an update of its order
+    /// from the last released node, with `plan` (the released part as before, then
+    /// the job). Nothing more is released here; that happens in the next cycle.
+    fn extend_trip(&mut self, world: &mut World, i: usize, job: Job, plan: Plan) {
+        let slot = &mut self.robots[i];
+        let Some(work) = slot.work.as_mut() else {
+            return;
+        };
+        self.parking_targets.retain(|_, r| *r != i);
+        work.job = job;
+        work.purpose = Purpose::Job;
+        work.assigned_tick = world.tick();
+        work.waiting_seconds = 0.0;
+        work.update_id += 1;
+        slot.park_refused = false;
+        let header = OrderHeader {
+            robot: &slot.id,
+            header_id: slot.header_id,
+            timestamp: &world.timestamp(),
+            order_id: &work.order_id,
+            order_update_id: work.update_id,
+        };
+        let orient = self.types[slot.type_idx]
+            .omnidirectional
+            .then_some((slot.id.manufacturer.as_str(), slot.series.as_str()));
+        let from = work.released_through;
+        let msg = build_order_with(&self.graph, &header, &plan, from, from, orient);
+        slot.header_id += 1;
+        match deliver(world, msg) {
+            Ok(_) => {
+                work.plan = plan;
+                self.policy.route_changed(i, &work.plan);
+            }
+            // the robot refuses the route: cancel the order and give the job up, as
+            // for any refused update (S70)
+            Err(reason) => cancel_order(world, slot, reason),
+        }
+    }
+
+    /// Send the robots of `idle` (without a job, with the node they stand on) that
+    /// are not on a parking place to free ones, the pair with the shortest route
+    /// first. A place is free if no robot stands on it or holds it and none is on
+    /// its way there. A robot that gets none stays where it is and is counted.
+    fn park(&mut self, world: &mut World, states: &[State], idle: &[(usize, NodeIdx)], tick: u64) {
+        if self.parking_nodes.is_empty() {
+            return;
+        }
+        let mut waiting: Vec<(usize, NodeIdx)> = idle
+            .iter()
+            .filter(|&&(i, node)| {
+                !self.parking_nodes.contains(&node) && !self.robots[i].park_refused
+            })
+            .copied()
+            .collect();
+        if waiting.is_empty() {
+            return;
+        }
+        let occupied: std::collections::HashSet<NodeIdx> =
+            states.iter().filter_map(|s| self.node_of(s)).collect();
+        let mut dist: std::collections::HashMap<(usize, NodeIdx), Vec<f64>> =
+            std::collections::HashMap::new();
+        // (robot, place) pairs for which no route was found
+        let mut no_route: Vec<(usize, NodeIdx)> = Vec::new();
+        loop {
+            let mut best: Option<(f64, usize, NodeIdx)> = None; // (length, index, place)
+            for (k, &(i, node)) in waiting.iter().enumerate() {
+                let t = self.robots[i].type_idx;
+                for &p in &self.parking_nodes {
+                    if occupied.contains(&p)
+                        || self.policy.node_holder(p).is_some()
+                        || self.parking_targets.contains_key(&p)
+                        || no_route.contains(&(i, p))
+                    {
+                        continue;
+                    }
+                    let d = dist.entry((t, p)).or_insert_with(|| {
+                        distances_to(&self.graph, &self.types[t].into, &self.types[t].cost, p)
+                    })[node];
+                    if d.is_finite() && best.is_none_or(|(b, _, _)| d < b) {
+                        best = Some((d, k, p));
+                    }
+                }
+            }
+            let Some((_, k, place)) = best else {
+                break;
+            };
+            let (i, node) = waiting[k];
+            let t = self.robots[i].type_idx;
+            let loaded = self.loaded_cost(t, i);
+            let mover = match &loaded {
+                Some(c) => self.types[t].mover_with(c),
+                None => self.types[t].mover(),
+            };
+            let arrival = states[i]
+                .mobile_robot_position
+                .as_ref()
+                .map_or(Arrival::Free, |p| Arrival::Heading(p.theta));
+            let Some(edges) = self.lifts.route_from(&mover, arrival, node, place) else {
+                no_route.push((i, place));
+                continue;
+            };
+            let plan = Plan::new(&self.graph, node, edges);
+            let job = Job {
+                id: self.park_trips as u64,
+                pickup: node,
+                drop: place,
+                created_tick: tick,
+            };
+            self.park_trips += 1;
+            self.parking_targets.insert(place, i);
+            waiting.remove(k);
+            self.assign(world, &states[i], i, job, plan, Purpose::Park);
+        }
+        for (i, _) in waiting {
+            if !self.robots[i].unparked {
+                self.robots[i].unparked = true;
+                self.no_free_parking += 1;
+            }
+        }
     }
 
     /// Send the free robot `i`, standing on `node`, to `charger` and start charging
@@ -1148,38 +1407,57 @@ impl Controller {
         };
         self.charge_trips += 1;
         self.charger_targets.insert(charger, i);
-        self.assign(world, i, job, plan, tick, true);
+        self.assign(world, &states[i], i, job, plan, Purpose::Charge);
         true
     }
 
     fn assign(
         &mut self,
         world: &mut World,
+        state: &State,
         i: usize,
         job: Job,
-        plan: Plan,
-        tick: u64,
-        charge: bool,
+        mut plan: Plan,
+        purpose: Purpose,
     ) {
-        let slot = &mut self.robots[i];
-        let order_id = if charge {
-            format!("charge-{}", job.id)
-        } else {
-            format!("job-{}", job.id)
-        };
-        // node 0 is where the robot stands (it holds it already)
-        self.reservations.reserve_node(plan.nodes[0], i);
-        let wanted = self
-            .lifts
-            .window(i, &plan, 0, 0, plan.released_through(0, RELEASE_WINDOW));
+        let tick = world.tick();
+        let order_id = format!("{}-{}", purpose.order_prefix(), job.id);
+        let wanted = plan.released_through(0, self.policy.window());
+        let wanted = self.lifts.window(i, &plan, 0, 0, wanted);
         let wanted = self.doors.window(i, &plan, 0, 0, wanted);
-        let swept = self
-            .conflicts
-            .as_ref()
-            .map(|c| (c, self.robot_types.as_slice()));
-        let released_through =
-            reserve_up_to(&mut self.reservations, &plan, i, 0, wanted, swept, None);
+        let answer = self.policy.place(&Ask {
+            robot: i,
+            state,
+            route: &plan,
+            at: 0,
+            released_through: 0,
+            limit: wanted,
+            elapsed: 0.0,
+        });
+        let released_through = answer.through.min(wanted);
         self.doors.settle(i, released_through);
+        if let Some(wish) = answer.reroute {
+            let t = self.robots[i].type_idx;
+            let loaded = self.loaded_cost(t, i);
+            let mover = match &loaded {
+                Some(c) => self.types[t].mover_with(c),
+                None => self.types[t].mover(),
+            };
+            if let Some(other) = reroute(
+                &self.graph,
+                &wish.avoid,
+                &self.lifts,
+                &self.doors,
+                &mover,
+                i,
+                &plan,
+                released_through,
+            ) {
+                plan = other;
+                self.policy.route_changed(i, &plan);
+            }
+        }
+        let slot = &mut self.robots[i];
         let header = OrderHeader {
             robot: &slot.id,
             header_id: slot.header_id,
@@ -1194,6 +1472,10 @@ impl Controller {
         slot.header_id += 1;
         match deliver(world, msg) {
             Ok(reception) => {
+                slot.unparked = false;
+                if purpose == Purpose::Job {
+                    slot.park_refused = false;
+                }
                 slot.work = Some(Work {
                     job,
                     plan,
@@ -1202,297 +1484,34 @@ impl Controller {
                     released_through,
                     assigned_tick: tick,
                     waiting_seconds: 0.0,
-                    blocked_seconds: 0.0,
-                    still_seconds: 0.0,
-                    charge,
+                    purpose,
                     awaiting_ack: reception == Reception::InTransit,
                     cancelling: None,
                 });
             }
             Err(reason) => {
                 give_back(
-                    &mut self.reservations,
+                    &mut self.policy,
                     &mut self.lifts,
                     &mut self.doors,
                     i,
                     &plan,
                     released_through,
                 );
-                if charge {
-                    self.charger_targets.retain(|_, r| *r != i);
-                } else {
-                    self.rejected.push(Rejected {
+                match purpose {
+                    Purpose::Job => self.rejected.push(Rejected {
                         job,
                         robot: slot.id.clone(),
                         reason,
-                    });
+                    }),
+                    Purpose::Charge => self.charger_targets.retain(|_, r| *r != i),
+                    Purpose::Park => {
+                        self.parking_targets.retain(|_, r| *r != i);
+                        slot.park_refused = true;
+                    }
                 }
             }
         }
-    }
-
-    /// Deadlocks with a safety link (S77): robot X stands at the end of its released
-    /// route and waits for the next node, which robot H has released; H is stopped
-    /// (its protective field sees X) and X is right in front of it, heading the same
-    /// way. H cannot move until X does, so X goes first: it takes the node over (H
-    /// gets it back when X lets go of it) and its release goes on as usual. Not
-    /// done head-on (X heading against H): there both would run into each other.
-    fn go_first(&mut self, states: &[State]) {
-        for i in 0..self.robots.len() {
-            let Some(work) = self.robots[i].work.as_ref() else {
-                continue;
-            };
-            if work.blocked_seconds < GIVE_WAY_AFTER_SECONDS || work.cancelling.is_some() {
-                continue;
-            }
-            let from = work.released_through;
-            let (Some(&node), Some(&edge)) =
-                (work.plan.nodes.get(from + 1), work.plan.edges.get(from))
-            else {
-                continue;
-            };
-            // X waits for the node, or for an edge whose swept area overlaps the one
-            // of its next edge (swept-area reservation): the holder is H
-            let all_node_holder = self.reservations.node_holder(node).filter(|&h| h != i);
-            let all_swept = self
-                .conflicts
-                .as_ref()
-                .and_then(|c| c.blocker(&self.reservations, &self.robot_types, i, edge));
-            // or for a node (or an edge) that the next edge passes too close to
-            // (node-edge conflict)
-            let all_nblock = self
-                .conflicts
-                .as_ref()
-                .and_then(|c| c.node_blocker(&self.reservations, &self.robot_types, i, edge));
-            // X may be kept by several robots (the node holder and the holder of a
-            // conflicting edge are often different ones: a robot passing through the
-            // node, and a stopped one on a curve beside it). Each is tried in turn as
-            // H; the first one that lets X go first is taken. A holder that is not
-            // taken is simply waited for.
-            for pass in 0..3 {
-                let (node_holder, swept, nblock) = match pass {
-                    // the node holder; if it also holds a conflicting edge, X is
-                    // released onto its edge although it does
-                    0 => (
-                        all_node_holder,
-                        all_swept.filter(|&(sh, _)| Some(sh) == all_node_holder),
-                        None,
-                    ),
-                    1 => (None, all_swept, None),
-                    _ => (None, None, all_nblock),
-                };
-                let Some(h) = node_holder
-                    .or(swept.map(|(h, _)| h))
-                    .or(nblock.map(|(h, _)| h))
-                else {
-                    continue;
-                };
-                // H must be on its way through the node (it has released it as part of
-                // its route and does not stand on it); a robot that is parked there
-                // holds it because it stands on it, and cannot be gone around. For a
-                // conflicting edge: H has released it as part of its route.
-                let on_its_way = match (node_holder, swept) {
-                    (None, None) => nblock.is_some_and(|(_, held)| {
-                        self.robots[h].work.as_ref().is_some_and(|w| match held {
-                            Held::Node(n) => w
-                                .plan
-                                .nodes
-                                .iter()
-                                .take(w.released_through + 1)
-                                .any(|&m| m == n),
-                            Held::Edge(f) => w
-                                .plan
-                                .edges
-                                .iter()
-                                .take(w.released_through)
-                                .any(|&e| e == f),
-                        })
-                    }),
-                    (Some(_), _) => {
-                        self.robots[h].work.as_ref().is_some_and(|w| {
-                            w.plan
-                                .nodes
-                                .iter()
-                                .take(w.released_through + 1)
-                                .any(|&n| n == node)
-                        }) && self.node_of(&states[h]) != Some(node)
-                    }
-                    (None, Some((_, f))) => self.robots[h].work.as_ref().is_some_and(|w| {
-                        w.plan
-                            .edges
-                            .iter()
-                            .take(w.released_through)
-                            .any(|&e| e == f)
-                    }),
-                };
-                if !on_its_way {
-                    continue;
-                }
-                // H has not moved for a while with its route released
-                if !self.robots[h]
-                    .work
-                    .as_ref()
-                    .is_some_and(|w| w.still_seconds >= GIVE_WAY_HOLD_SECONDS)
-                {
-                    continue;
-                }
-                // the edge must be free, or held by the same robot
-                if !self
-                    .reservations
-                    .edge_holder(edge)
-                    .is_none_or(|e| e == i || e == h)
-                {
-                    continue;
-                }
-                let (Some(px), Some(ph)) = (
-                    states[i].mobile_robot_position.as_ref(),
-                    states[h].mobile_robot_position.as_ref(),
-                ) else {
-                    continue;
-                };
-                let stopped = states[h]
-                    .velocity
-                    .as_ref()
-                    .is_none_or(|v| v.vx.unwrap_or(0.0).abs() < 0.05);
-                if !stopped || px.map_id != ph.map_id {
-                    continue;
-                }
-                // X is ahead of H, within 4 m and 60° of H's heading, and heads the same
-                // way (within 45°)
-                let (dx, dy) = (px.x - ph.x, px.y - ph.y);
-                let off_heading = angle_between(dy.atan2(dx), ph.theta);
-                // or its route after the node is the one H takes after it (a lane change
-                // or merge: X stands on H's curve and both go on to the same node); then
-                // X may also be beside H's curve (up to 100° off its heading, 5 m away).
-                // The same holds if X stands on a node that H has released (H's way
-                // goes through X).
-                // (for a conflicting edge: or both routes meet at the end of H's edge and
-                // go on to the same node, N908/T-009, warehouse 4)
-                let same_route = self.same_route_after(i, h, node)
-                    || swept.is_some_and(|(_, f)| self.meet_and_go_on(i, h, f));
-                // (not by who holds the node: X may have taken it over earlier)
-                let on_h_way = self.node_of(&states[i]).is_some_and(|n| {
-                    self.robots[h].work.as_ref().is_some_and(|w| {
-                        w.plan
-                            .nodes
-                            .iter()
-                            .take(w.released_through + 1)
-                            .any(|&m| m == n)
-                    })
-                });
-                let wide = same_route || on_h_way;
-                let near = dx.hypot(dy) <= if wide { 5.0 } else { 4.0 };
-                // the way X will head once it is released: along its next edge (a robot
-                // standing on a node has not turned to the edge yet; warehouse 4, O-008
-                // stood facing west, 117° from T-008, while its edge ran 45°)
-                let start = self
-                    .graph
-                    .edge_directions(
-                        edge,
-                        &self.robots[i].id.manufacturer,
-                        &self.robots[i].series,
-                    )
-                    .0;
-                // X standing on H's way may head any way as long as it does not face H
-                let faces_away = angle_between(start, (-dy).atan2(-dx)) >= 90f64.to_radians();
-                let same_way = angle_between(start, ph.theta) <= 45f64.to_radians()
-                || same_route
-                || (on_h_way && faces_away)
-                // a wait for a conflicting edge or a close node (the map): X's edge
-                // leads away from H, which is stopped, so X may drive off first
-                || ((swept.is_some() || nblock.is_some()) && faces_away);
-                let limit = if wide { 100.0 } else { 60.0 };
-                let ahead = off_heading <= f64::to_radians(limit);
-                // X may have to turn on the spot to drive off; its body then sweeps
-                // through the angles to the start of the edge and must not touch H (a
-                // forklift turning 1.7 m from a stopped robot hit it, warehouse 4, 309 s)
-                // (an omnidirectional robot does not turn: it drives off the way it is
-                // facing)
-                let turns = !self.types[self.robots[i].type_idx].omnidirectional
-                    && angle_between(px.theta, start) > 15f64.to_radians();
-                let clear = !turns
-                    || turn_is_clear(
-                        &self.robots[i].shape,
-                        (px.x, px.y, px.theta),
-                        start,
-                        &self.robots[h].shape,
-                        (ph.x, ph.y, ph.theta),
-                    );
-                if !(near && ahead && same_way && clear) {
-                    continue;
-                }
-                if node_holder.is_some() {
-                    if self.reservations.take_over_node(node, i).is_none() {
-                        continue;
-                    }
-                    self.reservations.take_over_edge(edge, i);
-                }
-                // the edge conflicts with one H holds: X may be released onto its edge
-                // although H still holds the other (until X has been released)
-                if swept.is_some_and(|(sh, _)| sh == h) || nblock.is_some_and(|(nh, _)| nh == h) {
-                    self.waived.insert(i, edge);
-                }
-                self.give_ways += 1;
-                break;
-            }
-        }
-    }
-
-    /// Do robots `a` and `b` both go on from `node` to the same next node? `a`
-    /// has `node` next in its plan; `b` has it somewhere ahead in its own.
-    fn same_route_after(&self, a: usize, b: usize, node: NodeIdx) -> bool {
-        let (Some(wa), Some(wb)) = (self.robots[a].work.as_ref(), self.robots[b].work.as_ref())
-        else {
-            return false;
-        };
-        let after_a = wa.plan.nodes.get(wa.released_through + 2);
-        let after_b = wb
-            .plan
-            .nodes
-            .iter()
-            .skip(wb.released_through.saturating_sub(1))
-            .position(|&n| n == node)
-            .and_then(|k| {
-                wb.plan
-                    .nodes
-                    .get(wb.released_through.saturating_sub(1) + k + 1)
-            });
-        after_a.is_some() && after_a == after_b
-    }
-
-    /// Does the route of `a`, within its next three nodes, reach the end node of edge
-    /// `f` of `b`, and do both go on from there to the same node?
-    fn meet_and_go_on(&self, a: usize, b: usize, f: EdgeIdx) -> bool {
-        let (Some(wa), Some(wb)) = (self.robots[a].work.as_ref(), self.robots[b].work.as_ref())
-        else {
-            return false;
-        };
-        let m = self.graph.edges[f].end;
-        let first = wa.released_through + 1;
-        let Some(p) = wa
-            .plan
-            .nodes
-            .iter()
-            .enumerate()
-            .skip(first)
-            .take(3)
-            .find_map(|(k, &n)| (n == m).then_some(k))
-        else {
-            return false;
-        };
-        let after_a = wa.plan.nodes.get(p + 1);
-        let after_b = wb
-            .plan
-            .nodes
-            .iter()
-            .skip(wb.released_through.saturating_sub(1))
-            .position(|&n| n == m)
-            .and_then(|k| {
-                wb.plan
-                    .nodes
-                    .get(wb.released_through.saturating_sub(1) + k + 1)
-            });
-        after_a.is_some() && after_a == after_b
     }
 
     /// The layout node a robot stands on, from its reported position.
@@ -1503,10 +1522,10 @@ impl Controller {
     }
 }
 
-/// The order of a job was refused: give back what was reserved for it (the robot
-/// still holds the node it stands on) and any lift or door it was given.
-fn give_back(
-    reservations: &mut Reservations,
+/// The order of a job was refused: give back any lift or door it was given, and tell
+/// the policy that the route is gone.
+fn give_back<P: TrafficPolicy>(
+    policy: &mut P,
     lifts: &mut LiftDesk,
     doors: &mut DoorDesk,
     robot: usize,
@@ -1515,59 +1534,39 @@ fn give_back(
 ) {
     lifts.forget(robot);
     doors.forget(robot);
-    for j in 1..=released_through {
-        reservations.release_node(plan.nodes[j], robot);
-        reservations.release_edge(plan.edges[j - 1], robot);
-    }
+    policy.route_dropped(robot, plan, released_through);
 }
 
-/// Can a robot at `x` (x, y, heading) turn on the spot to the heading `to` without
-/// touching the robot `h` (standing still)? The bodies are placed like the world
-/// does; `h` is grown by `TURN_CLEARANCE`, and the turn is checked every 5°.
-fn turn_is_clear(
-    shape: &Shape,
-    x: (f64, f64, f64),
-    to: f64,
-    h_shape: &Shape,
-    h: (f64, f64, f64),
-) -> bool {
-    let grown = match *h_shape {
-        Shape::Rect {
-            cx,
-            cy,
-            half_length,
-            half_width,
-        } => Shape::Rect {
-            cx,
-            cy,
-            half_length: half_length + TURN_CLEARANCE,
-            half_width: half_width + TURN_CLEARANCE,
-        },
-        Shape::Circle { cx, cy, radius } => Shape::Circle {
-            cx,
-            cy,
-            radius: radius + TURN_CLEARANCE,
-        },
-    };
-    let body_h = place(&grown, h.0, h.1, h.2);
-    // the shortest way round, from -π to π
-    let turn =
-        (to - x.2 + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
-    let steps = ((turn.abs() / 5f64.to_radians()).ceil() as usize).max(1);
-    (0..=steps).all(|k| {
-        let heading = x.2 + turn * k as f64 / steps as f64;
-        !overlap(&place(shape, x.0, x.1, heading), &body_h)
-    })
+/// The interaction nodes of the stations of the layout whose type is `kind` (any
+/// case), sorted, each once.
+fn station_nodes(graph: &Graph, kind: &str) -> Vec<NodeIdx> {
+    let mut nodes: Vec<NodeIdx> = graph
+        .stations
+        .iter()
+        .filter(|s| {
+            s.station_type
+                .as_deref()
+                .is_some_and(|t| t.eq_ignore_ascii_case(kind))
+        })
+        .flat_map(|s| s.interaction_nodes.iter().copied())
+        .collect();
+    nodes.sort_unstable();
+    nodes.dedup();
+    nodes
 }
 
-/// The angle between two directions, 0..π.
-fn angle_between(a: f64, b: f64) -> f64 {
-    let d = (a - b).rem_euclid(std::f64::consts::TAU);
-    if d > std::f64::consts::PI {
-        std::f64::consts::TAU - d
-    } else {
-        d
-    }
+/// The routes as the policy sees them, one entry per robot.
+fn route_views(robots: &[Slot]) -> Vec<Option<RouteView<'_>>> {
+    robots
+        .iter()
+        .map(|s| {
+            s.work.as_ref().map(|w| RouteView {
+                route: &w.plan,
+                released_through: w.released_through,
+                cancelling: w.cancelling.is_some(),
+            })
+        })
+        .collect()
 }
 
 /// Send an order message to its robot: `Ok` with `Accepted` or `InTransit`, or the
@@ -1637,10 +1636,10 @@ fn order_error(state: &State, order_id: &str) -> Option<ErrorType> {
 /// robot that holds the edge and each that holds the node it ends at, plus `waited`
 /// times the waiting average of that node. `weights` is (`reserved`, `waited`,
 /// `node_wait`). `None` if both weights are 0.
-fn loaded_cost(
+fn loaded_cost<P: TrafficPolicy>(
     cost: &[f64],
     graph: &Graph,
-    reservations: &Reservations,
+    policy: &P,
     weights: (f64, f64, &[f64]),
     robot: usize,
 ) -> Option<Vec<f64>> {
@@ -1654,8 +1653,8 @@ fn loaded_cost(
             .enumerate()
             .map(|(e, &c)| {
                 let end = graph.edges[e].end;
-                let n = usize::from(other(reservations.edge_holder(e)))
-                    + usize::from(other(reservations.node_holder(end)));
+                let n = usize::from(other(policy.edge_holder(e)))
+                    + usize::from(other(policy.node_holder(end)));
                 c + reserved * n as f64 + waited * node_wait[end]
             })
             .collect(),
@@ -1665,14 +1664,14 @@ fn loaded_cost(
 /// A new route for the rest of the job of `robot`, which stands at plan node `at`
 /// at the end of its released route: it goes to the same places (the nodes of the
 /// rest of the plan that have actions, and the last node) and does the same
-/// actions, but **does not enter a node another robot holds** (it holds or has
-/// had released). `None` if there is no such route, if the route would change
-/// nothing, or if the job uses a lift or a door (those have their own rules and
-/// claims that depend on the route).
+/// actions, but **does not enter a node in `blocked`** (the policy's wish: the
+/// baseline names the nodes other robots hold). `None` if there is no such route, if
+/// the route would change nothing, or if the job uses a lift or a door (those have
+/// their own rules and claims that depend on the route).
 #[allow(clippy::too_many_arguments)]
 fn reroute(
     graph: &Graph,
-    reservations: &Reservations,
+    blocked: &std::collections::HashSet<NodeIdx>,
     lifts: &LiftDesk,
     doors: &DoorDesk,
     mover: &Mover,
@@ -1686,10 +1685,6 @@ fn reroute(
     }
     // no lift ride and no door; the edges the robot's type may drive (S55) and the
     // turns it can make (S73) are in `mover`
-    let blocked: std::collections::HashSet<NodeIdx> = (0..graph.nodes.len())
-        .filter(|&n| reservations.node_holder(n).is_some_and(|h| h != robot))
-        .collect();
-
     let mut nodes = plan.nodes[..=at].to_vec();
     let mut edges = plan.edges[..at].to_vec();
     let mut actions = plan.actions[..=at].to_vec();
@@ -1706,7 +1701,7 @@ fn reroute(
             continue; // not a place the job needs to stop at
         }
         let target = plan.nodes[j];
-        for e in plan_path(graph, mover, arrival, here, target, &blocked, special)? {
+        for e in plan_path(graph, mover, arrival, here, target, blocked, special)? {
             edges.push(e);
             nodes.push(graph.edges[e].end);
             actions.push(Vec::new());
@@ -1721,36 +1716,6 @@ fn reroute(
         edges,
         actions,
     })
-}
-
-/// Reserve plan nodes `from + 1 ..= wanted` for `robot`, in order, each together
-/// with the edge leading to it; stop at the first one somebody else holds, or whose
-/// edge conflicts with an edge another robot holds (`swept`: the conflict table and
-/// the type of each robot). Returns the index of the last node now released (`from`
-/// if none).
-fn reserve_up_to(
-    reservations: &mut Reservations,
-    plan: &Plan,
-    robot: usize,
-    from: usize,
-    wanted: usize,
-    swept: Option<(&ConflictTable, &[usize])>,
-    waived: Option<EdgeIdx>,
-) -> usize {
-    let mut rt = from;
-    while rt < wanted {
-        let e = plan.edges[rt];
-        if waived != Some(e)
-            && swept.is_some_and(|(table, types)| table.blocks(reservations, types, robot, e))
-        {
-            break;
-        }
-        if !reservations.reserve_step(e, plan.nodes[rt + 1], robot) {
-            break;
-        }
-        rt += 1;
-    }
-    rt
 }
 
 /// Not driving, and every action is done.

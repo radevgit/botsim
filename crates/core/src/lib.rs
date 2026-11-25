@@ -23,6 +23,7 @@ pub mod robot;
 pub mod safety;
 pub mod spec;
 pub mod state_report;
+pub mod waiting;
 pub mod world;
 pub mod zone_requests;
 pub mod zones;
