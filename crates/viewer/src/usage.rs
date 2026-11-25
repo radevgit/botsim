@@ -31,7 +31,9 @@ pub fn usage_between(recording: &Recording, from: f64, to: f64) -> Usage {
     let mut previous_dt = 0.0;
     let mut covered = 0.0;
     for (k, snap) in snaps.iter().enumerate() {
-        let full = snaps.get(k + 1).map_or(previous_dt, |next| next.time - snap.time);
+        let full = snaps
+            .get(k + 1)
+            .map_or(previous_dt, |next| next.time - snap.time);
         previous_dt = full;
         // (a snapshot counts until the next one, cut to the window)
         let dt = (snap.time + full).min(to) - snap.time.max(from);

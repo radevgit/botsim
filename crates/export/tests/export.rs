@@ -73,6 +73,7 @@ fn snapshots() -> Vec<SnapshotLine> {
                     planned: RouteRecord::default(),
                     charge: None,
                     charging: false,
+                    waiting: None,
                 }],
                 reservations: vec![],
                 blocking: vec![],

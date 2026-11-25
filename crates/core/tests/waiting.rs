@@ -1,10 +1,11 @@
 //! Who a waiting robot waits for, and why (U12 definition, S157, S158).
 
 use botsim_core::actions::ActionTimes;
+use botsim_core::disturbances::StopSpec;
 use botsim_core::graph::Graph;
 use botsim_core::robot::Reception;
 use botsim_core::spec::RobotSpec;
-use botsim_core::waiting::{HeldBack, Wait, WaitReason};
+use botsim_core::waiting::{HeldBack, Place, Wait, WaitReason, WaitTotal};
 use botsim_core::world::{RobotId, World};
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
@@ -94,6 +95,84 @@ fn a_safety_stop_names_the_nearest_robot_in_the_field() {
         blocker: Some(2),
     };
     assert_eq!(w.waits(), [Some(expected), None, None]);
+}
+
+#[test]
+fn a_safety_stop_is_credited_to_the_robot_in_the_field() {
+    let mut w = world();
+    w.set_safety_stop(true);
+    go(&mut w, true);
+    for _ in 0..20 {
+        w.step();
+    }
+    let a = w.graph().node_idx("A").unwrap();
+    let expected = WaitTotal {
+        waiter: 0,
+        blocker: Some(2),
+        reason: WaitReason::SafetyStop,
+        place: Place::Node(a),
+        ticks: 20,
+    };
+    assert_eq!(w.wait_totals(), [expected]);
+    // the snapshot carries the same wait, for recordings
+    let wait = Wait {
+        reason: WaitReason::SafetyStop,
+        blocker: Some(2),
+    };
+    let snapshot = w.snapshot();
+    let waiting: Vec<_> = snapshot.robots.iter().map(|r| r.waiting).collect();
+    assert_eq!(waiting, [Some(wait), None, None]);
+}
+
+#[test]
+fn a_robot_that_stops_on_an_edge_is_counted_on_the_edge() {
+    let g = graph();
+    let f: Factsheet =
+        serde_json::from_str(include_str!("data/diff_robot.factsheet.json")).unwrap();
+    let spec = RobotSpec::from_factsheet(&f).unwrap();
+    let (a, b) = (g.node_idx("A").unwrap(), g.node_idx("B").unwrap());
+    let mut w = World::new(g, DT, 0).unwrap();
+    for (serial, node) in [("D", a), ("S", b)] {
+        let id = RobotId::new("ACME", serial);
+        w.add_robot(id, spec.clone(), ActionTimes::new(1.0), node, 0.0)
+            .unwrap();
+    }
+    w.set_safety_stop(true);
+    go(&mut w, true);
+    for _ in 0..600 {
+        w.step();
+    }
+    let edge = w.graph().edge_idx("A-B").unwrap();
+    let totals = w.wait_totals();
+    assert!(!totals.is_empty());
+    assert!(
+        totals
+            .iter()
+            .all(|t| t.blocker == Some(1) && t.place == Place::Edge(edge)),
+        "{totals:?}"
+    );
+}
+
+#[test]
+fn a_robot_in_its_own_stop_is_not_counted_though_another_is_in_its_field() {
+    let mut w = world();
+    w.set_safety_stop(true);
+    // a stop that begins as soon as the robot drives, for longer than the run
+    let always = StopSpec {
+        per_hour: 3600.0 / DT,
+        min_seconds: 60.0,
+        max_seconds: 60.0,
+    };
+    w.enable_random_stops(1, always).unwrap();
+    go(&mut w, true);
+    for _ in 0..20 {
+        w.step();
+    }
+    assert_eq!(w.random_stops(), 1);
+    // the deadlock detector still sees the wait
+    assert!(w.waits()[0].is_some());
+    assert_eq!(w.wait_totals(), []);
+    assert_eq!(w.snapshot().robots[0].waiting, None);
 }
 
 #[test]

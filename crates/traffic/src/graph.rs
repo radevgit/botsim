@@ -167,6 +167,9 @@ pub struct OrderGraph {
     robots: Vec<Progress>,
     /// Event → the events of other robots that wait for it.
     waiting: BTreeMap<Event, BTreeSet<Waiter>>,
+    /// Experiment (T36): may a pass wait for a robot that stands on it at the end
+    /// of its route?
+    behind_standing: bool,
 }
 
 impl OrderGraph {
@@ -308,7 +311,8 @@ impl OrderGraph {
         if order.first.robot == order.then.robot {
             return Err(Refused::SameRobot(order));
         }
-        if Progress::leaves_at(order.first.piece) > first.last {
+        let stands = self.behind_standing && first.reached == first.last;
+        if Progress::leaves_at(order.first.piece) > first.last && !stands {
             return Err(Refused::NeverLeft(order.first));
         }
         // an order that is already met makes nobody wait
@@ -435,6 +439,26 @@ impl OrderGraph {
             }
         }
         Ok(())
+    }
+
+    /// Experiment (T36): from now on [`order`](OrderGraph::order) also takes an
+    /// order whose first pass is the node a robot stands on at the end of its
+    /// route. No cycle can come of one when it is taken, as nothing follows that
+    /// pass yet; a longer route of the standing robot is checked as it is ordered.
+    pub(crate) fn allow_waiting_behind_standing(&mut self) {
+        self.behind_standing = true;
+    }
+
+    /// Take orders that make robots wait for a robot which stays where it stands:
+    /// `first` of each is the node its route ends on, so they are never met by
+    /// progress on that route. [`order`](OrderGraph::order) refuses those. The
+    /// caller makes sure that no `then` is released and that nothing waits before
+    /// the standing robot's events, so no cycle can come of it.
+    pub(crate) fn wait_for_standing(&mut self, orders: &[Before]) {
+        for &order in orders {
+            let (from, to) = events(order);
+            self.waiting.entry(from).or_default().insert((to, order));
+        }
     }
 
     /// Add one order; returns what is new in `waiting`.

@@ -16,6 +16,12 @@
 //! Without a controller that publishes, the world has its own two rules, both a
 //! release wait: the robot waits for the robot that stands on its next node, else
 //! for the one that has that node released ahead of it; otherwise it has no wait.
+//!
+//! The world adds the waits up, step by step, for the "waiting caused by others"
+//! metric ([`crate::world::World::wait_totals`]), leaving out the steps in which the
+//! waiting robot is in its own stop (a random stop or an empty battery, S170).
+
+use crate::graph::{EdgeIdx, NodeIdx};
 
 /// Why a robot waits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,6 +45,28 @@ pub struct HeldBack {
     /// The robots that cause it (indices in the order they were added to the
     /// world); empty if none can be named.
     pub blockers: Vec<usize>,
+}
+
+/// Where a waiting robot stands (S168): on a node (within 0.1 m of it), else on the
+/// edge it is driving.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Place {
+    Node(NodeIdx),
+    Edge(EdgeIdx),
+}
+
+/// How long one robot has waited so far for one blocker, for one reason, in one
+/// place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaitTotal {
+    /// The waiting robot (index in the order the robots were added).
+    pub waiter: usize,
+    /// The robot it waited for; `None` if unknown.
+    pub blocker: Option<usize>,
+    pub reason: WaitReason,
+    pub place: Place,
+    /// Steps.
+    pub ticks: u64,
 }
 
 /// One robot's wait in one step.

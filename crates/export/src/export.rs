@@ -24,6 +24,8 @@ pub struct ExportOptions {
     pub to: Option<f64>,
     /// Draw the simulated time in a corner of every frame.
     pub clock: bool,
+    /// Draw the waits (who waits for whom, and why) instead of the blocking arrows.
+    pub waits: bool,
 }
 
 impl Default for ExportOptions {
@@ -37,6 +39,7 @@ impl Default for ExportOptions {
             from: None,
             to: None,
             clock: true,
+            waits: false,
         }
     }
 }
@@ -159,12 +162,13 @@ pub fn export_frames(
                 })?
         }
     };
-    let renderer = Renderer::new(layout, map, options.width, options.height)
+    let mut renderer = Renderer::new(layout, map, options.width, options.height)
         .map_err(ExportError::View)?
         .with_clock(options.clock)
         // the name `botsim` is in every frame
         .and_then(|r| r.with_brand(true))
         .map_err(|e| ExportError::BadOption(e.to_string()))?;
+    renderer.set_waits(options.waits);
 
     let from = options.from.unwrap_or(first.time);
     let to = options.to.unwrap_or(last.time);

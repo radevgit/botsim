@@ -31,7 +31,6 @@
 //! may use what comes in a later step.
 
 use std::collections::{HashMap, HashSet};
-use std::f64::consts::PI;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -71,9 +70,6 @@ const EAST_ROWS: [(f64, bool); 6] = [
     (84.0, false),
 ];
 
-/// Where the sidings of the goods-in bays on the west side begin (y); each is 8 m
-/// long and runs south (the left side of the ring road runs south).
-const WEST_BAYS: [f64; 5] = [110.0, 93.0, 76.0, 58.0, 42.0];
 /// The goods-in bays of warehouse 3 (the left side of the hall is the double net, with no room
 /// for them): sidings 6 m long on the single parts of the ring, bottom (runs east, bay on the
 /// south side) and top (runs west, bay on the north side). Each is `(from, apex, to)`.
@@ -1394,31 +1390,6 @@ fn vertical_labyrinth(net: &mut Net) {
     net.line((x0 + t, V_BOTTOM - t), (v_x(1) + r, V_BOTTOM - r));
 }
 
-/// A ring road round `c`: eight arcs of 45 degrees, counter-clockwise if `ccw`.
-fn ring(net: &mut Net, c: P, r: f64, ccw: bool) {
-    let point = |deg: f64| {
-        (
-            c.0 + r * deg.to_radians().cos(),
-            c.1 + r * deg.to_radians().sin(),
-        )
-    };
-    let d = r / (PI / 8.0).cos();
-    let corner = |deg: f64| {
-        (
-            c.0 + d * (deg + 22.5).to_radians().cos(),
-            c.1 + d * (deg + 22.5).to_radians().sin(),
-        )
-    };
-    for k in 0..8 {
-        let deg = 45.0 * k as f64;
-        if ccw {
-            net.arc(point(deg), corner(deg), point(deg + 45.0));
-        } else {
-            net.arc(point(deg + 45.0), corner(deg), point(deg));
-        }
-    }
-}
-
 /// Which way the roads of the west grid run (east?) at height `y`: the rows run east
 /// and west in turns; the ring road at the bottom runs east, at the top west.
 fn west_row_runs_east(y: f64) -> bool {
@@ -1683,15 +1654,6 @@ fn cell_lane_stops(
     }
 }
 
-/// Which way the columns of the west grid run (north?) at `x`: the ring on the left runs
-/// south, the columns alternate.
-fn west_col_runs_north(x: f64) -> bool {
-    WEST_X
-        .iter()
-        .position(|&col| (col - x).abs() < 1e-9)
-        .is_some_and(lane_east)
-}
-
 /// Which way the columns of the east grid run (north?) at `x`: the ring on the right runs
 /// north.
 fn east_col_runs_north(x: f64) -> bool {
@@ -1787,29 +1749,9 @@ fn is_staging(_i: usize, _j: usize) -> bool {
     false
 }
 
-/// A roundabout in a cell between two roads that run the opposite way (the road
-/// below east, the one above west, or the other way round). It is tangent to both:
-/// where the ring road runs the same way as the road, an S-shaped link of two arcs
-/// joins the road to it, so a robot enters and leaves it with no sharp turn. Each
-/// road has a link in to the ring and a link out of it. The links start where the
-/// arcs of the junctions at the sides of the cell end.
-fn roundabout_in_cell(net: &mut Net, (xl, xr): (f64, f64), (yb, yt): (f64, f64)) {
-    let (cx, cy) = ((xl + xr) / 2.0, (yb + yt) / 2.0);
-    let rho = (yt - yb) / 2.0 - 2.5;
-    let reach = (xr - xl) / 2.0 - TURN_RADIUS;
-    let east = west_row_runs_east(yb);
-    let db = if east { 1.0 } else { -1.0 };
-    ring(net, (cx, cy), rho, east);
-    let (south, north) = ((cx, cy - rho), (cx, cy + rho));
-    net.s_link((cx - db * reach, yb), south, (db, 0.0));
-    net.s_link(south, (cx + db * reach, yb), (db, 0.0));
-    net.s_link((cx + db * reach, yt), north, (-db, 0.0));
-    net.s_link(north, (cx - db * reach, yt), (-db, 0.0));
-}
-
 fn build_net() -> Net {
     let mut net = Net::default();
-    let (x0, x1, y0, y1) = (RING, W - RING, RING, H - RING);
+    let (x1, y0, y1) = (W - RING, RING, H - RING);
     let r = CORNER;
 
     // the ring road, counter-clockwise: the bottom east, the right side north, the

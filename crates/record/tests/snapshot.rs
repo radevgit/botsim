@@ -2,6 +2,7 @@ mod common;
 
 use botsim_core::graph::Graph;
 use botsim_core::observer::{Observer, Snapshot};
+use botsim_core::waiting::{Wait, WaitReason};
 use botsim_record::{ShapeRecord, SnapshotLine, StatusRecord};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -60,6 +61,44 @@ fn every_snapshot_survives_a_json_round_trip() {
         let back: SnapshotLine = serde_json::from_str(&text).unwrap();
         assert_eq!(back, line);
     }
+}
+
+#[test]
+fn a_wait_is_copied_with_its_blocker_and_reason() {
+    let mut s = run().remove(0);
+    s.robots[0].waiting = Some(Wait {
+        reason: WaitReason::SafetyStop,
+        blocker: Some(0),
+    });
+    let text = serde_json::to_string(&SnapshotLine::from(&s)).unwrap();
+    assert!(
+        text.contains(r#""waiting":{"waiting_for":0,"reason":"SafetyStop"}"#),
+        "{text}"
+    );
+    // an unknown blocker is `null`
+    s.robots[0].waiting = Some(Wait {
+        reason: WaitReason::Release,
+        blocker: None,
+    });
+    let line = SnapshotLine::from(&s);
+    let text = serde_json::to_string(&line).unwrap();
+    assert!(
+        text.contains(r#""waiting":{"waiting_for":null,"reason":"Release"}"#),
+        "{text}"
+    );
+    assert_eq!(serde_json::from_str::<SnapshotLine>(&text).unwrap(), line);
+}
+
+#[test]
+fn a_robot_that_does_not_wait_has_no_field_and_old_lines_still_read() {
+    let mut s = run().remove(0);
+    s.robots[0].waiting = None;
+    // a line without the field is also what a recording from before it looks like
+    let line = SnapshotLine::from(&s);
+    let text = serde_json::to_string(&line).unwrap();
+    assert!(!text.contains("waiting"), "{text}");
+    let back: SnapshotLine = serde_json::from_str(&text).unwrap();
+    assert_eq!(back.robots[0].waiting, None);
 }
 
 #[test]

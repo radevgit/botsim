@@ -1,7 +1,7 @@
 //! The colours of botsim pictures. The viewer uses the same ones, so a frame
 //! from the exporter looks like the viewer's window.
 
-use botsim_record::{GeometryKind, StatusRecord};
+use botsim_record::{GeometryKind, StatusRecord, WaitReasonRecord};
 
 /// Red, green, blue.
 pub type Rgb = [u8; 3];
@@ -20,6 +20,18 @@ pub const NODE_CENTRE: Rgb = [0xFF, 0xFF, 0xFF];
 
 /// The arrow from a waiting robot to the robot that blocks it.
 pub const BLOCKING: Rgb = [0x9B, 0x1C, 0x1C];
+/// The colour of a wait in the "waiting caused by others" overlay: the arrow to the
+/// blocker, or the ring round a robot whose blocker is unknown.
+pub fn wait(reason: WaitReasonRecord) -> Rgb {
+    match reason {
+        // (orange: not the dark red of the blocking arrow or of the deadlock ring)
+        WaitReasonRecord::Release => [0xEA, 0x58, 0x0C],
+        WaitReasonRecord::Zone => [0x1D, 0x4E, 0xD8],
+        WaitReasonRecord::Lift => [0x7E, 0x22, 0xCE],
+        WaitReasonRecord::Door => [0x8B, 0x5A, 0x2B],
+        WaitReasonRecord::SafetyStop => [0x11, 0x11, 0x11],
+    }
+}
 /// The ring around each robot of a deadlock.
 pub const DEADLOCK: Rgb = [0xB9, 0x1C, 0x1C];
 /// The ring around each robot of an overlap (collision).

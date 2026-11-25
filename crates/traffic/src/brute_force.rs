@@ -360,11 +360,16 @@ fn random_state(seed: u64) -> State {
     for _ in 0..4 + random.below(20) {
         if fleet.routes.len() < 5 && random.below(3) == 0 {
             let route = random_route(&mut random, &nodes, &fleet);
-            if traffic.add(route.clone()).is_ok() {
-                fleet.routes.push(route);
-                fleet.reached.push(0);
-                fleet.released.push(0);
+            let mut stays = route.clone();
+            match traffic.add(route) {
+                Ok(_) => {}
+                // not taken: it stands on its first node
+                Err(NotAdded::Standing { .. }) => stays.cut(0),
+                Err(other) => panic!("{other}"),
             }
+            fleet.routes.push(stays);
+            fleet.reached.push(0);
+            fleet.released.push(0);
         } else {
             fleet.happen(&mut random, &nodes, &mut traffic);
         }
@@ -386,7 +391,17 @@ fn add_case(seed: u64, seen: &mut Seen) {
     s.fleet.routes.push(route.clone());
     s.fleet.reached.push(0);
     s.fleet.released.push(0);
-    let place = |t: &mut Traffic| t.add(route).map(|robot| assert_eq!(robot, new));
+    let place = |t: &mut Traffic| match t.add(route) {
+        Ok(robot) => {
+            assert_eq!(robot, new);
+            Ok(())
+        }
+        Err(NotAdded::Standing { robot, why, .. }) => {
+            assert_eq!(robot, new);
+            Err(*why)
+        }
+        Err(other) => Err(other),
+    };
     let kept = what_stays(&s, new);
     judge(seed, s, new, kept, place, seen);
 }
@@ -536,8 +551,9 @@ fn judge(
     );
     seen.partly_ordered += usize::from(partly_ordered);
     seen.after_a_new_order += usize::from(fleet.new_orders > 0);
+    // not `reroute_needed`: that is also said for a route that was refused
     seen.waiting_for_ever +=
-        usize::from((0..fleet.routes.len()).any(|r| traffic.reroute_needed(r).is_some()));
+        usize::from((0..fleet.routes.len()).any(|r| !traffic.graph().waits_for_ever(r).is_empty()));
     let lasts: Vec<usize> = (0..fleet.routes.len()).map(|r| fleet.last(r)).collect();
     assert!(free_of_cycles(&lasts, &old), "seed {seed}: cycle before");
 

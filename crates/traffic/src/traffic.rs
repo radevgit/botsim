@@ -11,7 +11,8 @@
 //! Going ahead needs the other robot not yet released into those pieces and the
 //! new robot not ending on them. If a group can go neither way, the route is not
 //! taken: the dispatcher shall find another one (D9). The orders between the other
-//! robots stay as they are.
+//! robots stay as they are. A new robot whose route is not taken stays all the
+//! same, standing on its first node, and the others wait for it there.
 //!
 //! A **changed route** ([`Traffic::change`]) keeps what is released. The rest of
 //! the old route is removed and the rest of the new one is added in the same way
@@ -26,7 +27,8 @@
 //! safe ([`Traffic::give_next`]). A **release query** ([`Traffic::release`]) asks
 //! node by node and says whether the robot must take another way. A **zone
 //! request** ([`Traffic::zone_request`]) is granted by what is released, and
-//! [`Traffic::holder`] names who has a piece.
+//! [`Traffic::holder`] names who has a piece, [`Traffic::blockers`] who holds a
+//! robot back.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -99,6 +101,17 @@ pub enum NotAdded {
     OtherRoute,
     /// A new order for a robot that does not stand at the end of its route.
     NotAtEnd,
+    /// The route of a new robot is not taken, for the reason `why`. The robot is
+    /// in the module all the same, with this number, standing on the first node:
+    /// that is its route until a change or a new order is taken.
+    Standing {
+        robot: usize,
+        why: Box<NotAdded>,
+        /// The robots that are released into a piece conflicting with that node
+        /// and have not left it, lowest number first. The module cannot hold
+        /// them back: the dispatcher shall cancel them.
+        released_there: Vec<usize>,
+    },
 }
 
 impl fmt::Display for NotAdded {
@@ -119,6 +132,22 @@ impl fmt::Display for NotAdded {
             NotAdded::NotAtEnd => {
                 write!(f, "the robot does not stand at the end of its route")
             }
+            NotAdded::Standing {
+                robot,
+                why,
+                released_there,
+            } => {
+                write!(f, "robot {robot} stays on its first node: {why}")?;
+                for (i, other) in released_there.iter().enumerate() {
+                    let lead = if i == 0 {
+                        "; released there already: robot"
+                    } else {
+                        ", robot"
+                    };
+                    write!(f, "{lead} {other}")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -138,9 +167,32 @@ pub struct Traffic {
     graph: OrderGraph,
     /// By robot number.
     routes: Vec<Route>,
-    /// The robots whose last changed route could not be placed, with what another
-    /// one should keep clear of.
+    /// The robots whose first or last changed route could not be placed, with what
+    /// another one should keep clear of.
     refused: BTreeMap<usize, Reroute>,
+    /// The robots that kept a robot's last route from being taken whole.
+    refused_by: BTreeMap<usize, Vec<usize>>,
+    /// Experiment (T38): are routes taken as far as they can be?
+    partly: bool,
+}
+
+/// Why a route cannot be placed.
+struct Blocked {
+    why: NotAdded,
+    /// The first piece of the route that is to blame, if one can be named.
+    first: Option<usize>,
+    /// The robots that keep the route from being placed.
+    by: BTreeSet<usize>,
+}
+
+impl From<UnknownName> for Blocked {
+    fn from(name: UnknownName) -> Blocked {
+        Blocked {
+            why: name.into(),
+            first: None,
+            by: BTreeSet::new(),
+        }
+    }
 }
 
 impl Traffic {
@@ -150,11 +202,73 @@ impl Traffic {
             graph: OrderGraph::new(),
             routes: Vec::new(),
             refused: BTreeMap::new(),
+            refused_by: BTreeMap::new(),
+            partly: false,
         }
     }
 
     pub fn graph(&self) -> &OrderGraph {
         &self.graph
+    }
+
+    /// **Experiment (T36), off unless called; not part of the design.** A route may
+    /// pass where a robot stands at the end of its route: it waits behind that
+    /// robot instead of being refused. Until the standing robot gets a route on,
+    /// the waiting one waits for ever and is told to re-route. A standing robot
+    /// whose own route would have to wait in turn for the waiting one is refused.
+    pub fn wait_behind_standing(&mut self) {
+        self.graph.allow_waiting_behind_standing();
+    }
+
+    /// **Experiment (T38), off unless called; not part of the design.** A route
+    /// that cannot be placed whole is taken as far as it can be: [`add`],
+    /// [`change`] and [`new_order`] then succeed, and the robot's route ends where
+    /// the part taken ends ([`route_end`](Traffic::route_end)) until the rest is
+    /// offered again ([`extend`](Traffic::extend)). The part is found by cutting
+    /// before the first piece that is to blame, again and again. A route of which
+    /// nothing beyond what is held can be taken is refused as without this.
+    ///
+    /// [`add`]: Traffic::add
+    /// [`change`]: Traffic::change
+    /// [`new_order`]: Traffic::new_order
+    pub fn take_routes_partly(&mut self) {
+        self.partly = true;
+    }
+
+    /// The last node of the robot's route as the module has it.
+    pub fn route_end(&self, robot: usize) -> Option<usize> {
+        self.routes.get(robot).map(|r| r.pieces().len() / 2)
+    }
+
+    /// The robots that kept the robot's last route from being taken, or from being
+    /// taken further, lowest number first; empty if it was taken whole.
+    pub fn refused_by(&self, robot: usize) -> Vec<usize> {
+        self.refused_by.get(&robot).cloned().unwrap_or_default()
+    }
+
+    /// **Experiment (T38).** Offer a route that was taken partly again: `route` is
+    /// the whole route. It is taken as by [`change`](Traffic::change) if that gets
+    /// further than before; otherwise nothing changes but what
+    /// [`refused_by`](Traffic::refused_by) says. `true`: it goes further now.
+    pub fn extend(&mut self, robot: usize, route: Route) -> bool {
+        let Some(old) = self.routes.get(robot).cloned() else {
+            return false;
+        };
+        let end = old.pieces().len() / 2;
+        let graph = self.graph.clone();
+        let refused = self.refused.get(&robot).cloned();
+        let further = self.change(robot, route).is_ok() && self.route_end(robot) > Some(end);
+        if !further {
+            self.graph = graph;
+            if let Some(held) = self.routes.get_mut(robot) {
+                *held = old;
+            }
+            match refused {
+                Some(refused) => self.refused.insert(robot, refused),
+                None => self.refused.remove(&robot),
+            };
+        }
+        further
     }
 
     /// See [`OrderGraph::progress`].
@@ -312,10 +426,10 @@ impl Traffic {
             .collect()
     }
 
-    /// Must this robot take another way? Yes if its last changed route could not
-    /// be placed, until a route of it is taken; and while a piece of its route
-    /// waits for a robot whose route ends there. If it has no other way, it goes on
-    /// waiting.
+    /// Must this robot take another way? Yes if its first route
+    /// ([`add`](Traffic::add)) or its last changed one could not be placed, until a
+    /// route of it is taken; and while a piece of its route waits for a robot whose
+    /// route ends there. If it has no other way, it goes on waiting.
     pub fn reroute_needed(&self, robot: usize) -> Option<Reroute> {
         let route = self.routes.get(robot)?;
         let waits = avoiding(route, self.graph.waits_for_ever(robot));
@@ -377,6 +491,20 @@ impl Traffic {
         (0..self.routes.len()).find(|&robot| self.held(robot).any(|held| held == piece))
     }
 
+    /// Who holds the robot back: the robots ordered to pass before it where its
+    /// next node would take it, that have not left there; lowest number first.
+    /// Empty if the node is free to be released, the route has no further node, or
+    /// there is no such robot. Asking changes no order:
+    /// [`give_next`](Traffic::give_next) may still turn them round.
+    pub fn blockers(&self, robot: usize) -> Vec<usize> {
+        let Some(released) = self.graph.released(robot) else {
+            return Vec::new();
+        };
+        let holding = self.graph.holding_back(robot, released + 1);
+        let firsts: BTreeSet<usize> = holding.into_iter().map(|o| o.first.robot).collect();
+        firsts.into_iter().collect()
+    }
+
     /// The pieces released to the robot that it has not left, in route order.
     fn held(&self, robot: usize) -> impl Iterator<Item = &Piece> {
         let route = self.routes.get(robot);
@@ -387,13 +515,84 @@ impl Traffic {
     }
 
     /// Add one more robot, standing on the first node of its route. Returns its
-    /// number. A route that is not taken changes nothing.
+    /// number. If the route is not taken, the robot still stands there: it is kept
+    /// with that node as its route ([`NotAdded::Standing`] gives its number), and
+    /// robots ordered to pass there are told to re-route
+    /// ([`reroute_needed`](Traffic::reroute_needed)). Those released there
+    /// already cannot be held back; the answer names them. Only a robot whose type
+    /// or first node is unknown is not kept.
     pub fn add(&mut self, route: Route) -> Result<usize, NotAdded> {
         let mut graph = self.graph.clone();
         let new = graph.add_robot(&route);
-        self.graph = self.place(graph, new, &route)?;
+        match self.place_far(graph, new, route.clone()) {
+            Ok((graph, taken, by)) => {
+                self.graph = graph;
+                self.routes.push(taken);
+                self.note_refused_by(new, by);
+                Ok(new)
+            }
+            Err(blocked) => {
+                let answer = self.keep_standing(route, blocked.why);
+                if let NotAdded::Standing { robot, .. } = answer {
+                    self.note_refused_by(robot, blocked.by.into_iter().collect());
+                }
+                Err(answer)
+            }
+        }
+    }
+
+    fn note_refused_by(&mut self, robot: usize, by: Vec<usize>) {
+        if by.is_empty() {
+            self.refused_by.remove(&robot);
+        } else {
+            self.refused_by.insert(robot, by);
+        }
+    }
+
+    /// A new robot's route is not taken, for the reason `why`: keep the robot on
+    /// its first node and make the others wait for it, as far as they are not
+    /// released there. Returns what to answer.
+    fn keep_standing(&mut self, mut route: Route, why: NotAdded) -> NotAdded {
+        route.cut(0);
+        if check(&self.spots, &route).is_err() {
+            return why;
+        }
+        // the number it gets
+        if let NotAdded::Reroute(reroute) = &why {
+            self.refused.insert(self.routes.len(), reroute.clone());
+        }
+        let mut graph = self.graph.clone();
+        let robot = graph.add_robot(&route);
+        let mut waiting = Vec::new();
+        let mut released_there = Vec::new();
+        for (other, theirs) in self.routes.iter().enumerate() {
+            let theirs_pass = |piece| Pass {
+                robot: other,
+                piece,
+            };
+            let found = groups_where(&self.spots, theirs, &route, |q, _| {
+                !graph.has_left(theirs_pass(q))
+            });
+            // both routes have only known names
+            for (q, piece) in found.into_iter().flatten().flatten() {
+                if !graph.is_released(theirs_pass(q)) {
+                    waiting.push(Before {
+                        first: Pass { robot, piece },
+                        then: theirs_pass(q),
+                    });
+                } else if released_there.last() != Some(&other) {
+                    released_there.push(other);
+                }
+            }
+        }
+        graph.wait_for_standing(&waiting);
+        self.graph = graph;
         self.routes.push(route);
-        Ok(new)
+        NotAdded::Standing {
+            robot,
+            why: Box::new(why),
+            released_there,
+        }
     }
 
     /// The robot's route is changed beyond what is released: `route` is the whole
@@ -413,20 +612,24 @@ impl Traffic {
         }
         let mut graph = self.graph.clone();
         graph.lengthen(robot, route.pieces().len() / 2);
-        match self.place(graph, robot, &route) {
-            Ok(graph) => self.graph = graph,
-            Err(why) => {
-                if let NotAdded::Reroute(reroute) = &why {
+        match self.place_far(graph, robot, route) {
+            Ok((graph, taken, by)) => {
+                self.graph = graph;
+                if let Some(old) = self.routes.get_mut(robot) {
+                    *old = taken;
+                }
+                self.refused.remove(&robot);
+                self.note_refused_by(robot, by);
+                Ok(())
+            }
+            Err(blocked) => {
+                if let NotAdded::Reroute(reroute) = &blocked.why {
                     self.refused.insert(robot, reroute.clone());
                 }
-                return Err(why);
+                self.note_refused_by(robot, blocked.by.into_iter().collect());
+                Err(blocked.why)
             }
         }
-        if let Some(old) = self.routes.get_mut(robot) {
-            *old = route;
-        }
-        self.refused.remove(&robot);
-        Ok(())
     }
 
     /// A new order for a robot that stands at the end of its route: `route` starts
@@ -444,18 +647,65 @@ impl Traffic {
         if old.type_name() != route.type_name() || old.pieces().last() != route.pieces().first() {
             return Err(NotAdded::OtherRoute);
         }
-        self.graph = self.place(graph, robot, &route)?;
-        if let Some(old) = self.routes.get_mut(robot) {
-            *old = route;
+        match self.place_far(graph, robot, route) {
+            Ok((graph, taken, by)) => {
+                self.graph = graph;
+                if let Some(old) = self.routes.get_mut(robot) {
+                    *old = taken;
+                }
+                self.refused.remove(&robot);
+                self.note_refused_by(robot, by);
+                Ok(())
+            }
+            Err(blocked) => {
+                self.note_refused_by(robot, blocked.by.into_iter().collect());
+                Err(blocked.why)
+            }
         }
-        self.refused.remove(&robot);
-        Ok(())
+    }
+
+    /// [`place`](Traffic::place) the route and, where routes are taken partly
+    /// (T38) and the whole one cannot be placed, as far as it can. `graph` knows
+    /// the whole length. Returns the graph, the route as taken, and the robots that
+    /// keep the next piece from being taken; none if it is taken whole.
+    fn place_far(
+        &self,
+        graph: OrderGraph,
+        robot: usize,
+        route: Route,
+    ) -> Result<(OrderGraph, Route, Vec<usize>), Blocked> {
+        let mut blocked = match self.place(graph.clone(), robot, &route) {
+            Ok(graph) => return Ok((graph, route, Vec::new())),
+            Err(blocked) => blocked,
+        };
+        let held = graph.released(robot).unwrap_or(0);
+        let mut first = blocked.first.filter(|_| self.partly);
+        while let Some(piece) = first {
+            // the node before the first piece that is to blame; each time an
+            // earlier one, as that piece is on the part tried
+            let node = piece.saturating_sub(1) / 2;
+            if node <= held {
+                break;
+            }
+            let mut part = route.clone();
+            part.cut(node);
+            let mut shorter = graph.clone();
+            shorter.lengthen(robot, node);
+            match self.place(shorter, robot, &part) {
+                Ok(graph) => return Ok((graph, part, blocked.by.into_iter().collect())),
+                Err(again) => {
+                    first = again.first;
+                    blocked.by = again.by;
+                }
+            }
+        }
+        Err(blocked)
     }
 
     /// Order the passes of robot `new`, with this route, that have no order yet
     /// against those of the other robots. `graph` knows the route's length and how
     /// far the robot is; the result is that graph with the orders.
-    fn place(&self, graph: OrderGraph, new: usize, route: &Route) -> Result<OrderGraph, NotAdded> {
+    fn place(&self, graph: OrderGraph, new: usize, route: &Route) -> Result<OrderGraph, Blocked> {
         // also when there is no other robot
         check(&self.spots, route)?;
         // the last piece the robot holds already
@@ -468,6 +718,7 @@ impl Traffic {
         // route are to blame
         let mut refused = false;
         let mut blocked = BTreeSet::new();
+        let mut by = BTreeSet::new();
         for (other, theirs) in self.routes.iter().enumerate() {
             if other == new {
                 continue;
@@ -503,6 +754,7 @@ impl Traffic {
                     ahead.extend(new_first);
                 } else {
                     refused = true;
+                    by.insert(other);
                     // The pieces that rule out "after": those the others end on.
                     // If there is none, the new robot stands in the way: all of
                     // the group. What it already holds cannot be avoided.
@@ -520,8 +772,17 @@ impl Traffic {
             }
         }
         if refused {
-            return Err(reroute(route, blocked));
+            return Err(Blocked {
+                first: blocked.first().copied(),
+                why: reroute(route, blocked),
+                by,
+            });
         }
+        let cannot_happen = || Blocked {
+            why: reroute(route, []),
+            first: None,
+            by: BTreeSet::new(),
+        };
         // Where waiting closes a cycle, the new robot has to go first, if it may.
         // That adds orders ahead of it, so all groups are tried again.
         loop {
@@ -529,7 +790,7 @@ impl Traffic {
             // cannot close a cycle: no order makes another robot's event still to
             // come lead to the new robot yet
             if trial.order(&ahead).is_err() {
-                return Err(reroute(route, [])); // cannot happen: all were allowed
+                return Err(cannot_happen()); // all were allowed
             }
             let closing = after
                 .iter()
@@ -540,11 +801,14 @@ impl Traffic {
             };
             let new_first = reversed(&after.remove(i));
             if !allowed(&graph, &new_first) {
-                let piece = match why {
-                    Refused::Cycle(o) => Some(o.then.piece),
-                    _ => None, // cannot happen: all were allowed
+                let Refused::Cycle(order) = why else {
+                    return Err(cannot_happen()); // all were allowed
                 };
-                return Err(reroute(route, piece));
+                return Err(Blocked {
+                    why: reroute(route, [order.then.piece]),
+                    first: Some(order.then.piece),
+                    by: BTreeSet::from([order.first.robot]),
+                });
             }
             ahead.extend(new_first);
         }
@@ -618,8 +882,24 @@ mod tests {
         })
     }
 
-    fn avoid(pieces: Vec<Piece>) -> Result<usize, NotAdded> {
-        Err(NotAdded::Reroute(Reroute { avoid: pieces }))
+    /// The answer of [`Traffic::add`] to a route of what is then robot `robot`,
+    /// where no other robot is released onto its first node.
+    fn avoid(robot: usize, pieces: Vec<Piece>) -> Result<usize, NotAdded> {
+        avoid_beside(robot, pieces, Vec::new())
+    }
+
+    /// [`avoid`] where these robots are.
+    fn avoid_beside(
+        robot: usize,
+        pieces: Vec<Piece>,
+        released_there: Vec<usize>,
+    ) -> Result<usize, NotAdded> {
+        let why = Box::new(NotAdded::Reroute(Reroute { avoid: pieces }));
+        Err(NotAdded::Standing {
+            robot,
+            why,
+            released_there,
+        })
     }
 
     /// [`avoid`] for a change or a new order.
@@ -665,9 +945,9 @@ mod tests {
         let mut t = traffic(&[&a, &b, &c], &empty_map());
         assert_eq!(t.add(route(&a)), Ok(0));
         assert_eq!(t.progress(0, 0, 1), Ok(()));
-        assert_eq!(t.add(route(&b)), avoid(vec![node("N")]));
-        // nothing of the refused route is left
-        assert_eq!(t.add(route(&c)), Ok(1));
+        assert_eq!(t.add(route(&b)), avoid(1, vec![node("N")]));
+        // b keeps its number
+        assert_eq!(t.add(route(&c)), Ok(2));
     }
 
     #[test]
@@ -677,7 +957,7 @@ mod tests {
         let mut t = traffic(&[&a, &b], &empty_map());
         assert_eq!(t.add(route(&a)), Ok(0));
         assert_eq!(t.progress(0, 0, 1), Ok(()));
-        assert_eq!(t.add(route(&b)), avoid(vec![node("N")]));
+        assert_eq!(t.add(route(&b)), avoid(1, vec![node("N")]));
     }
 
     // c waits for a at X. b has to go first at N, the end of a. If it also waited
@@ -707,7 +987,7 @@ mod tests {
         assert_eq!(t.add(route(&C)), Ok(1));
         // c has Y: b cannot go before it
         assert_eq!(t.progress(1, 0, 1), Ok(()));
-        assert_eq!(t.add(route(&B)), avoid(vec![node("Y")]));
+        assert_eq!(t.add(route(&B)), avoid(2, vec![node("Y")]));
     }
 
     #[test]
@@ -744,7 +1024,7 @@ mod tests {
             (o.first.robot != 0 || o.first.piece <= 2) && (o.then.robot != 0 || o.then.piece <= 2)
         }));
         // and a route that comes later cannot pass N either
-        assert_eq!(t.add(route(&c)), avoid(vec![node("N")]));
+        assert_eq!(t.add(route(&c)), avoid(3, vec![node("N")]));
     }
 
     #[test]
@@ -792,7 +1072,7 @@ mod tests {
             assert_eq!(t.graph().released(0), Some(2));
             assert_eq!(t.reroute_needed(1), None);
             assert_eq!(t.reroute_needed(2), told("N"));
-            assert_eq!(t.clone().add(route(&through_n)), avoid(vec![node("N")]));
+            assert_eq!(t.clone().add(route(&through_n)), avoid(3, vec![node("N")]));
         }
 
         // confirmed: a stands on M and will not go to N
@@ -802,7 +1082,7 @@ mod tests {
         assert_eq!(t.reroute_needed(2), None);
         assert!(!before(&t, 0, 4, 2, 2), "d no longer waits at N");
         assert_eq!(t.add(route(&through_n)), Ok(3));
-        assert_eq!(t.add(route(&through_m)), avoid(vec![node("M")]));
+        assert_eq!(t.add(route(&through_m)), avoid(4, vec![node("M")]));
     }
 
     #[test]
@@ -867,7 +1147,7 @@ mod tests {
         assert!(!before(&t, 0, 4, 2, 2));
         assert_eq!(t.reroute_needed(2), None);
         // a still holds M, and no new route may pass it
-        assert_eq!(t.clone().add(route(&through_m)), avoid(vec![node("M")]));
+        assert_eq!(t.clone().add(route(&through_m)), avoid(4, vec![node("M")]));
 
         // a route that does not go on from what is released is not taken either
         assert_eq!(t.change(0, route(&["S", "N"])), Err(NotAdded::OtherRoute));
@@ -1452,6 +1732,136 @@ mod tests {
         assert_eq!(t.holder(&node("Z")), None);
     }
 
+    const NOBODY: [usize; 0] = [];
+
+    #[test]
+    fn the_robots_that_hold_one_back_are_named() {
+        let mut t = three_at_one_node();
+        // X is next for each: b waits for a, c for both
+        assert_eq!(t.blockers(0), NOBODY);
+        assert_eq!(t.blockers(1), [0]);
+        assert_eq!(t.blockers(2), [0, 1]);
+        let orders = t.graph().orders();
+        assert_eq!(t.blockers(2), [0, 1]);
+        assert_eq!(t.graph().orders(), orders);
+        // a drives through and leaves X
+        assert_eq!(t.release(0, 2), released(2, None));
+        assert_eq!(t.progress(0, 2, 2), Ok(()));
+        assert_eq!(t.blockers(1), NOBODY);
+        assert_eq!(t.blockers(2), [1]);
+        // nothing further, and no such robot
+        assert_eq!(t.blockers(0), NOBODY);
+        assert_eq!(t.blockers(7), NOBODY);
+    }
+
+    #[test]
+    fn a_robot_standing_for_good_is_named_as_a_blocker() {
+        let (a, b) = (["S", "X", "T"], ["X"]);
+        let mut t = traffic(&[&a, &b], &empty_map());
+        assert_eq!(t.add(route(&a)), Ok(0));
+        assert_eq!(t.add(route(&b)), avoid(1, Vec::new()));
+        assert_eq!(t.blockers(0), [1]);
+        assert_eq!(t.blockers(1), NOBODY);
+    }
+
+    #[test]
+    fn waiting_behind_a_standing_robot_lets_two_pass_each_others_places() {
+        // a stands on P and passes where b stands, b stands on R and passes P
+        let (a, b) = (["P", "Q", "R"], ["R", "S", "P"]);
+        let mut t = traffic(&[&a, &b], &empty_map());
+        assert_eq!(t.add(route(&["P"])), Ok(0));
+        assert_eq!(t.add(route(&["R"])), Ok(1));
+        // as designed: refused
+        assert_eq!(
+            t.clone().new_order(0, route(&a)),
+            avoid_new(vec![node("R")])
+        );
+
+        t.wait_behind_standing();
+        assert_eq!(t.new_order(0, route(&a)), Ok(()));
+        // a gets as far as Q and, until b has a route, is told to re-route
+        assert_eq!(t.release(0, 2), released(1, Some(vec![node("R")])));
+        assert_eq!(t.new_order(1, route(&b)), Ok(()));
+        assert_eq!(t.release(0, 2), released(1, None));
+        // b leaves R, a leaves P, and both arrive
+        assert_eq!(t.release(1, 1), released(1, None));
+        assert_eq!(t.progress(1, 1, 1), Ok(()));
+        assert_eq!(t.progress(0, 1, 1), Ok(()));
+        assert_eq!(t.release(0, 2), released(2, None));
+        assert_eq!(t.release(1, 2), released(2, None));
+    }
+
+    #[test]
+    fn waiting_behind_a_standing_robot_still_refuses_a_head_on_swap() {
+        let (a, b) = (["P", "Q", "R"], ["R", "Q", "P"]);
+        let mut t = traffic(&[&a, &b], &empty_map());
+        t.wait_behind_standing();
+        assert_eq!(t.add(route(&["P"])), Ok(0));
+        assert_eq!(t.add(route(&["R"])), Ok(1));
+        assert_eq!(t.new_order(0, route(&a)), Ok(()));
+        assert!(matches!(
+            t.new_order(1, route(&b)),
+            Err(NotAdded::Reroute(_))
+        ));
+        // a robot that only drives towards the end of its route is not "standing"
+        let (c, d) = (["V", "W"], ["U", "W", "X"]);
+        let mut t = traffic(&[&c, &d], &empty_map());
+        t.wait_behind_standing();
+        assert_eq!(t.add(route(&c)), Ok(0));
+        assert_eq!(t.progress(0, 0, 1), Ok(()));
+        assert_eq!(t.add(route(&d)), avoid(1, vec![node("W")]));
+    }
+
+    #[test]
+    fn a_route_taken_partly_goes_further_once_it_can() {
+        // both end on N; c shows that the way to M is free
+        let (a, b) = (["S", "N"], ["T", "M", "N"]);
+        let mut t = traffic(&[&a, &b, &["N", "W"]], &empty_map());
+        assert_eq!(t.add(route(&a)), Ok(0));
+        // as designed: refused, and a is to blame
+        let mut whole = t.clone();
+        assert_eq!(whole.add(route(&b)), avoid(1, vec![node("N")]));
+        assert_eq!(whole.refused_by(1), [0]);
+
+        t.take_routes_partly();
+        assert_eq!(t.add(route(&b)), Ok(1));
+        assert_eq!(t.route_end(1), Some(1));
+        assert_eq!(t.refused_by(1), [0]);
+        assert_eq!(t.release(1, 2), released(1, None));
+        // no further while a ends on N, and nothing changes
+        let orders = t.graph().orders();
+        assert!(!t.extend(1, route(&b)));
+        assert_eq!(t.graph().orders(), orders);
+        assert_eq!((t.route_end(1), t.graph().released(1)), (Some(1), Some(1)));
+        assert_eq!(t.reroute_needed(1), None);
+        assert_eq!(t.refused_by(1), [0]);
+
+        // a gets a route that leaves N
+        assert_eq!(t.release(0, 1), released(1, None));
+        assert_eq!(t.progress(0, 1, 1), Ok(()));
+        assert_eq!(t.new_order(0, route(&["N", "W"])), Ok(()));
+        assert!(t.extend(1, route(&b)));
+        assert_eq!(t.route_end(1), Some(2));
+        assert_eq!(t.refused_by(1), NOBODY);
+        assert!(before(&t, 0, 0, 1, 4));
+    }
+
+    #[test]
+    fn nothing_is_taken_partly_where_the_first_step_is_barred() {
+        // b stands on N, which is a's second node
+        let (a, b) = (["S", "N", "Z"], ["N"]);
+        let mut t = traffic(&[&a, &b], &empty_map());
+        t.take_routes_partly();
+        assert_eq!(t.add(route(&b)), Ok(0));
+        assert_eq!(t.add(route(&a)), avoid(1, vec![node("N")]));
+        assert_eq!(t.refused_by(1), [0]);
+        assert_eq!(
+            t.new_order(1, route(&["S", "N"])),
+            avoid_new(vec![node("N")])
+        );
+        assert_eq!(t.refused_by(1), [0]);
+    }
+
     #[test]
     fn cutting_short_where_nobody_waits() {
         let a = ["S", "N", "Z"];
@@ -1470,7 +1880,7 @@ mod tests {
         let (a, b) = (["S", "N"], ["T", "N"]);
         let mut t = traffic(&[&a, &b], &empty_map());
         assert_eq!(t.add(route(&a)), Ok(0));
-        assert_eq!(t.add(route(&b)), avoid(vec![node("N")]));
+        assert_eq!(t.add(route(&b)), avoid(1, vec![node("N")]));
     }
 
     #[test]
@@ -1493,7 +1903,7 @@ mod tests {
         let mut t = traffic(&[&a, &b], &map);
         assert_eq!(t.add(route(&a)), Ok(0));
         // the way into P is what meets the robot standing on N
-        assert_eq!(t.add(route(&b)), avoid(vec![edge("W-P")]));
+        assert_eq!(t.add(route(&b)), avoid(1, vec![edge("W-P")]));
     }
 
     #[test]
@@ -1510,7 +1920,7 @@ mod tests {
         let (a, b) = (["S", "M", "Y"], ["M", "S", "Q"]);
         let mut t = traffic(&[&a, &b], &empty_map());
         assert_eq!(t.add(route(&a)), Ok(0));
-        assert_eq!(t.add(route(&b)), avoid(vec![node("S")]));
+        assert_eq!(t.add(route(&b)), avoid(1, vec![node("S")]));
     }
 
     #[test]
@@ -1519,7 +1929,77 @@ mod tests {
         let mut t = traffic(&[&a], &empty_map());
         assert_eq!(t.add(route(&a)), Ok(0));
         // nothing a route could avoid
-        assert_eq!(t.add(route(&a)), avoid(Vec::new()));
+        assert_eq!(t.add(route(&a)), avoid_beside(1, Vec::new(), vec![0]));
+        // the first one has the node
+        assert_eq!(t.holder(&node("N")), Some(0));
+    }
+
+    #[test]
+    fn a_refused_robot_stays_and_blocks_its_node() {
+        // b appears on X, which a is to pass
+        let (a, b, away) = (["S", "X", "T"], ["X"], ["X", "U"]);
+        let mut t = traffic(&[&a, &b, &away], &empty_map());
+        assert_eq!(t.add(route(&a)), Ok(0));
+        assert_eq!(t.add(route(&b)), avoid(1, Vec::new()));
+        assert_eq!(t.holder(&node("X")), Some(1));
+        // a is not released into X, and is told to take another way
+        assert_eq!(t.release(0, 2), released(0, Some(vec![node("X")])));
+        assert_eq!(t.holder(&node("X")), Some(1));
+
+        // b is told to re-route until a route of it is taken
+        let told = released(0, Some(Vec::new()));
+        assert_eq!(t.release(1, 1), told);
+        assert_eq!(t.change(1, route(&["X", "Z"])).map_err(|_| ()), Err(()));
+        assert_eq!(t.release(1, 1), told);
+
+        // with a new route b gets away, and a follows once it has left X
+        assert_eq!(t.change(1, route(&away)), Ok(()));
+        assert_eq!(t.release(0, 2), released(0, None));
+        assert_eq!(t.release(1, 1), released(1, None));
+        assert_eq!(t.progress(1, 1, 1), Ok(()));
+        assert_eq!(t.release(0, 2), released(2, None));
+    }
+
+    #[test]
+    fn a_robot_released_there_is_named_and_cannot_be_held_back() {
+        // a has X already when b appears on it; c has not
+        let (a, b, c) = (["S", "X", "T"], ["X"], ["U", "X", "V"]);
+        let mut t = traffic(&[&a, &c, &b], &empty_map());
+        assert_eq!(t.add(route(&a)), Ok(0));
+        assert_eq!(t.add(route(&c)), Ok(1));
+        assert_eq!(t.release(0, 1), released(1, None));
+        let named = avoid_beside(2, Vec::new(), vec![0]);
+        assert_eq!(t.clone().add(route(&b)), named);
+        assert_eq!(
+            named.map_err(|e| e.to_string()),
+            Err(
+                "robot 2 stays on its first node: the route cannot be placed, avoid; \
+                 released there already: robot 0"
+                    .into()
+            )
+        );
+        assert!(t.add(route(&b)).is_err());
+        assert!(!before(&t, 2, 0, 0, 2));
+        assert!(before(&t, 2, 0, 1, 2));
+        assert_eq!(t.reroute_needed(1).map(|r| r.avoid), Some(vec![node("X")]));
+
+        // the dispatcher cancels a, which stops before X
+        let stopped = Cancel {
+            finished: true,
+            nothing_left: true,
+            standing_on: Some(0),
+        };
+        assert_eq!(t.cancelled(0, stopped), Ok(true));
+        assert_eq!(t.holder(&node("X")), Some(2));
+    }
+
+    #[test]
+    fn a_robot_that_has_left_the_node_is_not_named() {
+        let (a, b) = (["S", "X", "T"], ["X"]);
+        let mut t = traffic(&[&a, &b], &empty_map());
+        assert_eq!(t.add(route(&a)), Ok(0));
+        assert_eq!(t.progress(0, 2, 2), Ok(()));
+        assert_eq!(t.add(route(&b)), Ok(1));
     }
 
     #[test]
@@ -1535,9 +2015,17 @@ mod tests {
     #[test]
     fn unknown_names_are_reported_without_other_robots() {
         let mut t = traffic(&[&["A"]], &empty_map());
-        assert_eq!(
-            t.add(route(&["Z"])),
-            Err(NotAdded::Unknown(UnknownName::Piece(node("Z"))))
-        );
+        let unknown = NotAdded::Unknown(UnknownName::Piece(node("Z")));
+        assert_eq!(t.add(route(&["Z"])), Err(unknown));
+        assert_eq!(t.holder(&node("A")), None);
+        // with a first node that is known, the robot is kept on it
+        let unknown = NotAdded::Unknown(UnknownName::Piece(edge("A-Z")));
+        let kept = NotAdded::Standing {
+            robot: 0,
+            why: Box::new(unknown),
+            released_there: Vec::new(),
+        };
+        assert_eq!(t.add(route(&["A", "Z"])), Err(kept));
+        assert_eq!(t.holder(&node("A")), Some(0));
     }
 }

@@ -8,6 +8,7 @@ use botsim_core::graph::Graph;
 use botsim_core::jobs::{Job, JobGenerator};
 use botsim_core::observer::{Observer, Snapshot};
 use botsim_core::spec::RobotSpec;
+use botsim_core::waiting::{Wait, WaitReason};
 use botsim_core::world::{RobotId, World};
 use botsim_core::zones::Zones;
 use vda5050::factsheet::Factsheet;
@@ -285,36 +286,48 @@ fn a_robot_that_waits_for_a_zone_names_the_robot_that_has_it() {
 
 #[test]
 fn in_a_run_zone_waits_are_named_with_their_blocker() {
-    let g = ring();
-    let nodes: Vec<_> = (0..4)
-        .map(|i| g.node_idx(&format!("N{i}")).unwrap())
-        .collect();
+    // the ring, and a node Z beside it inside zone b, where a robot stands for good
+    let g = graph(
+        &[
+            ("N0", 0.0, 0.0),
+            ("N1", 20.0, 0.0),
+            ("N2", 20.0, 20.0),
+            ("N3", 0.0, 20.0),
+            ("Z", 27.0, 3.0),
+        ],
+        &[("N0", "N1"), ("N1", "N2"), ("N2", "N3"), ("N3", "N0")],
+    );
+    let node = |n: &str| g.node_idx(n).unwrap();
+    let (n0, n2, beside) = (node("N0"), node("N2"), node("Z"));
     let f: Factsheet =
         serde_json::from_str(include_str!("data/diff_robot.factsheet.json")).unwrap();
     let spec = RobotSpec::from_factsheet(&f).unwrap();
     let z = zones(&g);
     let mut w = World::new(g, DT, 0).unwrap();
     w.set_zones(z);
-    for (i, &n) in [nodes[0], nodes[1], nodes[3]].iter().enumerate() {
+    for (i, n) in [n0, beside].into_iter().enumerate() {
         let id = RobotId::new("ACME", &format!("R-{}", i + 1));
-        let times = ActionTimes::new(1.0).with("pick", 5.0).with("drop", 5.0);
-        w.add_robot(id, spec.clone(), times, n, 0.0).unwrap();
+        w.add_robot(id, spec.clone(), ActionTimes::new(1.0), n, 0.0)
+            .unwrap();
     }
     let mut c = Controller::new(&w);
-    let mut gen_ = JobGenerator::new(5, &nodes, 240.0, DT).unwrap();
-    let (mut zone_waits, mut named) = (0, 0);
-    for t in 0..24_000u64 {
-        let new: Vec<Job> = gen_.step(t).into_iter().collect();
-        c.step(&mut w, new);
+    // R-1 is to drive from N0 through zone b to N2
+    let mut jobs = Some(vec![Job {
+        id: 1,
+        pickup: n0,
+        drop: n2,
+        created_tick: 0,
+    }]);
+    for _ in 0..(60.0 / DT) as usize {
+        c.step(&mut w, jobs.take().unwrap_or_default());
         w.step();
-        for wait in w.waits().iter().flatten() {
-            if wait.reason == botsim_core::waiting::WaitReason::Zone {
-                zone_waits += 1;
-                named += usize::from(wait.blocker.is_some());
-            }
-        }
     }
-    assert!(named > 0, "{named} of {zone_waits} zone waits named");
+    assert!(c.completed().is_empty(), "R-2 never leaves the zone");
+    let expected = Wait {
+        reason: WaitReason::Zone,
+        blocker: Some(1),
+    };
+    assert_eq!(w.waits(), [Some(expected), None]);
 }
 
 #[test]

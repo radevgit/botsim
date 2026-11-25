@@ -9,7 +9,9 @@ use std::io::BufReader;
 use std::process::ExitCode;
 
 use botsim_record::read_recording_partial;
-use botsim_viewer::{busiest_edges, group_table, groups_from_json, most_waited_nodes, usage_between};
+use botsim_viewer::{
+    busiest_edges, group_table, groups_from_json, most_waited_nodes, usage_between,
+};
 
 const USAGE: &str =
     "usage: usage_report <recording.jsonl> [--from S] [--to S] [--count N] [--groups FILE]";
@@ -24,7 +26,9 @@ fn main() -> ExitCode {
         let mut value = |what: &str| args.next().ok_or(format!("{what} needs a value"));
         let parsed: Result<(), String> = match a.as_str() {
             "--from" => value("--from").and_then(|v| {
-                from = v.parse().map_err(|_| format!("--from: not a number: {v}"))?;
+                from = v
+                    .parse()
+                    .map_err(|_| format!("--from: not a number: {v}"))?;
                 Ok(())
             }),
             "--to" => value("--to").and_then(|v| {
@@ -32,7 +36,9 @@ fn main() -> ExitCode {
                 Ok(())
             }),
             "--count" => value("--count").and_then(|v| {
-                count = v.parse().map_err(|_| format!("--count: not a number: {v}"))?;
+                count = v
+                    .parse()
+                    .map_err(|_| format!("--count: not a number: {v}"))?;
                 Ok(())
             }),
             "--groups" => value("--groups").map(|v| groups_path = Some(v)),

@@ -2,7 +2,7 @@ use botsim_export::palette::{self, Rgb};
 use botsim_export::{Renderer, View, ViewError};
 use botsim_record::{
     EdgeRecord, GeometryFile, GeometryKind, LayoutLine, NodeRecord, RobotRecord, RouteRecord,
-    ShapeRecord, SnapshotLine, StatusRecord,
+    ShapeRecord, SnapshotLine, StatusRecord, WaitReasonRecord, WaitRecord,
 };
 use tiny_skia::Pixmap;
 
@@ -74,6 +74,7 @@ fn robot(map: usize, x: f64, y: f64, heading: f64, status: StatusRecord) -> Robo
         planned: RouteRecord::default(),
         charge: None,
         charging: false,
+        waiting: None,
     }
 }
 
@@ -325,6 +326,50 @@ fn a_blocking_arrow_runs_from_the_waiter_to_the_blocker() {
     // nothing is drawn over the bodies
     assert_ne!(at(&with, &view, 5.5, 0.25), palette::BLOCKING);
     assert_ne!(at(&with, &view, 8.5, 0.25), palette::BLOCKING);
+}
+
+#[test]
+fn the_waits_overlay_replaces_the_blocking_arrow_with_one_in_the_reason_colour() {
+    let layout = corridor();
+    let mut r = Renderer::new(&layout, 0, W, H).unwrap();
+    let view = *r.view();
+    let mut snap = snapshot(facing());
+    // the detector sees robot 1 block robot 0, the wait says the same, for a zone
+    snap.blocking = vec![[0, 1]];
+    snap.robots[0].waiting = Some(WaitRecord {
+        waiting_for: Some(1),
+        reason: WaitReasonRecord::Zone,
+    });
+    let zone = palette::wait(WaitReasonRecord::Zone);
+    // off: the picture as before
+    assert_eq!(at(&r.frame(&snap), &view, 7.0, 0.0), palette::BLOCKING);
+    r.set_waits(true);
+    assert_eq!(at(&r.frame(&snap), &view, 7.0, 0.0), zone);
+    // a blocking pair without a wait draws nothing when the overlay is on
+    snap.robots[0].waiting = None;
+    assert_ne!(at(&r.frame(&snap), &view, 7.0, 0.0), palette::BLOCKING);
+}
+
+#[test]
+fn an_unknown_blocker_is_a_ring_in_the_reason_colour() {
+    let layout = corridor();
+    let mut r = Renderer::new(&layout, 0, W, H).unwrap();
+    r.set_waits(true);
+    let mut snap = snapshot(facing());
+    let before = r.frame(&snap);
+    snap.robots[0].waiting = Some(WaitRecord {
+        waiting_for: None,
+        reason: WaitReasonRecord::SafetyStop,
+    });
+    let after = r.frame(&snap);
+    let colour = palette::wait(WaitReasonRecord::SafetyStop);
+    let count = |p: &Pixmap| {
+        p.pixels()
+            .iter()
+            .filter(|c| [c.red(), c.green(), c.blue()] == colour)
+            .count()
+    };
+    assert!(count(&after) > count(&before), "a ring appears");
 }
 
 #[test]

@@ -47,6 +47,7 @@ fn robot(status: StatusRecord, last_node: Option<usize>) -> RobotRecord {
         planned: RouteRecord::default(),
         charge: None,
         charging: false,
+        waiting: None,
     }
 }
 

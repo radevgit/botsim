@@ -4,6 +4,7 @@ use botsim_core::door::DoorStatus;
 use botsim_core::lift::{Call, DoorState, LiftStatus};
 use botsim_core::observer::{Blocking, Reservation, RobotSnapshot, RobotStatus, Snapshot};
 use botsim_core::spec::Shape;
+use botsim_core::waiting::{Wait, WaitReason};
 use serde::{Deserialize, Serialize};
 
 /// The world after one step. Robots are referred to by their position in
@@ -48,6 +49,30 @@ pub struct RobotRecord {
     /// The robot is charging.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub charging: bool,
+    /// Who the robot waits for in this step and why, as the "waiting caused by others"
+    /// metric counts it; `None` if it does not wait or is in its own stop (and in the
+    /// recordings made before the field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<WaitRecord>,
+}
+
+/// One robot's wait in one step (`botsim_core::waiting::Wait`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaitRecord {
+    /// The robot it waits for, by its position in [`SnapshotLine::robots`]; `null`
+    /// (`None`) if unknown.
+    pub waiting_for: Option<usize>,
+    pub reason: WaitReasonRecord,
+}
+
+/// Same variants as `botsim_core::waiting::WaitReason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WaitReasonRecord {
+    Release,
+    Zone,
+    Lift,
+    Door,
+    SafetyStop,
 }
 
 /// The body outline relative to the kinematic center (turns with the heading).
@@ -186,6 +211,22 @@ impl From<&RobotSnapshot> for RobotRecord {
             },
             charge: r.charge,
             charging: r.charging,
+            waiting: r.waiting.map(WaitRecord::from),
+        }
+    }
+}
+
+impl From<Wait> for WaitRecord {
+    fn from(w: Wait) -> Self {
+        WaitRecord {
+            waiting_for: w.blocker,
+            reason: match w.reason {
+                WaitReason::Release => WaitReasonRecord::Release,
+                WaitReason::Zone => WaitReasonRecord::Zone,
+                WaitReason::Lift => WaitReasonRecord::Lift,
+                WaitReason::Door => WaitReasonRecord::Door,
+                WaitReason::SafetyStop => WaitReasonRecord::SafetyStop,
+            },
         }
     }
 }

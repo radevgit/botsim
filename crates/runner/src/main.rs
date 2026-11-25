@@ -1,7 +1,11 @@
-//! `botsim [--timing] [--record <file.jsonl> [--record-interval <seconds>]
-//! [--geometry <geometry.json>]] <scenario.toml>`: run a scenario headless and print the JSON summary on
-//! stdout. Errors go to stderr with exit code 1; a wrong command line gives exit
-//! code 2.
+//! `botsim [--policy baseline|traffic] [--timing] [--record <file.jsonl>
+//! [--record-interval <seconds>] [--geometry <geometry.json>]] <scenario.toml>`:
+//! run a scenario headless and print the JSON summary on stdout. Errors go to
+//! stderr with exit code 1; a wrong command line gives exit code 2.
+//!
+//! `--policy` says who decides which robot may go: the bundled baseline rules (the
+//! default) or the traffic module (see `botsim::traffic_policy`). `--timing`
+//! cannot be used with `traffic` yet.
 //!
 //! `--timing` adds the real time the controller took per step (it differs from
 //! run to run, so without the flag the output of a scenario is always identical).
@@ -21,17 +25,27 @@ use std::process::ExitCode;
 
 use botsim::scenario::Scenario;
 use botsim::summary;
+use botsim::traffic_policy::TrafficAdapter;
 use botsim_record::{GeometryFile, LayoutLine, LayoutRobot, Recorder};
 
-const USAGE: &str = "usage: botsim [--timing] [--record <file.jsonl> \
-[--record-interval <seconds>] [--geometry <geometry.json>]] <scenario.toml>";
+const USAGE: &str = "usage: botsim [--policy baseline|traffic] [--timing] \
+[--record <file.jsonl> [--record-interval <seconds>] [--geometry <geometry.json>]] \
+<scenario.toml>";
 
 /// Snapshot interval of a recording, simulated seconds.
 const DEFAULT_RECORD_INTERVAL: f64 = 0.1;
 
+/// Who decides which robot may go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Policy {
+    Baseline,
+    Traffic,
+}
+
 #[derive(Debug)]
 struct Options {
     scenario: PathBuf,
+    policy: Policy,
     timing: bool,
     record: Option<PathBuf>,
     /// Static geometry file (walls, racks, ...) for the recording.
@@ -40,6 +54,7 @@ struct Options {
 }
 
 fn parse_args(args: &[String]) -> Result<Options, String> {
+    let mut policy = Policy::Baseline;
     let mut timing = false;
     let mut record = None;
     let mut record_interval = None;
@@ -48,6 +63,14 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--policy" => {
+                let value = it.next().ok_or("--policy needs baseline or traffic")?;
+                policy = match value.as_str() {
+                    "baseline" => Policy::Baseline,
+                    "traffic" => Policy::Traffic,
+                    _ => return Err(format!("bad --policy '{value}' (baseline or traffic)")),
+                };
+            }
             "--timing" => timing = true,
             "--record" => {
                 let value = it.next().ok_or("--record needs a file name")?;
@@ -76,9 +99,13 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
     if geometry.is_some() && record.is_none() {
         return Err("--geometry needs --record".into());
     }
+    if timing && policy == Policy::Traffic {
+        return Err("--timing cannot be used with --policy traffic".into());
+    }
     let [scenario] = <[PathBuf; 1]>::try_from(scenario).map_err(|_| String::new())?;
     Ok(Options {
         scenario,
+        policy,
         timing,
         record,
         geometry,
@@ -155,7 +182,14 @@ fn run(options: &Options) -> Result<String, String> {
         }
         None => None,
     };
-    let result = summary::run_with(&scenario, world, options.timing).map_err(|e| e.to_string())?;
+    let result = match options.policy {
+        Policy::Baseline => summary::run_with(&scenario, world, options.timing),
+        Policy::Traffic => {
+            let adapter = TrafficAdapter::new(&scenario, path)?;
+            summary::run_with_policy(&scenario, world, Box::new(adapter))
+        }
+    }
+    .map_err(|e| e.to_string())?;
     if let Some((file, handle)) = recording {
         handle
             .finish()

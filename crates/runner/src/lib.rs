@@ -4,3 +4,5 @@
 
 pub use botsim_scenario as scenario;
 pub mod summary;
+pub mod traffic_policy;
+pub mod waiting_summary;

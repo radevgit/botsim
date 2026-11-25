@@ -92,9 +92,9 @@ fn the_label_changes_only_its_own_corner() {
     let left_wall = with.view().to_px(0.0, 0.0).0;
     let inset = (3.0 * with.view().scale).min(0.05 * 1920.0) as f32;
     assert!(
-        (area.0 - left_wall as f32 - inset).abs() < 0.5,
+        (area.0 - left_wall - inset).abs() < 0.5,
         "begins {} px inside the wall, expected {inset}",
-        area.0 - left_wall as f32
+        area.0 - left_wall
     );
     // no clock, no area
     assert_eq!(plain.clock_area(100.0), None);

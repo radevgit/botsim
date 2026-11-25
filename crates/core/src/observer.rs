@@ -21,6 +21,7 @@ use crate::drive::Pose;
 use crate::graph::{EdgeIdx, Graph, NodeIdx};
 use crate::lift::LiftStatus;
 use crate::spec::Shape;
+use crate::waiting::Wait;
 use crate::world::RobotId;
 
 /// Receives a run. All methods are called from the simulation thread.
@@ -107,6 +108,11 @@ pub struct RobotSnapshot {
     pub charge: Option<f64>,
     /// The robot is charging (always false until the chargers exist).
     pub charging: bool,
+    /// Why the robot waits in this step and for whom (the blocker is an index in
+    /// [`Snapshot::robots`]; `None` there means unknown), as the "waiting caused by
+    /// others" metric counts it (see [`crate::waiting`]): `None` for a robot that
+    /// does not wait, or that is in its own stop (a random stop, an empty battery).
+    pub waiting: Option<Wait>,
 }
 
 /// The nodes and edges a controller has reserved for a robot.

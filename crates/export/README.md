@@ -45,7 +45,7 @@ run that ends in a deadlock.
 
 ```
 botsim-export <recording.jsonl> <out-dir> [--map <mapId>] [--size WxH]
-              [--fps N] [--speed X] [--from <s>] [--to <s>] [--no-clock]
+              [--fps N] [--speed X] [--from <s>] [--to <s>] [--no-clock] [--waits]
 ```
 
 | Option | Default | |
@@ -56,6 +56,7 @@ botsim-export <recording.jsonl> <out-dir> [--map <mapId>] [--size WxH]
 | `--speed X` | `1` | simulated seconds per video second; `10` is ten times faster than the run |
 | `--from <s>`, `--to <s>` | first / last snapshot | the part of the run to draw, in simulated seconds |
 | `--no-clock` | clock on | leave out the `t = 240.0 s` label |
+| `--waits` | off | the "waiting caused by others" overlay: instead of the red blocking arrows, an arrow from each waiting robot to its blocker coloured by reason (release orange, zone blue, lift purple, door brown, safety stop black), and a ring in that colour round a robot whose blocker is unknown. A recording made before the wait was recorded shows neither. No legend in the frames |
 
 - Frame number k shows the simulated time `from + k × speed / fps`. Robot
   positions are interpolated between the snapshots of the recording, so the

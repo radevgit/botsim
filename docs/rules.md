@@ -865,6 +865,15 @@ baseline.
   released **no further** (bug fix, step 97: H used to be released past X, drove
   after it and hit it on a curve, warehouse 4 with charging, 770 s). What H had
   released before the take-over stays released (a base cannot be taken back).
+  **X must stand in H's way** (bug fix, step 121, **S163**, **S164**; for every
+  kind of go-first): X's body lies on the area H would cover, its body widened by
+  0.1 m on each side (the protective field's side margin), from where it is along
+  its released route, turning on the spot where its heading changes, up to what H
+  holds that keeps X: the contested node, or for a swept-area or node-edge wait the
+  end of the held edge, or the held node. Reason: a robot that only stands, e.g. in
+  its own random stop (the state message does not tell it from a stop by the
+  protective field), was gone first past and then drove into the taker (M1, 2
+  collisions).
   `Controller::give_ways()` counts it. **Not done head-on** (X heading
   against H): there both would run into each other; that needs a back-off to
   another node (not built). **Lane change / merge (brief update, X-011/O-018):**
@@ -1013,32 +1022,55 @@ baseline.
   and maximum over finished jobs. Jobs still running at the end are not
   counted.
 - **Collisions**: see section 7.
+- **Waits** (U12 definition, U15 step 2; **S157**, **S158**; `botsim_core::waiting`):
+  decided once per step by the world (`World::waits`: reason and blocker). A robot
+  **waits** when it has an order ahead of it and stands still without running an
+  action, or its protective field stops or brakes it.
+  - **Safety stop:** the blocker is the robot in its protective field.
+  - **Release, zone, lift, door:** the controller says why it holds the robot back
+    and who causes it (`World::publish_held_back`):
+    - *zone:* released road ahead, a RELEASE zone request not granted; the robots
+      with a grant for that zone and those standing inside it
+      (`TrafficPolicy::zone_blockers`);
+    - at the end of the released route with more to go: *lift* or *door* if another
+      robot owns the one needed there, else *release*, with the policy's holder
+      query (`TrafficPolicy::blocker`; the baseline names the first of: the holder
+      of the next node, of the edge to it, of an edge whose swept area meets it,
+      the other robot of a node-edge conflict).
+  - If several robots cause a wait, the **nearest** is named (smallest gap between
+    the bodies; at equal gaps the one added first). Nobody named: **unknown**.
+  - Without a controller that publishes (runs without jobs), a release wait names
+    the robot standing on the next node (within 0.1 m), else the one that has it
+    released ahead of it (**S76**).
+  - A wait the controller names is seen one step after it starts (the controller
+    reads the states before the step).
+- **Waiting caused by others** (U12; **S167**–**S170**): summary section
+  `waiting_for_others`, in the JSON summary only, with a controller (`[jobs]`); all
+  times in robot-seconds.
+  - The waits above, added up step by step, **without** the steps in which the
+    waiting robot is in its own stop (a random stop or an empty battery), even with
+    another robot in its field. The deadlock detector still sees those.
+  - `total_seconds` (known and unknown blockers), `unknown_seconds`, `by_reason`
+    (release, zone, lift, door, safety stop), per robot `caused_seconds` and
+    `suffered_seconds` (the unknown part is suffered, caused by nobody).
+  - `top_pairs`: the 10 blocker → waiter pairs with the most waiting; `top_places`:
+    the 10 places with the most: the node the waiting robot stands on (within
+    0.1 m), else the edge it is on. Equal times: the order of robots and nodes.
+  - Each robot of an observer snapshot carries the same wait (`waiting`: reason and
+    blocker, nothing during its own stop). Not yet: the recording fields
+    (`waiting_for`, `reason`; `briefs/waiting_recording.md` for the record crate).
 - **Deadlocks** (**S35**): the simulator only observes and reports; resolving
-  them is the controller's job. Robot A *waits for* robot B when
-  - (**reservation wait**) A stands still with part of its order still ahead, is
-    not busy with an action, and B stands on A's next node (within 0.1 m) **or has
-    that node released ahead of it** (reserved, though B is not there yet, **S76**);
-  - (**safety wait**, **S76**) A is stopped by its protective field and B is the
-    robot in the field (the lowest index if several);
-  - (**release wait**, step 105) as a reservation wait, with A's next node free: the
-    controller names B as the robot that keeps A from its next release
-    (`TrafficPolicy::blocker`, published with `World::publish_release_blockers`).
-    The baseline names the first of: the holder of the next node, of the edge to it,
-    of an edge whose swept area meets it, the other robot of a node-edge conflict.
-    Without it a wait for a swept area was invisible, and standstills went
-    unreported.
-
-  A deadlock is a cycle of such waits (two robots head-on, a longer ring, with
-  either kind of link) that lasts at least the timeout — 30 s, or
+  them is the controller's job. A deadlock is a cycle of these waits (two robots
+  head-on, a longer ring, with any reasons) that lasts at least the timeout — 30 s, or
   `deadlock_timeout` in the scenario. Each deadlock is reported once
   with its robots, when it formed, when it was reported, when it ended (if it
   did) and its duration. Before S76 only "B stands on the next node" was seen,
   and the freezes of the big layouts (a robot on a node waiting for nodes another
   robot has reserved, that robot stopped by the first one's body) were not
-  reported (`deadlock_count` 0 with 80–105 of 112 robots frozen). Limits: one wait
-  per robot (the first rule above that names a robot: a cycle through a second
-  holder of the same wait is missed), and a robot waiting for a robot that is not
-  itself waiting (e.g. one idle for ever) is not a deadlock by this rule.
+  reported (`deadlock_count` 0 with 80–105 of 112 robots frozen). Limits: one
+  blocker per robot (a cycle through a second robot that causes the same wait is
+  missed), and a robot waiting for a robot that is not itself waiting (e.g. one idle
+  for ever) or for an unknown one is not a deadlock by this rule.
 - **Controller time per step** (**S39**): the real (wall-clock) time of every
   controller step: number of steps, total, mean and maximum. It differs from
   run to run, so it is reported **only with `--timing`**; without the flag the

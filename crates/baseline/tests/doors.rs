@@ -7,6 +7,7 @@ use botsim_core::graph::Graph;
 use botsim_core::jobs::Job;
 use botsim_core::lift::DoorState;
 use botsim_core::spec::RobotSpec;
+use botsim_core::waiting::{Wait, WaitReason};
 use botsim_core::world::{RobotId, World};
 use vda5050::factsheet::Factsheet;
 
@@ -281,13 +282,52 @@ fn robots_going_opposite_ways_through_a_door_in_a_one_lane_corridor_do_not_pass(
     run_no_check(&mut w, &mut c, jobs, 20000);
     assert!(c.completed().len() < 2, "{} done", c.completed().len());
     assert!(w.collisions().is_empty());
-    // one waits for the door the other owns, the other for the node held by it
-    let waits: Vec<_> = w.waits().iter().flatten().collect();
-    assert_eq!(waits.len(), 2, "{waits:?}");
-    let door = waits
-        .iter()
-        .filter(|w| w.reason == botsim_core::waiting::WaitReason::Door);
-    assert_eq!(door.count(), 1, "{waits:?}");
-    assert!(waits.iter().all(|w| w.blocker.is_some()), "{waits:?}");
-    assert_eq!(w.deadlocks().len(), 1);
+}
+
+#[test]
+fn a_robot_that_waits_for_a_door_names_its_owner() {
+    // one door on two roads side by side: A → B and C → D, 20 m each
+    let g = graph(
+        &[
+            ("A", 0.0, 0.0),
+            ("B", 20.0, 0.0),
+            ("C", 0.0, 5.0),
+            ("D", 20.0, 5.0),
+        ],
+        &[("A", "B"), ("C", "D")],
+    );
+    let f: Factsheet =
+        serde_json::from_str(include_str!("data/diff_robot.factsheet.json")).unwrap();
+    let spec = RobotSpec::from_factsheet(&f).unwrap();
+    let edges = vec![g.edge_idx("A-B").unwrap(), g.edge_idx("C-D").unwrap()];
+    let starts = [g.node_idx("A").unwrap(), g.node_idx("C").unwrap()];
+    let jobs = vec![job(&g, 1, "A", "B"), job(&g, 2, "C", "D")];
+    let mut w = World::new(g, DT, 0).unwrap();
+    w.add_door(DoorSpec {
+        id: "D1".into(),
+        edges,
+        passage_width: None,
+        open_seconds: 2.0,
+        close_seconds: 2.0,
+        hold_seconds: None,
+    })
+    .unwrap();
+    for (i, n) in starts.into_iter().enumerate() {
+        let times = ActionTimes::new(1.0).with("pick", 1.0).with("drop", 1.0);
+        w.add_robot(id(i + 1), spec.clone(), times, n, 0.0).unwrap();
+    }
+    let mut c = Controller::new(&w);
+    let mut jobs = Some(jobs);
+    let for_the_door = Wait {
+        reason: WaitReason::Door,
+        blocker: Some(0),
+    };
+    let mut named_the_owner = false;
+    for _ in 0..4000 {
+        c.step(&mut w, jobs.take().unwrap_or_default());
+        w.step();
+        named_the_owner |= w.waits().get(1) == Some(&Some(for_the_door));
+    }
+    assert!(named_the_owner, "R-2 waits for the door R-1 owns");
+    assert_eq!(c.completed().len(), 2, "{:?}", c.rejected());
 }

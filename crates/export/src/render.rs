@@ -40,6 +40,8 @@ const DEADLOCK_RING_GAP: f64 = 0.15;
 /// The overlap ring lies outside the deadlock ring, so a robot that is in both
 /// shows both: the same gap, the ring width and a little more.
 const OVERLAP_RING_GAP: f64 = DEADLOCK_RING_GAP + RING_WIDTH + 0.05;
+/// The ring of a wait with an unknown blocker lies outside both, so all three show.
+const WAIT_RING_GAP: f64 = OVERLAP_RING_GAP + RING_WIDTH + 0.05;
 
 /// Draws the frames of one floor of a recording. The geometry and the track
 /// graph never change, so they are drawn once; every frame starts from that
@@ -54,7 +56,9 @@ pub struct Renderer {
     clock: Option<Clock>,
     show_clock: bool,
     show_brand: bool,
-    /// Where the right edge of the name `botsim` is (pixels from the left): a few
+    /// Draw the waits instead of the blocking arrows (see [`Renderer::set_waits`]).
+    show_waits: bool,
+    ///Where the right edge of the name `botsim` is (pixels from the left): a few
     /// metres inside the right wall of the building.
     brand_right: f32,
     /// Where the left edge of the clock is (pixels from the left): a few metres
@@ -115,6 +119,7 @@ impl Renderer {
             clock: None,
             show_clock: false,
             show_brand: false,
+            show_waits: false,
             brand_right,
             clock_left,
         })
@@ -150,6 +155,14 @@ impl Renderer {
         self.show_brand = on;
         self.load_font()?;
         Ok(self)
+    }
+
+    /// The "waiting caused by others" overlay: when on, every [`Renderer::frame`] shows,
+    /// **instead of** the red arrows of `blocking`, an arrow from each waiting robot to
+    /// its blocker in the colour of the reason, and a ring in that colour round a
+    /// waiting robot whose blocker is unknown. Off at first.
+    pub fn set_waits(&mut self, on: bool) {
+        self.show_waits = on;
     }
 
     /// The font is looked for once, and only if some text is wanted.
@@ -223,9 +236,27 @@ impl Renderer {
                 );
             }
         }
-        for &[waiter, blocker] in &snapshot.blocking {
-            if let (Some(w), Some(b)) = (robot_on_floor(waiter), robot_on_floor(blocker)) {
-                draw_blocking(&mut pixmap, &self.view, w, b);
+        if self.show_waits {
+            for waiter in snapshot.robots.iter().filter(|r| on_floor(r)) {
+                let Some(wait) = waiter.waiting else {
+                    continue;
+                };
+                let colour = palette::wait(wait.reason);
+                match wait.waiting_for {
+                    None => draw_ring(&mut pixmap, &self.view, waiter, WAIT_RING_GAP, colour),
+                    // (a blocker on another floor, or that does not exist: nothing)
+                    Some(i) => {
+                        if let Some(b) = robot_on_floor(i) {
+                            draw_blocking(&mut pixmap, &self.view, waiter, b, colour);
+                        }
+                    }
+                }
+            }
+        } else {
+            for &[waiter, blocker] in &snapshot.blocking {
+                if let (Some(w), Some(b)) = (robot_on_floor(waiter), robot_on_floor(blocker)) {
+                    draw_blocking(&mut pixmap, &self.view, w, b, palette::BLOCKING);
+                }
             }
         }
         if let Some(text) = &self.clock {
@@ -506,8 +537,14 @@ fn draw_ring(pixmap: &mut Pixmap, view: &View, robot: &RobotRecord, gap: f64, c:
 }
 
 /// An arrow from the waiting robot to the one that blocks it: from the edge of
-/// one body to the edge of the other. Nothing if the bodies touch.
-fn draw_blocking(pixmap: &mut Pixmap, view: &View, waiter: &RobotRecord, blocker: &RobotRecord) {
+/// one body to the edge of the other, in the colour `c`. Nothing if the bodies touch.
+fn draw_blocking(
+    pixmap: &mut Pixmap,
+    view: &View,
+    waiter: &RobotRecord,
+    blocker: &RobotRecord,
+    c: Rgb,
+) {
     let (from, to) = (body_centre(waiter), body_centre(blocker));
     let (dx, dy) = (to.0 - from.0, to.1 - from.1);
     let distance = dx.hypot(dy);
@@ -523,9 +560,9 @@ fn draw_blocking(pixmap: &mut Pixmap, view: &View, waiter: &RobotRecord, blocker
     let tail = (from.0 + u.0 * start, from.1 + u.1 * start);
     let tip = (from.0 + u.0 * end, from.1 + u.1 * end);
     if let Some(path) = polyline(view, &[tail, tip], false) {
-        line(pixmap, &path, palette::BLOCKING, view.px(BLOCKING_WIDTH));
+        line(pixmap, &path, c, view.px(BLOCKING_WIDTH));
     }
-    draw_arrow_head_in(pixmap, view, tip, u, palette::BLOCKING);
+    draw_arrow_head_in(pixmap, view, tip, u, c);
 }
 
 /// A point given in the robot frame (x forward, y left), in the world.

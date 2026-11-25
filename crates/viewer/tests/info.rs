@@ -36,6 +36,7 @@ fn robot(id: &str, status: StatusRecord) -> RobotRecord {
         planned: RouteRecord::default(),
         charge: None,
         charging: false,
+        waiting: None,
     }
 }
 

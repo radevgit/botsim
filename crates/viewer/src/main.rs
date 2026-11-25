@@ -10,8 +10,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use botsim_check::{Finding, Level, Options, run_scenario};
-use botsim_export::{Renderer, View, sample};
-use botsim_record::{LayoutLine, Recording, SnapshotLine, read_recording_partial};
+use botsim_export::{Renderer, View, palette, sample};
+use botsim_record::{
+    LayoutLine, Recording, SnapshotLine, WaitReasonRecord, read_recording_partial,
+};
 use botsim_viewer::{
     ALL_STATUSES, Group, Playback, SPEEDS, StatusPoint, Usage, busiest_edges, describe,
     group_table, groups_from_json, most_waited_nodes, pick_robot, point_at, status_colour,
@@ -98,6 +100,15 @@ fn conflict_lines(layout: &LayoutLine, pairs: &[(String, String)]) -> Vec<Confli
         .collect()
 }
 
+/// The reasons of a wait with their names, for the legend of the waits overlay.
+const WAIT_REASONS: [(WaitReasonRecord, &str); 5] = [
+    (WaitReasonRecord::Release, "release"),
+    (WaitReasonRecord::Zone, "zone"),
+    (WaitReasonRecord::Lift, "lift"),
+    (WaitReasonRecord::Door, "door"),
+    (WaitReasonRecord::SafetyStop, "safety stop"),
+];
+
 struct ViewerApp {
     /// The check still running, if any.
     check: Option<CheckResult>,
@@ -135,7 +146,11 @@ struct ViewerApp {
     texture: Option<egui::TextureHandle>,
     /// What the texture shows: time, view and selected robot. The picture is drawn
     /// again when this changes.
-    shown: Option<(f64, View, Option<String>)>,
+    shown: Option<(f64, View, Option<String>, bool)>,
+    /// The "waiting caused by others" overlay is on (instead of the blocking arrows).
+    show_waits: bool,
+    /// Some snapshot of the recording has a wait (older recordings have none).
+    has_waits: bool,
     /// Zoomed in: how many times closer than the whole floor, and the world point in
     /// the middle of the picture. `None`: the whole floor.
     camera: Option<(f64, (f64, f64))>,
@@ -168,6 +183,11 @@ impl ViewerApp {
             conflicts: Vec::new(),
             show_conflicts: true,
             statuses: status_series(&recording),
+            show_waits: false,
+            has_waits: recording
+                .snapshots
+                .iter()
+                .any(|s| s.robots.iter().any(|r| r.waiting.is_some())),
             recording,
             map: 0,
             playback: Playback::new(first, last),
@@ -322,10 +342,18 @@ fn heat_colour(t: f64) -> egui::Color32 {
     let lerp = |a: f64, b: f64, k: f64| (a + (b - a) * k).round() as u8;
     if t < 0.5 {
         let k = t / 0.5;
-        egui::Color32::from_rgb(lerp(205.0, 245.0, k), lerp(208.0, 200.0, k), lerp(215.0, 40.0, k))
+        egui::Color32::from_rgb(
+            lerp(205.0, 245.0, k),
+            lerp(208.0, 200.0, k),
+            lerp(215.0, 40.0, k),
+        )
     } else {
         let k = (t - 0.5) / 0.5;
-        egui::Color32::from_rgb(lerp(245.0, 170.0, k), lerp(200.0, 20.0, k), lerp(40.0, 20.0, k))
+        egui::Color32::from_rgb(
+            lerp(245.0, 170.0, k),
+            lerp(200.0, 20.0, k),
+            lerp(40.0, 20.0, k),
+        )
     }
 }
 
@@ -393,8 +421,7 @@ impl eframe::App for ViewerApp {
             match rx.try_recv() {
                 Ok(Ok(output)) => {
                     self.marks = marks_for(&self.recording.layout, &output.findings);
-                    self.conflicts =
-                        conflict_lines(&self.recording.layout, &output.open_conflicts);
+                    self.conflicts = conflict_lines(&self.recording.layout, &output.open_conflicts);
                     self.findings = output.findings;
                     self.check = None;
                 }
@@ -415,6 +442,10 @@ impl eframe::App for ViewerApp {
         // time
         let dt = ui.input(|i| i.stable_dt) as f64;
         handle_keys(ui, &mut self.playback);
+        // W: the waits overlay on / off
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::W)) {
+            self.show_waits = !self.show_waits;
+        }
         self.playback.advance(dt);
         if self.playback.is_playing() {
             ui.ctx().request_repaint();
@@ -456,6 +487,21 @@ impl eframe::App for ViewerApp {
                     self.camera = None;
                 }
                 ui.label(format!("{zoom:.1}×"));
+                ui.checkbox(&mut self.show_waits, "Waits").on_hover_text(
+                    "W: who waits for whom, coloured by reason, instead of the blocking arrows; \
+                     a ring: the blocker is unknown",
+                );
+                if self.show_waits {
+                    if self.has_waits {
+                        // the legend
+                        for (reason, name) in WAIT_REASONS {
+                            let [r, g, b] = palette::wait(reason);
+                            ui.colored_label(egui::Color32::from_rgb(r, g, b), format!("■ {name}"));
+                        }
+                    } else {
+                        ui.label("no wait data in this recording");
+                    }
+                }
                 let mut heat_changed = ui
                     .checkbox(&mut self.show_heat, "Usage")
                     .on_hover_text(
@@ -602,21 +648,27 @@ impl eframe::App for ViewerApp {
                 egui::Panel::bottom("status_counts").show(ui, |ui| {
                     ui.add_space(4.0);
                     ui.strong(format!("Statuses at {time:.0} s"));
-                    egui::Grid::new("status_grid").num_columns(2).show(ui, |ui| {
-                        for status in ALL_STATUSES {
-                            let n = snapshot.robots.iter().filter(|r| r.status == status).count();
-                            let [r, g, b] = status_colour(status);
-                            ui.colored_label(
-                                egui::Color32::from_rgb(r, g, b),
-                                format!("■ {status:?}"),
-                            );
-                            ui.label(format!("{n}"));
+                    egui::Grid::new("status_grid")
+                        .num_columns(2)
+                        .show(ui, |ui| {
+                            for status in ALL_STATUSES {
+                                let n = snapshot
+                                    .robots
+                                    .iter()
+                                    .filter(|r| r.status == status)
+                                    .count();
+                                let [r, g, b] = status_colour(status);
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(r, g, b),
+                                    format!("■ {status:?}"),
+                                );
+                                ui.label(format!("{n}"));
+                                ui.end_row();
+                            }
+                            ui.strong("all robots");
+                            ui.strong(format!("{}", snapshot.robots.len()));
                             ui.end_row();
-                        }
-                        ui.strong("all robots");
-                        ui.strong(format!("{}", snapshot.robots.len()));
-                        ui.end_row();
-                    });
+                        });
                 });
                 if let (true, Some(u)) = (self.show_heat, &self.usage) {
                     ui.add_space(8.0);
@@ -704,11 +756,12 @@ impl eframe::App for ViewerApp {
                 return;
             };
             self.prepare_renderer(view);
-            let Some((renderer, _)) = &self.renderer else {
+            let Some((renderer, _)) = &mut self.renderer else {
                 ui.label(self.problem.clone().unwrap_or_default());
                 return;
             };
-            let wanted = (time, view, self.selected.clone());
+            renderer.set_waits(self.show_waits);
+            let wanted = (time, view, self.selected.clone(), self.show_waits);
             if self.shown.as_ref() != Some(&wanted) {
                 // the selected robot's own curves are drawn strong
                 let pixmap = renderer.frame_selected(&snapshot, self.selected.as_deref());
@@ -749,7 +802,8 @@ impl eframe::App for ViewerApp {
                     order.sort_by(|&a, &b| u.edge_share(a).total_cmp(&u.edge_share(b)));
                     for e in order {
                         let edge = &layout.edges[e];
-                        let (Some(a), Some(b)) = (layout.nodes.get(edge.start), layout.nodes.get(edge.end))
+                        let (Some(a), Some(b)) =
+                            (layout.nodes.get(edge.start), layout.nodes.get(edge.end))
                         else {
                             continue;
                         };
@@ -794,8 +848,10 @@ impl eframe::App for ViewerApp {
                     };
                     let mut clicked_finding: Option<usize> = None;
                     if self.show_conflicts {
-                        let stroke =
-                            egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(200, 40, 160, 160));
+                        let stroke = egui::Stroke::new(
+                            1.5,
+                            egui::Color32::from_rgba_unmultiplied(200, 40, 160, 160),
+                        );
                         for c in self.conflicts.iter().filter(|c| c.map == self.map) {
                             let (ax, ay) = renderer.view().to_px(c.from.0, c.from.1);
                             let (bx, by) = renderer.view().to_px(c.to.0, c.to.1);
@@ -962,7 +1018,12 @@ fn main() -> ExitCode {
         options,
         Box::new(|cc| {
             style(&cc.egui_ctx);
-            Ok(Box::new(ViewerApp::new(recording, cut_off, check_result, groups)))
+            Ok(Box::new(ViewerApp::new(
+                recording,
+                cut_off,
+                check_result,
+                groups,
+            )))
         }),
     );
     match result {

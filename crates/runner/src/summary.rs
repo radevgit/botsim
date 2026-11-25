@@ -19,6 +19,7 @@ use botsim_sweep::{MapOptions, TypeRef};
 use serde::Serialize;
 
 use crate::scenario::{Scenario, ScenarioError};
+use crate::waiting_summary::{WaitingSummary, waiting_summary};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Summary {
@@ -60,6 +61,9 @@ pub struct Summary {
     pub parking: Option<ParkingSummary>,
     pub jobs: JobsSummary,
     pub metrics: MetricsSummary,
+    /// Waiting caused by other robots (U12); left out if no controller runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_for_others: Option<WaitingSummary>,
     pub robots: Vec<RobotSummary>,
     /// Wall-clock time of the controller; only with `--timing` (S39), because it
     /// differs from run to run and so breaks identical output.
@@ -524,6 +528,7 @@ fn run_controller<P: TrafficPolicy>(
         collisions,
         jobs,
         metrics,
+        waiting_for_others: controller.as_ref().map(|_| waiting_summary(&world)),
         seed: scenario.seed,
         duration: scenario.duration,
         time_step: scenario.time_step,

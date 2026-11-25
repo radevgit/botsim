@@ -19,6 +19,7 @@ fn robot(id: &str, map: usize, x: f64, y: f64, heading: f64, status: StatusRecor
         planned: RouteRecord::default(),
         charge: None,
         charging: false,
+        waiting: None,
     }
 }
 

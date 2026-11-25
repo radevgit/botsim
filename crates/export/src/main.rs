@@ -1,5 +1,5 @@
 //! `botsim-export <recording.jsonl> <out-dir> [--map <mapId>] [--size 1920x1080]
-//! [--fps 30] [--speed 1] [--from <s>] [--to <s>] [--no-clock]`: draw the frames of
+//! [--fps 30] [--speed 1] [--from <s>] [--to <s>] [--no-clock] [--waits]`: draw the frames of
 //! a recording as numbered PNGs (`frame_000001.png`, ...), for a video:
 //!
 //! ```text
@@ -23,7 +23,7 @@ use botsim_export::{ExportOptions, export_frames};
 use botsim_record::read_recording_partial;
 
 const USAGE: &str = "usage: botsim-export <recording.jsonl> <out-dir> [--map <mapId>] \
-[--size WxH] [--fps N] [--speed X] [--from <seconds>] [--to <seconds>] [--no-clock]";
+[--size WxH] [--fps N] [--speed X] [--from <seconds>] [--to <seconds>] [--no-clock] [--waits]";
 
 #[derive(Debug)]
 struct Args {
@@ -71,6 +71,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--from" => options.from = Some(value(&mut it, "--from", "seconds")?),
             "--to" => options.to = Some(value(&mut it, "--to", "seconds")?),
             "--no-clock" => options.clock = false,
+            "--waits" => options.waits = true,
             option if option.starts_with("--") => return Err(format!("unknown option {option}")),
             path => positional.push(PathBuf::from(path)),
         }
@@ -128,13 +129,13 @@ fn run(args: &Args) -> Result<String, String> {
             args.recording.display()
         );
     }
-    if let (Some(to), Some(last)) = (args.options.to, recording.snapshots.last()) {
-        if to > last.time {
-            eprintln!(
-                "note: --to {to} is after the end of the recording ({:.1} s): the frames after it all show the last snapshot",
-                last.time
-            );
-        }
+    if let (Some(to), Some(last)) = (args.options.to, recording.snapshots.last())
+        && to > last.time
+    {
+        eprintln!(
+            "note: --to {to} is after the end of the recording ({:.1} s): the frames after it all show the last snapshot",
+            last.time
+        );
     }
     let s = export_frames(&recording, &args.out_dir, &args.options).map_err(|e| e.to_string())?;
     Ok(format!(

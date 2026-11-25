@@ -43,9 +43,18 @@ impl World {
     }
 
     fn add(&mut self, route: Route) -> Result<usize, NotAdded> {
-        let robot = self.traffic.add(route.clone())?;
-        self.routes.push(route);
-        Ok(robot)
+        let added = self.traffic.add(route.clone());
+        match &added {
+            Ok(_) => self.routes.push(route),
+            // it stays on its first node
+            Err(NotAdded::Standing { .. }) => {
+                let mut stands = route;
+                stands.cut(0);
+                self.routes.push(stands);
+            }
+            Err(_) => {}
+        }
+        added
     }
 
     /// Drive until every robot stands on the end of its route, step by step: each
@@ -200,13 +209,17 @@ fn another_way_around_a_standing_robot() {
     for way in WAYS {
         let mut world = World::new(&[&stands, &through, &around], &empty_map());
         assert_eq!(world.add(route(&stands)), Ok(0));
-        assert_eq!(
-            world.add(route(&through)),
-            Err(NotAdded::Reroute(Reroute {
-                avoid: vec![node("X")]
-            }))
-        );
-        assert_eq!(world.add(route(&around)), Ok(1));
+        let why = Box::new(NotAdded::Reroute(Reroute {
+            avoid: vec![node("X")],
+        }));
+        let refused = NotAdded::Standing {
+            robot: 1,
+            why,
+            released_there: Vec::new(),
+        };
+        assert_eq!(world.add(route(&through)), Err(refused));
+        assert_eq!(world.traffic.change(1, route(&around)), Ok(()));
+        world.routes[1] = route(&around);
         assert_eq!(world.drive(way), [[0; 0], [0; 0]]);
     }
 }

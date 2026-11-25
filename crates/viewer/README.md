@@ -26,6 +26,7 @@ Controls:
 | **Left** / **Right** | 1 s back / forward (with **Shift**: 10 s) |
 | **Home** / **End**, or **Ctrl + Left** / **Ctrl + Right** | jump to the start / the end |
 | **[** / **]** | slower / faster |
+| **W**, or the **Waits** box | the "waiting caused by others" overlay: instead of the red blocking arrows, an arrow from each waiting robot to its blocker coloured by reason (the legend is beside the box), and a ring in that colour round a robot whose blocker is unknown; "no wait data in this recording" for a recording without it |
 | **click a robot** | its details appear in the side panel; click empty floor to deselect |
 | the slider | scrub through the run |
 | the speed menu | simulated seconds per real second (0.5× to 100×) |

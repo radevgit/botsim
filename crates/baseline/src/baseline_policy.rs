@@ -18,10 +18,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use botsim_core::collision::{overlap, place};
-use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_core::collision::{Body, overlap, place};
+use botsim_core::graph::{EdgeIdx, EdgeOrientation, Graph, NodeIdx};
 use botsim_core::metrics::is_waiting;
 use botsim_core::observer::Reservation;
+use botsim_core::safety::LATERAL_MARGIN;
 use botsim_core::spec::Shape;
 use vda5050::state::State;
 
@@ -51,6 +52,9 @@ pub const GIVE_WAY_HOLD_SECONDS: f64 = 2.0;
 /// Extra distance (m) kept between the body swept by a turn on the spot and a stopped
 /// robot.
 const TURN_CLEARANCE: f64 = 0.05;
+
+/// The distance (m) between the places a robot's way is checked at.
+const WAY_STEP: f64 = 0.1;
 
 /// The baseline's traffic rules.
 #[derive(Debug)]
@@ -320,6 +324,19 @@ impl BaselinePolicy {
                 if !(near && ahead && same_way && clear) {
                     continue;
                 }
+                // H cannot go on until X moves: X stands in H's way up to what H
+                // holds that keeps X (S163, S164). A robot that only stands (a
+                // random stop) would drive on into X.
+                let Some(held) = node_holder
+                    .map(|_| Held::Node(node))
+                    .or(swept.map(|(_, f)| Held::Edge(f)))
+                    .or(nblock.map(|(_, held)| held))
+                else {
+                    continue;
+                };
+                if !self.stands_in_way(fleet, i, h, held) {
+                    continue;
+                }
                 if node_holder.is_some() {
                     if self.reservations.take_over_node(node, i).is_none() {
                         continue;
@@ -335,6 +352,36 @@ impl BaselinePolicy {
                 break;
             }
         }
+    }
+
+    /// Does robot `x` stand in the way of robot `h`: on the area `h` covers, its
+    /// body widened by the protective field's side margin, from where it is along
+    /// its released route up to `until` (a node, or the end of an edge)?
+    fn stands_in_way(&self, fleet: &Fleet, x: usize, h: usize, until: Held) -> bool {
+        let (Some(work), Some(px), Some(ph)) = (
+            route_of(fleet, h),
+            fleet.states[x].mobile_robot_position.as_ref(),
+            fleet.states[h].mobile_robot_position.as_ref(),
+        ) else {
+            return false;
+        };
+        let (route, released) = (work.route, work.released_through);
+        let at = ((fleet.states[h].last_node_sequence_id / 2) as usize).min(released);
+        // the plan index of the last node of the way (where h is, if it has
+        // passed what it holds)
+        let end = match until {
+            Held::Node(n) => (at..=released).find(|&j| route.nodes[j] == n),
+            Held::Edge(f) => (at..released).find(|&k| route.edges[k] == f).map(|k| k + 1),
+        }
+        .unwrap_or(at);
+        let other = place(&self.robots[x].shape, px.x, px.y, px.theta);
+        way_meets(
+            &self.graph,
+            &self.robots[h],
+            (ph.x, ph.y, ph.theta),
+            &route.edges[at..end],
+            &other,
+        )
     }
 
     /// Does the route of `a`, within its next three nodes, reach the end node of edge
@@ -673,6 +720,87 @@ fn turn_is_clear(
     })
 }
 
+/// Does `robot`, standing at `pose` (x, y, heading) and driving `edges` (the first
+/// is the one it is on or starts next), come to touch `other` (on the same floor),
+/// with its body widened by [`LATERAL_MARGIN`] on each side? It turns on the spot
+/// where its heading changes at a node.
+fn way_meets(
+    graph: &Graph,
+    robot: &PolicyRobot,
+    pose: (f64, f64, f64),
+    edges: &[EdgeIdx],
+    other: &Body,
+) -> bool {
+    let wide = match robot.shape {
+        Shape::Rect {
+            cx,
+            cy,
+            half_length,
+            half_width,
+        } => Shape::Rect {
+            cx,
+            cy,
+            half_length,
+            half_width: half_width + LATERAL_MARGIN,
+        },
+        Shape::Circle { cx, cy, radius } => Shape::Circle {
+            cx,
+            cy,
+            radius: radius + LATERAL_MARGIN,
+        },
+    };
+    let meets = |x: f64, y: f64, heading: f64| overlap(&place(&wide, x, y, heading), other);
+    if meets(pose.0, pose.1, pose.2) {
+        return true;
+    }
+    let (manufacturer, series) = (&robot.id.manufacturer, &robot.series);
+    let mut heading = pose.2;
+    for (k, &e) in edges.iter().enumerate() {
+        if graph.edges[e].map_transition {
+            break; // a lift ride leaves the floor
+        }
+        let path = graph.edge_path(e, manufacturer, series);
+        let length = path.length();
+        // on the first edge: from the point of the path nearest to the robot
+        let from = if k == 0 {
+            let steps = (length / WAY_STEP).ceil().max(1.0) as usize;
+            (0..=steps)
+                .map(|j| length * j as f64 / steps as f64)
+                .min_by(|&a, &b| {
+                    let far = |s: f64| {
+                        let (x, y) = path.point_at(s);
+                        (x - pose.0).hypot(y - pose.1)
+                    };
+                    far(a).total_cmp(&far(b))
+                })
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let orientation = graph.edge_orientation(e, manufacturer, series);
+        let steps = ((length - from) / WAY_STEP).ceil().max(1.0) as usize;
+        for j in 0..=steps {
+            let s = from + (length - from) * j as f64 / steps as f64;
+            let (x, y) = path.point_at(s);
+            let next = match orientation {
+                Some(EdgeOrientation::Tangential(a)) => path.tangent_at(s) + a,
+                Some(EdgeOrientation::Global(a)) => a,
+                None if robot.omnidirectional => heading,
+                None => path.tangent_at(s),
+            };
+            // the shortest way round to the new heading, checked every 5°
+            let turn = (next - heading + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                - std::f64::consts::PI;
+            let parts = (turn.abs() / 5f64.to_radians()).ceil().max(1.0) as usize;
+            if (1..=parts).any(|p| meets(x, y, heading + turn * p as f64 / parts as f64)) {
+                return true;
+            }
+            heading = next;
+        }
+    }
+    false
+}
+
 /// The angle between two directions, 0..π.
 fn angle_between(a: f64, b: f64) -> f64 {
     let d = (a - b).rem_euclid(std::f64::consts::TAU);
@@ -734,6 +862,95 @@ mod tests {
             "safetyState":{"activeEmergencyStop":"NONE","fieldViolation":false}}"#,
         )
         .unwrap()
+    }
+
+    /// Go-first with H on A (heading east), released to B, and X on a side road to B
+    /// at `x_at`, waiting for B; both go on to C. Does X get B?
+    fn x_goes_first(x_at: (f64, f64)) -> bool {
+        let g = test_graph::graph(
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 3.0, 0.0),
+                ("C", 6.0, 0.0),
+                ("D", x_at.0, x_at.1),
+            ],
+            &[("A", "B"), ("B", "C"), ("D", "B")],
+        );
+        let n = |id: &str| g.node_idx(id).unwrap();
+        let h_route = Plan::new(&g, n("A"), vec![0, 1]);
+        let x_route = Plan::new(&g, n("D"), vec![2, 1]);
+        let robot = |serial: &str| PolicyRobot {
+            id: RobotId::new("ACME", serial),
+            series: "X1".into(),
+            type_idx: 0,
+            shape: Shape::Circle {
+                cx: 0.0,
+                cy: 0.0,
+                radius: 0.4,
+            },
+            omnidirectional: false,
+        };
+        let mut policy = BaselinePolicy::new(&g);
+        policy.start(&Setup {
+            graph: &g,
+            types: &["ACME/X1".to_string()],
+            robots: &[robot("H"), robot("X")],
+            zones: None,
+        });
+        let at = |x: f64, y: f64, theta: f64| {
+            let mut state = standing();
+            state.mobile_robot_position = serde_json::from_str(&format!(
+                r#"{{"x":{x},"y":{y},"theta":{theta},"mapId":"M","localized":true}}"#
+            ))
+            .unwrap();
+            state
+        };
+        // X faces along its road to B
+        let heading = (-x_at.1).atan2(3.0 - x_at.0);
+        let states = [at(0.0, 0.0, 0.0), at(x_at.0, x_at.1, heading)];
+        let ask = |robot: usize, from, limit, elapsed| Ask {
+            robot,
+            state: &states[robot],
+            route: if robot == 0 { &h_route } else { &x_route },
+            at: 0,
+            released_through: from,
+            limit,
+            elapsed,
+        };
+        assert_eq!(policy.place(&ask(0, 0, 1, 0.0)).through, 1);
+        assert_eq!(policy.place(&ask(1, 0, 0, 0.0)).through, 0);
+        // H stands with B released; X has waited for B long enough
+        policy.release(&ask(0, 1, 1, GIVE_WAY_HOLD_SECONDS + 1.0));
+        policy.release(&ask(1, 0, 1, GIVE_WAY_AFTER_SECONDS + 1.0));
+        let view = |route, released_through| {
+            Some(RouteView {
+                route,
+                released_through,
+                cancelling: false,
+            })
+        };
+        policy.after_releases(&Fleet {
+            tick: 0,
+            elapsed: 0.05,
+            states: &states,
+            routes: &[view(&h_route, 1), view(&x_route, 0)],
+        });
+        policy.node_holder(n("B")) == Some(1)
+    }
+
+    /// X stands in the way of H (0.95 m off its road: clear of the body, within the
+    /// 0.1 m field at its side), so H cannot go on and X goes first.
+    #[test]
+    fn a_robot_in_the_way_goes_first() {
+        assert!(x_goes_first((1.8, 0.85)));
+    }
+
+    /// X waits for B beside H's way: H can go on (it only stands, e.g. in a random
+    /// stop), so it keeps B (M1, 1375 s: C-006 was given the node of Y-001, which
+    /// drove into it when its stop ended).
+    #[test]
+    fn a_robot_beside_the_way_does_not_go_first() {
+        assert!(!x_goes_first((1.8, 2.0)));
     }
 
     /// A robot that turns on the spot, or drives sideways, with its way released is

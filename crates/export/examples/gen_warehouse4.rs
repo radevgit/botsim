@@ -32,7 +32,6 @@
 //! may use what comes in a later step.
 
 use std::collections::{HashMap, HashSet};
-use std::f64::consts::PI;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -580,7 +579,9 @@ impl Net {
             .filter_map(|e| {
                 let (a, b) = (self.nodes[e.a], self.nodes[e.b]);
                 let mid = match e.curve? {
-                    Curve::Arc(c, _) => ((a.0 + 2.0 * c.0 + b.0) / 4.0, (a.1 + 2.0 * c.1 + b.1) / 4.0),
+                    Curve::Arc(c, _) => {
+                        ((a.0 + 2.0 * c.0 + b.0) / 4.0, (a.1 + 2.0 * c.1 + b.1) / 4.0)
+                    }
                     Curve::Cubic(c1, c2) => (
                         (a.0 + 3.0 * c1.0 + 3.0 * c2.0 + b.0) / 8.0,
                         (a.1 + 3.0 * c1.1 + 3.0 * c2.1 + b.1) / 8.0,
@@ -604,7 +605,12 @@ impl Net {
             }
             // from the start: the next node as far along as `max` allows, where no arc has its
             // corner within `MIN_TANGENT` (0.25 m steps); no piece is shorter than `shortest`
-            let point = |s: f64| (a.0 + (b.0 - a.0) * s / length, a.1 + (b.1 - a.1) * s / length);
+            let point = |s: f64| {
+                (
+                    a.0 + (b.0 - a.0) * s / length,
+                    a.1 + (b.1 - a.1) * s / length,
+                )
+            };
             // (on a narrow road the robots are small, 1.2 m at most: 1.5 m from a corner is enough)
             let clear = if is_narrow { 1.5 } else { SPLIT_CLEAR };
             let allowed = |s: f64| {
@@ -616,7 +622,9 @@ impl Net {
                         || !curves.iter().any(|(ca, cb, pts)| {
                             ![ca, cb].contains(&&e.a)
                                 && ![ca, cb].contains(&&e.b)
-                                && pts.iter().any(|c| (c.0 - at.0).hypot(c.1 - at.1) < CURVE_CLEAR)
+                                && pts
+                                    .iter()
+                                    .any(|c| (c.0 - at.0).hypot(c.1 - at.1) < CURVE_CLEAR)
                         }))
             };
             let mut from = e.a;
@@ -1656,7 +1664,11 @@ fn lane_changes() -> Vec<(P, P, P)> {
             let length = (l.y1 - l.y0) - 2.0 * LOOP_R;
             // (the lane: the copy of the column, or the column itself; the loop of the bottom row
             // is further from it, see `column_x`)
-            let lane_x = if l.j == 0 { NET_X[last_i + 1] } else { l.x1 + h };
+            let lane_x = if l.j == 0 {
+                NET_X[last_i + 1]
+            } else {
+                l.x1 + h
+            };
             changes(
                 (lane_x, sides[2].0.1),
                 sides[2].0,
@@ -1861,31 +1873,6 @@ fn vertical_labyrinth(net: &mut Net) {
     net.line((x0 + t, V_BOTTOM - t), (v_x(1) + r, V_BOTTOM - r));
 }
 
-/// A ring road round `c`: eight arcs of 45 degrees, counter-clockwise if `ccw`.
-fn ring(net: &mut Net, c: P, r: f64, ccw: bool) {
-    let point = |deg: f64| {
-        (
-            c.0 + r * deg.to_radians().cos(),
-            c.1 + r * deg.to_radians().sin(),
-        )
-    };
-    let d = r / (PI / 8.0).cos();
-    let corner = |deg: f64| {
-        (
-            c.0 + d * (deg + 22.5).to_radians().cos(),
-            c.1 + d * (deg + 22.5).to_radians().sin(),
-        )
-    };
-    for k in 0..8 {
-        let deg = 45.0 * k as f64;
-        if ccw {
-            net.arc(point(deg), corner(deg), point(deg + 45.0));
-        } else {
-            net.arc(point(deg + 45.0), corner(deg), point(deg));
-        }
-    }
-}
-
 /// Which way the roads of the west grid run (east?) at height `y`: the rows run east
 /// and west in turns; the ring road at the bottom runs east, at the top west.
 fn west_row_runs_east(y: f64) -> bool {
@@ -1971,9 +1958,6 @@ struct Pocket {
 /// Half the distance between the two lines of a street (m): the lines run along the racks.
 const DOUBLE_HALF: f64 = 1.8;
 
-/// The radius (m) of the arcs at the crossings of the double net.
-const FAR_ARC: f64 = 6.0;
-
 /// The streets of the double net (west part of the hall): the vertical ones at these x
 /// (the left one is the outer street), the horizontal ones at these y (the bottom and the
 /// top one are outer streets). East of the last vertical street the streets are single lines
@@ -1993,11 +1977,6 @@ const NET_Y: [f64; 8] = [
 /// Where the single lines of the streets begin (x), east of the double net: the two lines of
 /// a street run into one (or one into two) by S-curves from the last vertical street to here.
 const FUNNEL_X: f64 = 120.0;
-
-/// The bottom and the top street run on east of the street at x = 100, as far as the arcs
-/// from that street end (they land on the lines `FAR_ARC` past it), before they run into the
-/// ring.
-const RING_LINES_END_X: f64 = WEST_X[3] + DOUBLE_HALF + FAR_ARC + 2.0;
 
 /// Where the streets of the middle of the hall start at the right edge of the double net: the
 /// outer line of the last vertical street, x = 100 + `DOUBLE_HALF` (the boulevard, the north
@@ -2168,15 +2147,6 @@ fn cell_loop_stops(out: &mut Vec<Pocket>, station: &str, i: usize, j: usize) {
     });
 }
 
-/// Which way the columns of the west grid run (north?) at `x`: the ring on the left runs
-/// south, the columns alternate.
-fn west_col_runs_north(x: f64) -> bool {
-    WEST_X
-        .iter()
-        .position(|&col| (col - x).abs() < 1e-9)
-        .is_some_and(lane_east)
-}
-
 /// Which way the columns of the east grid run (north?) at `x`: the ring on the right runs
 /// north.
 fn east_col_runs_north(x: f64) -> bool {
@@ -2286,26 +2256,6 @@ fn rack_pockets() -> Vec<Pocket> {
 fn is_staging(_i: usize, _j: usize) -> bool {
     // (none in warehouse 3: every cell of the double net is racking)
     false
-}
-
-/// A roundabout in a cell between two roads that run the opposite way (the road
-/// below east, the one above west, or the other way round). It is tangent to both:
-/// where the ring road runs the same way as the road, an S-shaped link of two arcs
-/// joins the road to it, so a robot enters and leaves it with no sharp turn. Each
-/// road has a link in to the ring and a link out of it. The links start where the
-/// arcs of the junctions at the sides of the cell end.
-fn roundabout_in_cell(net: &mut Net, (xl, xr): (f64, f64), (yb, yt): (f64, f64)) {
-    let (cx, cy) = ((xl + xr) / 2.0, (yb + yt) / 2.0);
-    let rho = (yt - yb) / 2.0 - 2.5;
-    let reach = (xr - xl) / 2.0 - TURN_RADIUS;
-    let east = west_row_runs_east(yb);
-    let db = if east { 1.0 } else { -1.0 };
-    ring(net, (cx, cy), rho, east);
-    let (south, north) = ((cx, cy - rho), (cx, cy + rho));
-    net.s_link((cx - db * reach, yb), south, (db, 0.0));
-    net.s_link(south, (cx + db * reach, yb), (db, 0.0));
-    net.s_link((cx + db * reach, yt), north, (-db, 0.0));
-    net.s_link(north, (cx - db * reach, yt), (-db, 0.0));
 }
 
 fn build_net() -> Net {
@@ -3030,7 +2980,11 @@ fn groups_json() -> Value {
     let column_bridges: Vec<Value> = COLUMN_BRIDGES
         .iter()
         .map(|&(y, to_copy, len)| {
-            let mid = if to_copy { y - len / 2.0 } else { y + len / 2.0 };
+            let mid = if to_copy {
+                y - len / 2.0
+            } else {
+                y + len / 2.0
+            };
             json!([COLUMN_COPY_X + 1.0, mid - 1.5, WEST_X[3] - 1.0, mid + 1.5])
         })
         .collect();

@@ -15,7 +15,7 @@
 //! Not yet: collisions, the spatial index, a controller port with queues, state
 //! publishing rules (`minimumStateInterval`), peripherals.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 
 use aabb::prelude::AABB;
@@ -41,7 +41,7 @@ use crate::observer::{Blocking, Observer, Reservation, RobotSnapshot, RobotStatu
 use crate::robot::{Reception, Robot, START_NODE_TOLERANCE};
 use crate::spec::RobotSpec;
 use crate::state_report::Header;
-use crate::waiting::{HeldBack, Wait, WaitReason};
+use crate::waiting::{HeldBack, Place, Wait, WaitReason, WaitTotal};
 use crate::zone_requests::ZoneRequestTiming;
 use crate::zones::Zones;
 
@@ -209,6 +209,8 @@ pub struct World {
     deadlocks: DeadlockDetector,
     /// Who waited, why and for whom after the last step.
     waits: Vec<Option<Wait>>,
+    /// Steps waited so far, by (waiter, blocker, reason, place).
+    wait_ticks: BTreeMap<(usize, Option<usize>, WaitReason, Place), u64>,
     /// For a robot stopped by its protective field after the last step: the robot
     /// in the field (the nearest if there are several).
     field_blocker: Vec<Option<usize>>,
@@ -285,6 +287,7 @@ impl World {
             safety_stops: 0,
             duration_variation: None,
             waits: Vec::new(),
+            wait_ticks: BTreeMap::new(),
             field_blocker: Vec::new(),
             held_back: None,
             reservations: Vec::new(),
@@ -1076,13 +1079,60 @@ impl World {
         &self.waits
     }
 
+    /// How long robots have waited so far, one entry per waiter, blocker, reason and
+    /// place, in that order (see [`crate::waiting`]).
+    pub fn wait_totals(&self) -> Vec<WaitTotal> {
+        self.wait_ticks
+            .iter()
+            .map(|(&(waiter, blocker, reason, place), &ticks)| WaitTotal {
+                waiter,
+                blocker,
+                reason,
+                place,
+                ticks,
+            })
+            .collect()
+    }
+
+    /// The wait of robot `i` as the waiting metric counts it: not while the robot
+    /// is in its own stop (a random stop or an empty battery, S170).
+    fn counted_wait(&self, i: usize) -> Option<Wait> {
+        let robot = &self.robots.get(i)?.robot;
+        let own_stop = robot.is_held() || robot.is_out_of_charge();
+        self.waits.get(i).copied().flatten().filter(|_| !own_stop)
+    }
+
+    /// Where robot `i`, with the state `state`, stands: on the node it was at or is
+    /// going to if it is within [`START_NODE_TOLERANCE`] of it, else on the edge it
+    /// drives; `None` if the state names neither.
+    fn place_of(&self, i: usize, state: &State) -> Option<Place> {
+        let p = self.robots[i].robot.pose();
+        let last = self.graph.node_idx(&state.last_node_id);
+        let next = state
+            .node_states
+            .first()
+            .and_then(|n| self.graph.node_idx(&n.node_id));
+        let on = [last, next].into_iter().flatten().find(|&n| {
+            let node = &self.graph.nodes[n];
+            node.map == p.map && (p.x - node.x).hypot(p.y - node.y) <= START_NODE_TOLERANCE
+        });
+        let edge = || {
+            let first = state.edge_states.first()?;
+            self.graph.edge_idx(&first.edge_id)
+        };
+        on.map(Place::Node)
+            .or_else(|| edge().map(Place::Edge))
+            .or_else(|| last.map(Place::Node))
+    }
+
     /// The world as it is now.
     pub fn snapshot(&self) -> Snapshot {
         let header = plain_header();
         let robots = self
             .robots
             .iter()
-            .map(|e| {
+            .enumerate()
+            .map(|(i, e)| {
                 let state = e.robot.state(&self.graph, &header);
                 let p = e.robot.pose();
                 // (a robot with an empty battery stands still: it is held, also when
@@ -1121,6 +1171,7 @@ impl World {
                     planned_edges: Vec::new(),
                     charge: e.robot.battery().map(|b| b.percent()),
                     charging: state.power_supply.charging,
+                    waiting: self.counted_wait(i),
                 };
                 for n in &state.node_states {
                     if let Some(i) = self.graph.node_idx(&n.node_id) {
@@ -1308,7 +1359,16 @@ impl World {
         let waits_for: Vec<Option<usize>> =
             waits.iter().map(|w| w.and_then(|w| w.blocker)).collect();
         self.deadlocks.observe(self.tick, &waits_for);
+        // add the waits up, but not those of a robot in its own stop (S170)
         self.waits = waits;
+        for (i, state) in states.iter().enumerate() {
+            if let Some(w) = self.counted_wait(i)
+                && let Some(place) = self.place_of(i, state)
+            {
+                let key = (i, w.blocker, w.reason, place);
+                *self.wait_ticks.entry(key).or_insert(0) += 1;
+            }
+        }
     }
 
     /// All collisions so far, oldest first. One entry per contact: it is added
