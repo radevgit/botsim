@@ -16,9 +16,9 @@
 //!
 //! **Routes.** The module takes as much of a route as it can order and, in every
 //! release, more when it can. While it can take nothing, it asks for another way,
-//! as it does for the robots on and behind a ring of waiting robots. The
-//! dispatcher can only be told nodes to keep clear of, so an edge to avoid is
-//! given as the node it ends at.
+//! as it does for a robot on a ring of waiting robots. The dispatcher can only be
+//! told nodes to keep clear of, so an edge to avoid is given as the node it ends
+//! at.
 //!
 //! **Who holds a robot back** is what the module says. At the end of what is taken
 //! of its route, it is who holds its next node, where somebody does. Else it is

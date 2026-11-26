@@ -19,11 +19,13 @@
 //! release query takes more when it can. The order then guarantees no collision,
 //! but not that robots waiting at the ends of their parts will all get on.
 //!
-//! **Rings** (D3, after IJRR). A robot that stands at the end of the part taken
-//! and wants to go on waits for the holder of its next node, or for those who keep
-//! the rest from being taken. A robot on a ring of such waits, or behind one, is
-//! asked to keep clear of its own next node
-//! ([`Traffic::waiting_on_rings`]).
+//! **Rings** (D3, after IJRR). A standing robot waits for others: at the end of the
+//! part taken, wanting to go on, for the holder of its next node, or for those who
+//! keep the rest from being taken; inside the part, its next node held back by the
+//! order, for those ordered before it there. A robot on a ring of such waits is
+//! asked to keep clear of its next node, and what it has been asked so stays in
+//! whatever it is asked until it stands on another node
+//! ([`Traffic::waiting_on_rings`], [`Traffic::reroute_needed`]).
 //!
 //! **A failed attempt is not made again** while nothing has changed that it
 //! depends on, to take more of a route or to give a robot its next node: it would
@@ -200,9 +202,19 @@ pub struct Traffic {
     failed_take: BTreeMap<usize, u64>,
     /// The same for its next node.
     failed_give: BTreeMap<usize, u64>,
+    /// By robot: what it has been asked to keep clear of for rings.
+    asked: BTreeMap<usize, Asked>,
     /// How many attempts would have been skipped; tests make them all the same.
     #[cfg(test)]
     skipped: usize,
+}
+
+/// What a robot has been asked to keep clear of for rings since it came to the node
+/// it stands on.
+#[derive(Debug, Clone)]
+struct Asked {
+    at: Piece,
+    nodes: Vec<Piece>,
 }
 
 /// Why a route cannot be placed.
@@ -236,6 +248,7 @@ impl Traffic {
             changes: 0,
             failed_take: BTreeMap::new(),
             failed_give: BTreeMap::new(),
+            asked: BTreeMap::new(),
             #[cfg(test)]
             skipped: 0,
         }
@@ -303,24 +316,41 @@ impl Traffic {
         }
     }
 
+    /// Whom a robot waits for that stands inside the part taken of its route, its
+    /// next node held back by the order: those ordered before it there. `None` for
+    /// any other robot.
+    fn waits_inside(&self, robot: usize) -> Option<Vec<usize>> {
+        let (reached, released) = self.graph.position(robot)?;
+        if reached != released || released >= self.route_end(robot)? {
+            return None;
+        }
+        let mut by = self.blockers(robot);
+        by.retain(|&other| other != robot);
+        (!by.is_empty()).then_some(by)
+    }
+
     /// The ring query. Of the robots that stand at the end of the part taken of
     /// their route and want to go on, each waits for the holder of its next node,
-    /// or else for those who keep the rest from being taken. This lists those that
-    /// are on a ring of such waits, or wait for one directly or through others:
-    /// each with the robots on the rings it comes to. A robot is on a ring itself
-    /// if it is among them.
+    /// or else for those who keep the rest from being taken. A robot that stands
+    /// inside the part, its next node held back by the order, waits for those
+    /// ordered before it there. This lists the robots that are on a ring of such
+    /// waits, or wait for one directly or through others: each with the robots on
+    /// the rings it comes to. A robot is on a ring itself if it is among them.
     pub fn waiting_on_rings(&self) -> BTreeMap<usize, BTreeSet<usize>> {
         let holders = self.holders();
-        let waits: BTreeMap<usize, Vec<usize>> = self
-            .wanted
-            .keys()
-            .filter(|&&robot| self.stands_waiting(robot))
-            .map(|&robot| {
+        let waits: BTreeMap<usize, Vec<usize>> = (0..self.routes.len())
+            .filter_map(|robot| {
+                if let Some(by) = self.waits_inside(robot) {
+                    return Some((robot, by));
+                }
+                if !self.stands_waiting(robot) {
+                    return None;
+                }
                 let holder = self
                     .next_node(robot)
                     .and_then(|node| holders.get(node).copied())
                     .filter(|&holder| holder != robot);
-                (robot, self.waits_for(robot, holder))
+                Some((robot, self.waits_for(robot, holder)))
             })
             .collect();
         // all a robot waits for, directly or through others
@@ -349,18 +379,62 @@ impl Traffic {
             .collect()
     }
 
-    /// The node the robot shall keep clear of so that a ring opens (D3): the next
-    /// one of the route it wants, while it is on a ring of waiting robots or behind
-    /// one; `None` otherwise.
+    /// The node the robot shall keep clear of so that a ring opens (D3): its next
+    /// one, while it is on a ring of waiting robots itself; `None` otherwise.
     fn ring_avoid(&self, robot: usize) -> Option<Piece> {
         // the query is only needed for a robot that stands waiting
-        if !self.stands_waiting(robot) {
+        let inside = self.waits_inside(robot).is_some();
+        if !inside && !self.stands_waiting(robot) {
             return None;
         }
-        if !self.waiting_on_rings().contains_key(&robot) {
+        let rings = self.waiting_on_rings().remove(&robot)?;
+        if !rings.contains(&robot) {
             return None;
         }
-        self.next_node(robot).cloned()
+        if inside {
+            let released = self.graph.released(robot)?;
+            self.routes
+                .get(robot)?
+                .pieces()
+                .get(2 * released + 2)
+                .cloned()
+        } else {
+            self.next_node(robot).cloned()
+        }
+    }
+
+    /// The node the robot has reached last, on which it stands unless it drives.
+    fn stands_on(&self, robot: usize) -> Option<&Piece> {
+        let (reached, _) = self.graph.position(robot)?;
+        self.routes.get(robot)?.pieces().get(2 * reached)
+    }
+
+    /// What the robot has been asked to keep clear of for rings since it came to
+    /// the node it stands on.
+    fn asked_here(&self, robot: usize) -> &[Piece] {
+        match self.asked.get(&robot) {
+            Some(asked) if self.stands_on(robot) == Some(&asked.at) => &asked.nodes,
+            _ => &[],
+        }
+    }
+
+    /// Note that the robot is asked to keep clear of `node` for a ring, if it is,
+    /// and forget what it was asked where it stood before.
+    fn remember(&mut self, robot: usize, node: Option<&Piece>) {
+        let Some(at) = self.stands_on(robot).cloned() else {
+            return;
+        };
+        if self.asked.get(&robot).is_some_and(|asked| asked.at != at) {
+            self.asked.remove(&robot);
+        }
+        let Some(node) = node else { return };
+        let asked = self.asked.entry(robot).or_insert(Asked {
+            at,
+            nodes: Vec::new(),
+        });
+        if !asked.nodes.contains(node) {
+            asked.nodes.push(node.clone());
+        }
     }
 
     pub fn graph(&self) -> &OrderGraph {
@@ -616,14 +690,35 @@ impl Traffic {
     /// route of it is taken; and while a piece of its route waits for a robot whose
     /// route ends there. If it has no other way, it goes on waiting.
     ///
-    /// Also while it is on a ring of waiting robots or behind one
-    /// ([`waiting_on_rings`](Traffic::waiting_on_rings)); it is then told to keep
-    /// clear of the next node of the route it wants only, whatever else there is.
+    /// Also while it is on a ring of waiting robots itself
+    /// ([`waiting_on_rings`](Traffic::waiting_on_rings)), not only behind one; it is
+    /// then told to keep clear of its next node, whatever else there is. What a
+    /// [`release`](Traffic::release) has told it so for rings stays in every answer
+    /// until it stands on another node, so that it is not sent from one way to the
+    /// other for ever.
     pub fn reroute_needed(&self, robot: usize) -> Option<Reroute> {
-        let route = self.routes.get(robot)?;
-        if let Some(node) = self.ring_avoid(robot) {
-            return Some(Reroute { avoid: vec![node] });
+        self.wish(robot, self.ring_avoid(robot))
+    }
+
+    /// [`reroute_needed`](Traffic::reroute_needed), with `ring` as what
+    /// [`ring_avoid`](Traffic::ring_avoid) says.
+    fn wish(&self, robot: usize, ring: Option<Piece>) -> Option<Reroute> {
+        let mut wish = match ring {
+            Some(node) => Reroute { avoid: vec![node] },
+            None => self.reroute_for_route(robot)?,
+        };
+        for node in self.asked_here(robot) {
+            if !wish.avoid.contains(node) {
+                wish.avoid.push(node.clone());
+            }
         }
+        Some(wish)
+    }
+
+    /// The other way the robot must take for what is wrong with its route itself,
+    /// apart from rings.
+    fn reroute_for_route(&self, robot: usize) -> Option<Reroute> {
+        let route = self.routes.get(robot)?;
         let waits = avoiding(route, self.graph.waits_for_ever(robot));
         let Some(refused) = self.refused.get(&robot) else {
             return (!waits.avoid.is_empty()).then_some(waits);
@@ -647,9 +742,11 @@ impl Traffic {
         while through < limit && self.give_next(robot) {
             through += 1;
         }
+        let ring = self.ring_avoid(robot);
+        self.remember(robot, ring.as_ref());
         Some(Release {
             through,
-            reroute: self.reroute_needed(robot),
+            reroute: self.wish(robot, ring),
         })
     }
 
@@ -2134,7 +2231,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ring_and_who_waits_for_it_are_asked_to_keep_clear_of_their_next_node() {
+    fn a_robot_on_a_ring_is_asked_to_keep_clear_of_its_next_node() {
         // a, b and c each want the node of the next one; d wants a's
         let routes: [&[&str]; 4] = [
             &["A", "B", "T"],
@@ -2147,10 +2244,61 @@ mod tests {
         let ring = BTreeSet::from([0, 1, 2]);
         let all: BTreeMap<_, _> = (0..4).map(|robot| (robot, ring.clone())).collect();
         assert_eq!(t.waiting_on_rings(), all);
-        // on the ring and behind it: the next node, not the ring's others
         let avoid = |t: &Traffic, robot| t.reroute_needed(robot).map(|r| r.avoid);
+        // on the ring: the next node, not the ring's others
         assert_eq!(avoid(&t, 0), Some(vec![node("B")]));
+        // behind it: only what keeps its own route from being taken
         assert_eq!(avoid(&t, 3), Some(vec![node("A")]));
+    }
+
+    /// The module with a ring through a wait inside a part. Robot 0 stands on P,
+    /// first on its way to K; robot 1 is ordered after it over P to T, and robot 2
+    /// after robot 1 over R. Then 0 gets 1's way to T instead, of which nothing can
+    /// be taken.
+    fn ring_through_an_order() -> Traffic {
+        let (park, b, c) = (["P", "K"], ["R", "P", "T"], ["U", "R", "V"]);
+        let routes: [&[&str]; 5] = [&park, &b, &c, &["P", "T"], &["P", "R", "Z"]];
+        let mut t = traffic(&routes, &empty_map());
+        assert_eq!(t.add(route(&park[..1])), Ok(0));
+        assert_eq!(t.new_order(0, route(&park)), Ok(()));
+        assert_eq!(t.add(route(&b)), Ok(1));
+        assert_eq!(t.add(route(&c)), Ok(2));
+        assert!(t.change(0, route(&["P", "T"])).is_err());
+        t
+    }
+
+    #[test]
+    fn a_ring_through_a_wait_inside_a_part_is_found() {
+        let mut t = ring_through_an_order();
+        // 1 has its whole route and stands before P, which 0 holds
+        assert_eq!(t.route_end(1), Some(2));
+        let ring = BTreeSet::from([0, 1]);
+        let all: BTreeMap<_, _> = (0..3).map(|robot| (robot, ring.clone())).collect();
+        assert_eq!(t.waiting_on_rings(), all);
+        // each on the ring is asked about its next node
+        assert_eq!(t.release(1, 1), released(0, Some(vec![node("P")])));
+        assert_eq!(t.release(0, 1), released(0, Some(vec![node("T")])));
+        // 2 only waits behind the ring
+        assert_eq!(t.release(2, 1), released(0, None));
+    }
+
+    #[test]
+    fn what_a_ring_asked_for_stays_until_the_robot_moves() {
+        let mut t = ring_through_an_order();
+        assert_eq!(t.release(0, 1), released(0, Some(vec![node("T")])));
+        // another way, over R: refused, and 0 is on the ring still
+        assert!(t.change(0, route(&["P", "R", "Z"])).is_err());
+        let both = Some(vec![node("R"), node("T")]);
+        assert_eq!(t.release(0, 1), released(0, both));
+        // it gets away to K
+        assert_eq!(t.change(0, route(&["P", "K"])), Ok(()));
+        assert_eq!(t.release(0, 1), released(1, None));
+        // it still stands on P, so what it was asked is kept, in the order asked
+        assert_eq!(t.asked_here(0), [node("T"), node("R")]);
+        assert_eq!(t.progress(0, 1, 1), Ok(()));
+        assert_eq!(t.asked_here(0), []);
+        assert_eq!(t.release(0, 1), released(1, None));
+        assert!(!t.asked.contains_key(&0));
     }
 
     #[test]
