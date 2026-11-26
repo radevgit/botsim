@@ -73,6 +73,7 @@ pub fn empty_map() -> ConflictMap {
         types: vec![SMALL.into(), LARGE.into()],
         pairs: Vec::new(),
         node_pairs: Vec::new(),
+        node_node_pairs: Vec::new(),
     }
 }
 

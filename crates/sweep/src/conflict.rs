@@ -8,15 +8,19 @@
 //! conflict **without** a common node is the uncovered kind of
 //! `docs/graph_problems.md` (G5, G6, G11).
 //!
-//! Also: a robot standing on a node against an edge that does not touch it.
+//! Also: a robot on a node (standing or turning on the spot there) against an
+//! edge that does not touch it, and against a robot on another node.
 //!
-//! Not yet: the protective field, driving backwards.
+//! Optionally ([`MapOptions::protective_field`]) also the pairs where only a
+//! robot's standstill protective field meets the other body.
+//!
+//! Not yet: driving backwards.
 
 use botsim_core::graph::Graph;
 use serde::Serialize;
 use vdma_lif::Lif;
 
-use crate::sweep::{Sweep, SAMPLE_STEP, node_bodies, sweep};
+use crate::sweep::{Contact, SAMPLE_STEP, Sweep, field_sweep, node_bodies, sweep};
 use crate::types::TypeRef;
 
 /// Default for [`MapOptions::min_overlap`] (m): shallower overlaps are noise.
@@ -38,6 +42,16 @@ pub struct MapOptions {
     /// counts when this is above 0 (the gap is then below it), so `min_overlap`
     /// only filters when `clearance` is 0. 0 turns the margin off.
     pub clearance: f64,
+    /// Also count a conflict when the **standstill protective field** of one
+    /// robot along its edge meets the other robot's body (see
+    /// [`field_sweep`](crate::sweep::field_sweep)): a robot stopped by its field
+    /// stands until the other one has left. Either side's field is enough; a
+    /// robot standing on a node has none. Any overlap of field and body counts:
+    /// `clearance` and `min_overlap` do not apply to it. Default `false`.
+    ///
+    /// The entries this adds are those for which
+    /// [`ConflictMap::by_field`] is true.
+    pub protective_field: bool,
 }
 
 impl Default for MapOptions {
@@ -46,6 +60,7 @@ impl Default for MapOptions {
             sample_step: SAMPLE_STEP,
             min_overlap: MIN_OVERLAP,
             clearance: CLEARANCE,
+            protective_field: false,
         }
     }
 }
@@ -57,6 +72,7 @@ impl MapOptions {
             sample_step,
             min_overlap,
             clearance: 0.0,
+            protective_field: false,
         }
     }
 }
@@ -118,6 +134,29 @@ pub struct NodeTypePair {
     pub conflicts: Vec<NodeConflict>,
 }
 
+/// Two nodes too close for a robot on each.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NodeNodeConflict {
+    /// Node of the first robot type of the pair.
+    pub node_a: String,
+    /// Node of the second robot type of the pair.
+    pub node_b: String,
+    /// The deepest overlap of the two swept outlines (m); 0 if they only come
+    /// nearer than the clearance.
+    pub depth: f64,
+    /// The smallest distance between them (m); 0 if they overlap.
+    pub distance: f64,
+}
+
+/// The node-node conflicts of one pair of robot types (`type_a` may equal
+/// `type_b`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NodeNodeTypePair {
+    pub type_a: String,
+    pub type_b: String,
+    pub conflicts: Vec<NodeNodeConflict>,
+}
+
 /// The conflict map of a LIF file for a fleet.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ConflictMap {
@@ -142,17 +181,58 @@ pub struct ConflictMap {
     /// of types (the standing robot, the driving robot); pairs without conflict are
     /// left out. These are all without a common node.
     pub node_pairs: Vec<NodeTypePair>,
+    /// Two robots on two **different nodes**, standing or turning on the spot
+    /// there (the outline at a node is swept over the turns, see
+    /// [`node_bodies`]). Pairs of types, `type_a` before `type_b` in `types`;
+    /// for a type with itself each pair of nodes once (layout order). The same
+    /// node twice is not listed: a node belongs to one robot at a time. Pairs of
+    /// types without conflict are left out.
+    pub node_node_pairs: Vec<NodeNodeTypePair>,
 }
 
-/// The swept outlines of all edges one type may drive, with the map of each edge.
+/// The swept outlines of one edge for one type.
+struct EdgeSweep {
+    edge: usize,
+    map: usize,
+    body: Sweep,
+    /// The protective field; only with [`MapOptions::protective_field`].
+    field: Option<Sweep>,
+}
+
+/// The swept outline of one node for one type.
+struct NodeSweep {
+    node: usize,
+    map: usize,
+    body: Sweep,
+}
+
+/// The swept outlines of all edges and nodes one type may use.
 struct TypeSweeps {
-    edges: Vec<(usize, usize, Sweep)>, // (edge, map, sweep)
+    edges: Vec<EdgeSweep>,
+    nodes: Vec<NodeSweep>,
 }
 
-/// Is a contact a conflict? Overlap deeper than `min_overlap`, or nearer than the
+/// Do two bodies conflict? Overlap deeper than `min_overlap`, or nearer than the
 /// clearance.
-fn counts(c: crate::sweep::Contact, o: &MapOptions) -> bool {
-    (c.distance == 0.0 && c.depth >= o.min_overlap) || c.distance < o.clearance
+fn body_conflict(depth: f64, distance: f64, min_overlap: f64, clearance: f64) -> bool {
+    (distance == 0.0 && depth >= min_overlap) || distance < clearance
+}
+
+/// The contact of two sweeps if their bodies conflict.
+fn bodies_in_conflict(a: &Sweep, b: &Sweep, o: &MapOptions) -> Option<Contact> {
+    a.contact(b, o.clearance)
+        .filter(|c| body_conflict(c.depth, c.distance, o.min_overlap, o.clearance))
+}
+
+impl ConflictMap {
+    /// Is an entry of this map, given by its `depth` and `distance`, listed only
+    /// because of a protective field ([`MapOptions::protective_field`])? Its
+    /// bodies alone do not conflict: they stay `clearance` or more apart, or
+    /// overlap by less than `min_overlap`. Always false for a map made without
+    /// the option.
+    pub fn by_field(&self, depth: f64, distance: f64) -> bool {
+        !body_conflict(depth, distance, self.min_overlap, self.clearance)
+    }
 }
 
 /// Compute the conflict map. `None` if the layout cannot be turned into a graph.
@@ -166,8 +246,26 @@ pub fn compute(lif: &Lif, types: &[TypeRef], options: &MapOptions) -> Option<Con
             edges: (0..graph.edges.len())
                 .filter(|&e| graph.edge_allows(e, &t.manufacturer, &t.series))
                 .filter_map(|e| {
-                    let s = sweep(&graph, e, t, step)?;
-                    Some((e, graph.nodes[graph.edges[e].start].map, s))
+                    Some(EdgeSweep {
+                        edge: e,
+                        map: graph.nodes[graph.edges[e].start].map,
+                        body: sweep(&graph, e, t, step)?,
+                        field: if options.protective_field {
+                            field_sweep(&graph, e, t, step)
+                        } else {
+                            None
+                        },
+                    })
+                })
+                .collect(),
+            nodes: (0..graph.nodes.len())
+                .filter_map(|n| {
+                    let bodies = node_bodies(&graph, n, t);
+                    (!bodies.is_empty()).then(|| NodeSweep {
+                        node: n,
+                        map: graph.nodes[n].map,
+                        body: Sweep::from_bodies(bodies),
+                    })
                 })
                 .collect(),
         })
@@ -177,15 +275,22 @@ pub fn compute(lif: &Lif, types: &[TypeRef], options: &MapOptions) -> Option<Con
     for i in 0..types.len() {
         for j in i..types.len() {
             let mut conflicts = Vec::new();
-            for (e1, m1, s1) in &sweeps[i].edges {
-                for (e2, m2, s2) in &sweeps[j].edges {
-                    if m1 != m2 || (i == j && e1 >= e2) || (i != j && e1 == e2) {
+            for s1 in &sweeps[i].edges {
+                for s2 in &sweeps[j].edges {
+                    let (e1, e2) = (s1.edge, s2.edge);
+                    if s1.map != s2.map || (i == j && e1 >= e2) || (i != j && e1 == e2) {
                         continue;
                     }
-                    if let Some(c) = s1.contact(s2, options.clearance)
-                        && counts(c, options)
-                    {
-                        let (a, b) = (&graph.edges[*e1], &graph.edges[*e2]);
+                    let found = bodies_in_conflict(&s1.body, &s2.body, options).or_else(|| {
+                        let (f1, f2) = (s1.field.as_ref()?, s2.field.as_ref()?);
+                        if !f1.overlaps(&s2.body) && !f2.overlaps(&s1.body) {
+                            return None;
+                        }
+                        // how close the bodies themselves come
+                        s1.body.contact(&s2.body, f64::INFINITY)
+                    });
+                    if let Some(c) = found {
+                        let (a, b) = (&graph.edges[e1], &graph.edges[e2]);
                         let shares_node = a.start == b.start
                             || a.start == b.end
                             || a.end == b.start
@@ -222,6 +327,7 @@ pub fn compute(lif: &Lif, types: &[TypeRef], options: &MapOptions) -> Option<Con
         }
     }
     let node_pairs = node_conflicts(&graph, &adj, types, &sweeps, options);
+    let node_node_pairs = node_node_conflicts(&graph, types, &sweeps, options);
     Some(ConflictMap {
         sample_step: step,
         min_overlap: options.min_overlap,
@@ -229,7 +335,48 @@ pub fn compute(lif: &Lif, types: &[TypeRef], options: &MapOptions) -> Option<Con
         types: types.iter().map(|t| t.name.clone()).collect(),
         pairs,
         node_pairs,
+        node_node_pairs,
     })
+}
+
+/// A robot of each type on each node against a robot of each type on each other
+/// node.
+fn node_node_conflicts(
+    graph: &Graph,
+    types: &[TypeRef],
+    sweeps: &[TypeSweeps],
+    options: &MapOptions,
+) -> Vec<NodeNodeTypePair> {
+    let mut out = Vec::new();
+    for i in 0..types.len() {
+        for j in i..types.len() {
+            let mut conflicts = Vec::new();
+            for a in &sweeps[i].nodes {
+                for b in &sweeps[j].nodes {
+                    let (x, y) = (a.node, b.node);
+                    if a.map != b.map || (i == j && x >= y) || x == y {
+                        continue;
+                    }
+                    if let Some(c) = bodies_in_conflict(&a.body, &b.body, options) {
+                        conflicts.push(NodeNodeConflict {
+                            node_a: graph.nodes[x].id.clone(),
+                            node_b: graph.nodes[y].id.clone(),
+                            depth: c.depth,
+                            distance: c.distance,
+                        });
+                    }
+                }
+            }
+            if !conflicts.is_empty() {
+                out.push(NodeNodeTypePair {
+                    type_a: types[i].name.clone(),
+                    type_b: types[j].name.clone(),
+                    conflicts,
+                });
+            }
+        }
+    }
+    out
 }
 
 /// Two nodes this many edges apart (any direction) or fewer count as neighbours.
@@ -297,35 +444,31 @@ fn node_conflicts(
     options: &MapOptions,
 ) -> Vec<NodeTypePair> {
     let mut out = Vec::new();
-    for ti in types {
-        // the standing bodies of this type: (node, map, bodies)
-        let standing: Vec<(usize, usize, Sweep)> = (0..graph.nodes.len())
-            .filter_map(|n| {
-                let bodies = node_bodies(graph, n, ti);
-                if bodies.is_empty() {
-                    return None;
-                }
-                Some((n, graph.nodes[n].map, Sweep::from_bodies(bodies)))
-            })
-            .collect();
+    for (i, ti) in types.iter().enumerate() {
         for (j, tj) in types.iter().enumerate() {
             let mut conflicts = Vec::new();
-            for (n, nm, bodies) in &standing {
-                for (e, em, sw) in &sweeps[j].edges {
-                    let edge = &graph.edges[*e];
-                    if nm != em || edge.start == *n || edge.end == *n {
+            for standing in &sweeps[i].nodes {
+                let (n, bodies) = (standing.node, &standing.body);
+                for sw in &sweeps[j].edges {
+                    let edge = &graph.edges[sw.edge];
+                    if standing.map != sw.map || edge.start == n || edge.end == n {
                         continue;
                     }
-                    if let Some(c) = bodies.contact(sw, options.clearance)
-                        && counts(c, options)
-                    {
+                    let found = bodies_in_conflict(bodies, &sw.body, options).or_else(|| {
+                        // only the driving robot has a field
+                        if !sw.field.as_ref()?.overlaps(bodies) {
+                            return None;
+                        }
+                        bodies.contact(&sw.body, f64::INFINITY)
+                    });
+                    if let Some(c) = found {
                         conflicts.push(NodeConflict {
-                            node: graph.nodes[*n].id.clone(),
+                            node: graph.nodes[n].id.clone(),
                             edge: edge.id.clone(),
                             junction_nodes: near_junction(
                                 graph,
                                 adj,
-                                [*n, *n],
+                                [n, n],
                                 [edge.start, edge.end],
                                 reach(ti, tj),
                             ),
@@ -507,6 +650,39 @@ mod tests {
     }
 
     #[test]
+    fn robots_on_two_nodes_too_close() {
+        // E1 ends at B, E2 starts at C, 0.8 m further on: no common node. X1 is
+        // 1.0 long (0.2 m overlap end to end), G is far away.
+        let l = lif(
+            &[("A", 0.0, 0.0), ("B", 10.0, 0.0), ("C", 10.8, 0.0), ("G", 30.0, 0.0)],
+            &[("E1", "A", "B"), ("E2", "C", "G")],
+        );
+        let m = compute(&l, &two_types(), &overlap_only(0.05)).expect("map");
+        let of = |a: &str, b: &str| {
+            m.node_node_pairs
+                .iter()
+                .find(|p| p.type_a == a && p.type_b == b)
+                .expect("type pair")
+        };
+        // a type with itself: each pair of nodes once, never a node with itself
+        let xx = of("ACME/X1", "ACME/X1");
+        assert_eq!(xx.conflicts.len(), 1);
+        let c = &xx.conflicts[0];
+        assert_eq!((c.node_a.as_str(), c.node_b.as_str()), ("B", "C"));
+        assert!((c.depth - 0.2).abs() < 1e-9 && c.distance == 0.0, "{c:?}");
+        // two types: both ways round
+        let xy = of("ACME/X1", "ACME/Y2");
+        let names: Vec<_> = xy
+            .conflicts
+            .iter()
+            .map(|c| (c.node_a.as_str(), c.node_b.as_str()))
+            .collect();
+        assert_eq!(names, [("B", "C"), ("C", "B")]);
+        let v: serde_json::Value = serde_json::from_str(&to_json(&m)).expect("json");
+        assert_eq!(v["node_node_pairs"][0]["conflicts"][0]["node_a"], "B");
+    }
+
+    #[test]
     fn clearance_adds_the_near_misses() {
         // X1 bodies are 0.6 wide; E3 runs 0.65 m beside E1: a 0.05 m gap, no overlap.
         let l = lif(
@@ -523,6 +699,7 @@ mod tests {
                 sample_step: 0.25,
                 min_overlap: 0.05,
                 clearance: 0.10,
+                protective_field: false,
             },
         )
         .expect("map");
@@ -539,9 +716,114 @@ mod tests {
                 sample_step: 0.25,
                 min_overlap: 0.05,
                 clearance: 0.04,
+                protective_field: false,
             },
         )
         .expect("map");
         assert!(m.pairs.is_empty());
+    }
+
+    /// The part of the roadmap `W_real_L` where two robots locked up: `A-002`
+    /// stands on N0019 (arrived northwards from N0013), `A-001` turns left on the
+    /// 39 cm curve N0026 -> N0039. Coordinates and curve from the roadmap file,
+    /// the robot 0.48 m x 0.24 m.
+    fn w_real_l() -> (Lif, Vec<TypeRef>) {
+        let ty = r#""mobileRobotTypes":[{"manufacturer":"Zuzek2024","seriesName":"AGV"}]"#;
+        let node = |id: &str, x: f64, y: f64| {
+            format!(
+                r#"{{"nodeId":"{id}","mapId":"M","nodePosition":{{"x":{x},"y":{y}}},"mobileRobotTypeNodeProperties":[{{{ty}}}]}}"#
+            )
+        };
+        let curve = r#","trajectory":{"degree":2,"knotVector":[0,0,0,1,1,1],"controlPoints":[{"x":5.5,"y":4.25},{"x":5.75,"y":4.25,"weight":0.7071067811865476},{"x":5.75,"y":4.5}]}"#;
+        let lif: Lif = serde_json::from_str(&format!(
+            r#"{{"metaInformation":{{"lifId":"x","creator":"t","exportTimestamp":"2026-01-01T00:00:00Z","lifVersion":"1.0.0"}},
+            "origins":[{{"originId":"O","layouts":[{{"layoutId":"L","layoutVersion":"1","nodes":[{},{},{},{}],
+            "edges":[{{"edgeId":"N0013-N0019","startNodeId":"N0013","endNodeId":"N0019","mobileRobotTypeEdgeProperties":[{{{ty}}}]}},
+                     {{"edgeId":"N0026-N0039","startNodeId":"N0026","endNodeId":"N0039","mobileRobotTypeEdgeProperties":[{{{ty}{curve}}}]}}]}}]}}]}}"#,
+            node("N0013", 6.25, 3.75),
+            node("N0019", 6.25, 4.0),
+            node("N0026", 5.5, 4.25),
+            node("N0039", 5.75, 4.5),
+        ))
+        .expect("test LIF parses");
+        let agv = TypeRef::test_rect("Zuzek2024/AGV", Kinematics::Differential, 0.48, 0.24);
+        (lif, vec![agv])
+    }
+
+    fn with_field(o: MapOptions) -> MapOptions {
+        MapOptions {
+            protective_field: true,
+            ..o
+        }
+    }
+
+    fn node_conflict<'a>(m: &'a ConflictMap, node: &str, edge: &str) -> Option<&'a NodeConflict> {
+        m.node_pairs
+            .iter()
+            .flat_map(|p| &p.conflicts)
+            .find(|c| c.node == node && c.edge == edge)
+    }
+
+    #[test]
+    fn protective_field_lists_the_w_real_l_pair() {
+        let (l, types) = w_real_l();
+        for options in [MapOptions::default(), overlap_only(0.05)] {
+            // without the option the bodies are too far apart (about 0.2 m)
+            let off = compute(&l, &types, &options).expect("map");
+            assert!(node_conflict(&off, "N0019", "N0026-N0039").is_none());
+            // with it: listed, although the field overlaps by less than min_overlap
+            let on = compute(&l, &types, &with_field(options)).expect("map");
+            let c = node_conflict(&on, "N0019", "N0026-N0039").expect("the field reaches");
+            assert!(on.by_field(c.depth, c.distance));
+            assert!(c.depth == 0.0 && c.distance > 0.15, "{c:?}");
+            assert!(c.junction_nodes.is_some());
+        }
+    }
+
+    #[test]
+    fn protective_field_only_adds_entries() {
+        let (l, types) = w_real_l();
+        let off = compute(&l, &types, &MapOptions::default()).expect("map");
+        let on = compute(&l, &types, &with_field(MapOptions::default())).expect("map");
+        let flat = |m: &ConflictMap| {
+            let e: Vec<Conflict> = m.pairs.iter().flat_map(|p| p.conflicts.clone()).collect();
+            let n: Vec<NodeConflict> = m
+                .node_pairs
+                .iter()
+                .flat_map(|p| p.conflicts.clone())
+                .collect();
+            (e, n)
+        };
+        let ((e_off, n_off), (e_on, n_on)) = (flat(&off), flat(&on));
+        assert!(e_off.iter().all(|c| e_on.contains(c)));
+        assert!(n_off.iter().all(|c| n_on.contains(c)));
+        // what was added is by the field, what was there before is not
+        for c in &e_on {
+            assert_eq!(on.by_field(c.depth, c.distance), !e_off.contains(c), "{c:?}");
+        }
+        for c in &n_on {
+            assert_eq!(on.by_field(c.depth, c.distance), !n_off.contains(c), "{c:?}");
+        }
+        assert!(n_on.len() > n_off.len());
+    }
+
+    #[test]
+    fn protective_field_reaches_its_length_ahead() {
+        // E1 runs (0,0)-(10,0); the body (1.0 long) ends at x = 10.5, its field at
+        // 10.8. A robot stands on F, ahead, heading north (0.6 wide in x).
+        let at = |gap: f64| {
+            let x = 10.5 + gap + 0.3;
+            let l = lif(
+                &[("A", 0.0, 0.0), ("B", 10.0, 0.0), ("F", x, 0.0), ("G", x, 10.0)],
+                &[("E1", "A", "B"), ("E3", "F", "G")],
+            );
+            let x1 = vec![TypeRef::test_rect("ACME/X1", Kinematics::Differential, 1.0, 0.6)];
+            let m = compute(&l, &x1, &with_field(MapOptions::default())).expect("map");
+            node_conflict(&m, "F", "E1").map(|c| c.distance)
+        };
+        // 0.2 m ahead: beyond the clearance, within the field
+        assert!((at(0.2).expect("in the field") - 0.2).abs() < 1e-9);
+        // 0.35 m ahead: out of reach
+        assert!(at(0.35).is_none());
     }
 }

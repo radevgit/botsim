@@ -15,7 +15,7 @@ use vdma_lif::{Layout, Lif};
 
 pub use botsim_sweep::conflict::{
     CLEARANCE, Conflict, ConflictMap, JUNCTION_HOPS, MIN_OVERLAP, MapOptions, NodeConflict,
-    NodeTypePair, TypePair, compute, to_json,
+    NodeNodeConflict, NodeNodeTypePair, NodeTypePair, TypePair, compute, to_json,
 };
 
 use crate::finding::{Finding, Level};

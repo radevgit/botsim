@@ -95,6 +95,8 @@ impl Options {
             sample_step: self.sample_step,
             min_overlap: self.min_overlap,
             clearance: self.clearance,
+            // the checker's findings are about bodies
+            protective_field: false,
         }
     }
 }

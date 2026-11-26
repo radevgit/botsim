@@ -1,18 +1,26 @@
 //! The outline of a robot swept along an edge (input of the conflict map).
 //!
 //! The edge path (`Graph::edge_path`: the NURBS trajectory sampled, or the straight
-//! line) is sampled at a fixed distance; at each sample the body outline is placed
-//! at the robot's position, turned to the direction of the path (the robot drives
-//! forwards). An omnidirectional robot keeps a heading that the layout does not
-//! fix, so it gets a circle round its kinematic center that contains the outline
-//! in any heading (conservative: it can report conflicts that do not exist).
-//! Not modelled yet: driving backwards, orientations other than forwards.
+//! line) is sampled at a fixed distance, curves much more finely (so that no
+//! corner moves more than [`CORNER_STEP`] between samples); at each sample the
+//! body outline is placed at the robot's position, turned to the direction of the
+//! path (the robot drives forwards). At a node the outline is swept over the turns
+//! the robot can make there. An omnidirectional robot keeps a heading that the
+//! layout does not fix, so it gets a circle round its kinematic center that
+//! contains the outline in any heading (conservative: it can report conflicts
+//! that do not exist). Not modelled yet: driving backwards, orientations other
+//! than forwards.
 
-use botsim_core::graph::Graph;
+use std::f64::consts::{PI, TAU};
+
+use botsim_core::graph::{Graph, Rotation};
+use botsim_core::motion::angle_diff;
+use botsim_core::path::Path;
+use botsim_core::safety::{FIELD_MARGIN, protective_field};
 use botsim_core::spec::{Kinematics, Shape};
 use togo::prelude::{
-    Circle, OrientedRect, circle, dist_circle_orect, dist_orect_orect, overlap_circle_orect,
-    overlap_orect_orect, point,
+    Circle, OrientedRect, Point, circle, dist_circle_orect, dist_orect_orect,
+    overlap_circle_orect, overlap_orect_orect, point,
 };
 
 use crate::types::TypeRef;
@@ -215,31 +223,166 @@ impl Sweep {
 
 /// The swept outline of `edge` for robot type `t`; `None` for a lift ride (the
 /// two nodes are on different maps).
+///
+/// Straight edges are sampled every `step` (never more than the body length, so
+/// nothing is skipped), curves also so finely that no corner of the outline moves
+/// more than [`CORNER_STEP`] between neighbours, however short the curve. A
+/// `step` of 0 or less sets no distance of its own: a straight edge gets its two
+/// ends only.
 pub fn sweep(graph: &Graph, edge: usize, t: &TypeRef, step: f64) -> Option<Sweep> {
     if graph.edges.get(edge)?.map_transition {
         return None;
     }
     let path = graph.edge_path(edge, &t.manufacturer, &t.series);
-    let length = path.length();
-    let n = if step > 0.0 && length.is_finite() {
-        ((length / step).ceil() as usize).max(1)
+    let spacing = if step > 0.0 {
+        step.min(t.length.max(CORNER_STEP))
     } else {
-        1
+        f64::INFINITY
     };
-    let mut bodies = Vec::with_capacity(n + 1);
-    for i in 0..=n {
-        let s = length * i as f64 / n as f64;
-        let (x, y) = path.point_at(s);
-        let heading = path.tangent_at(s);
-        bodies.push(body_at(&t.shape, t.kinematics, x, y, heading));
-    }
+    let outline = |x, y, heading| body_at(&t.shape, t.kinematics, x, y, heading);
+    let bodies = samples(&path, spacing, |x, y, h| marks(&outline(x, y, h)))
+        .into_iter()
+        .map(|s| {
+            let (x, y) = path.point_at(s);
+            outline(x, y, path.tangent_at(s))
+        })
+        .collect();
     Some(Sweep::from_bodies(bodies))
 }
 
-/// The bodies of a robot of type `t` standing on a node: one for each heading it
-/// can have there, i.e. the direction an edge it may drive arrives in or leaves
-/// in (an omnidirectional robot has one body that holds every heading). Empty if
-/// the type may not stand on the node or drives no edge to or from it.
+/// On curves, and when a robot turns on the spot, outlines are placed so finely
+/// that no corner moves more than this (m) between two neighbours.
+pub const CORNER_STEP: f64 = 0.02;
+
+/// How finely a curve is walked to place those poses (m). The edge path is a
+/// polyline, so the direction jumps at its points: there a corner may move more
+/// than [`CORNER_STEP`] between two poses this far apart.
+const CURVE_WALK: f64 = 0.005;
+
+/// The points of a body whose movement limits the distance between samples.
+fn marks(body: &Body) -> [Point; 4] {
+    match body {
+        Body::Rect(r) => r.corners(),
+        Body::Circle(c) => [c.c; 4],
+    }
+}
+
+/// The distances along `path` at which an outline is placed: at most `spacing`
+/// apart, and on a curve such that no mark of the outline (`marks_at`, from the
+/// pose) moves more than [`CORNER_STEP`] where the direction changes.
+fn samples(
+    path: &Path,
+    spacing: f64,
+    marks_at: impl Fn(f64, f64, f64) -> [Point; 4],
+) -> Vec<f64> {
+    let length = path.length();
+    if !length.is_finite() {
+        return vec![0.0];
+    }
+    if path.is_straight() {
+        let n = ((length / spacing).ceil() as usize).max(1);
+        return (0..=n).map(|i| length * i as f64 / n as f64).collect();
+    }
+    let at = |s: f64| {
+        let (x, y) = path.point_at(s);
+        let heading = path.tangent_at(s);
+        (s, heading, marks_at(x, y, heading))
+    };
+    // Walk the curve in small steps; keep the last step before the outline would
+    // have turned and moved too far (or the distance gets too long).
+    let n = ((length / CURVE_WALK).ceil() as usize).clamp(1, 1_000_000);
+    let mut kept = at(0.0);
+    let mut previous = kept;
+    let mut out = vec![0.0];
+    for i in 1..=n {
+        let next = at(length * i as f64 / n as f64);
+        let turned = (next.1 - kept.1).sin().abs() > 1e-6 || (next.1 - kept.1).cos() < 0.0;
+        let moved = kept
+            .2
+            .iter()
+            .zip(&next.2)
+            .map(|(a, b)| (a.x - b.x).hypot(a.y - b.y))
+            .fold(0.0, f64::max);
+        if ((turned && moved > CORNER_STEP) || next.0 - kept.0 > spacing) && previous.0 > kept.0 {
+            kept = previous;
+            out.push(kept.0);
+        }
+        previous = next;
+    }
+    out.push(length);
+    out
+}
+
+/// The **standstill protective field** of a robot of type `t` swept along `edge`;
+/// `None` for a lift ride.
+///
+/// The field is the one of the simulator (`botsim_core::safety::protective_field`
+/// at speed 0): ahead of the body in the direction of travel, `FIELD_MARGIN` long
+/// and `LATERAL_MARGIN` wider than the body on each side. An omnidirectional
+/// robot gets the field of the circle that holds its body in any heading. A
+/// robot standing on a node has no field (as in the simulator).
+///
+/// Sampled like [`sweep`], with the field's corners as the measure (never more
+/// than the field length apart).
+pub fn field_sweep(graph: &Graph, edge: usize, t: &TypeRef, step: f64) -> Option<Sweep> {
+    if graph.edges.get(edge)?.map_transition {
+        return None;
+    }
+    let path = graph.edge_path(edge, &t.manufacturer, &t.series);
+    let longest = FIELD_MARGIN.min(t.length.max(CORNER_STEP));
+    let spacing = if step > 0.0 { step.min(longest) } else { longest };
+    let fields = samples(&path, spacing, |x, y, h| field_at(t, x, y, h).corners())
+        .into_iter()
+        .map(|s| {
+            let (x, y) = path.point_at(s);
+            Body::Rect(field_at(t, x, y, path.tangent_at(s)))
+        })
+        .collect();
+    Some(Sweep::from_bodies(fields))
+}
+
+/// The standstill protective field with the kinematic center at (x, y), driving in
+/// direction `heading`.
+fn field_at(t: &TypeRef, x: f64, y: f64, heading: f64) -> OrientedRect {
+    let shape = match (t.kinematics, t.shape) {
+        // any heading: the field of the circle that holds the body
+        (Kinematics::Omnidirectional, Shape::Rect { cx, cy, half_length, half_width }) => {
+            Shape::Circle {
+                cx: 0.0,
+                cy: 0.0,
+                radius: (cx.abs() + half_length).hypot(cy.abs() + half_width),
+            }
+        }
+        (Kinematics::Omnidirectional, Shape::Circle { cx, cy, radius }) => Shape::Circle {
+            cx: 0.0,
+            cy: 0.0,
+            radius: cx.hypot(cy) + radius,
+        },
+        (_, shape) => shape,
+    };
+    // speed 0: no braking distance, so the deceleration and the time step do not count
+    protective_field(
+        &shape,
+        (x, y, heading),
+        (heading.cos(), heading.sin()),
+        0.0,
+        1.0,
+        0.0,
+    )
+}
+
+/// The outline of a robot of type `t` swept at a node: its body in every heading
+/// it can have there. These are the directions an edge it may drive arrives in or
+/// leaves in and, for a robot that turns on the spot (differential), all headings
+/// in between: for every edge in and every edge out that may follow it, the turn
+/// in the direction the simulator takes (the shorter way if the layout allows it,
+/// else the other; both for a U-turn), no corner moving more than
+/// [`CORNER_STEP`] between neighbours. An omnidirectional robot has one body that
+/// holds every heading. Empty if the type may not stand on the node or drives no
+/// edge to or from it.
+///
+/// Not covered: a turn from a heading the layout does not give (a robot placed on
+/// the node at the start).
 pub fn node_bodies(graph: &Graph, node: usize, t: &TypeRef) -> Vec<Body> {
     let Some(n) = graph.nodes.get(node) else {
         return Vec::new();
@@ -247,18 +390,49 @@ pub fn node_bodies(graph: &Graph, node: usize, t: &TypeRef) -> Vec<Body> {
     if !graph.node_allows(node, &t.manufacturer, &t.series) {
         return Vec::new();
     }
-    let mut headings: Vec<f64> = Vec::new();
+    let usable = |e: usize| graph.edge_allows(e, &t.manufacturer, &t.series);
+    let directions = |e: usize| graph.edge_directions(e, &t.manufacturer, &t.series);
+    let rotation = |e: usize| graph.edge_rotation(e, &t.manufacturer, &t.series);
+    // (heading, what the edge allows at this node)
+    let mut arrivals: Vec<(f64, Option<Rotation>)> = Vec::new();
+    let mut departures: Vec<(f64, Rotation)> = Vec::new();
     for (e, edge) in graph.edges.iter().enumerate() {
-        if edge.map_transition || !graph.edge_allows(e, &t.manufacturer, &t.series) {
+        if !usable(e) {
             continue;
         }
-        let (start, end) = graph.edge_directions(e, &t.manufacturer, &t.series);
+        if edge.map_transition {
+            // out of a lift the robot has the heading it drove in with
+            if edge.end == node {
+                for (f, before) in graph.edges.iter().enumerate() {
+                    if before.end == edge.start && !before.map_transition && usable(f) {
+                        arrivals.push((directions(f).1, None));
+                    }
+                }
+            }
+            continue;
+        }
         if edge.end == node {
-            headings.push(end);
+            arrivals.push((directions(e).1, Some(rotation(e).1)));
         }
         if edge.start == node {
-            headings.push(start);
+            departures.push((directions(e).0, rotation(e).0));
         }
+    }
+    let mut headings: Vec<f64> = arrivals
+        .iter()
+        .map(|a| a.0)
+        .chain(departures.iter().map(|d| d.0))
+        .collect();
+    if t.kinematics == Kinematics::Differential {
+        // the turns, as (from this heading, counter-clockwise by this much)
+        let mut arcs: Vec<(f64, f64)> = Vec::new();
+        for &(from, arrive) in &arrivals {
+            for &(to, leave) in &departures {
+                let allowed = arrive.map_or(leave, |r| r.and(leave));
+                arcs.extend(turn_arcs(from, to, allowed));
+            }
+        }
+        headings.extend(headings_in(&arcs, turning_radius(&t.shape)));
     }
     // the same heading (within 1 mrad) once
     let mut distinct: Vec<f64> = Vec::new();
@@ -276,6 +450,65 @@ pub fn node_bodies(graph: &Graph, node: usize, t: &TypeRef) -> Vec<Body> {
     distinct
         .into_iter()
         .map(|h| body_at(&t.shape, t.kinematics, n.x, n.y, h))
+        .collect()
+}
+
+/// The turn on the spot from heading `from` to heading `to` if `allowed` lets the
+/// robot make it, as (start heading, counter-clockwise extent): the shorter way
+/// if allowed, else the other one (the driver's rule). For a U-turn, where the
+/// shorter way is a matter of rounding, every allowed direction.
+fn turn_arcs(from: f64, to: f64, allowed: Rotation) -> Vec<(f64, f64)> {
+    let diff = angle_diff(from, to);
+    if !diff.is_finite() || diff.abs() <= 1e-9 {
+        return Vec::new();
+    }
+    let ccw = (from, (to - from).rem_euclid(TAU));
+    let cw = (to, (from - to).rem_euclid(TAU));
+    if PI - diff.abs() < 1e-3 {
+        return [(true, ccw), (false, cw)]
+            .into_iter()
+            .filter(|&(direction, _)| allowed.allows(direction))
+            .map(|(_, arc)| arc)
+            .collect();
+    }
+    let shortest_ccw = diff > 0.0;
+    let direction = [shortest_ccw, !shortest_ccw]
+        .into_iter()
+        .find(|&d| allowed.allows(d));
+    direction
+        .map(|d| if d { ccw } else { cw })
+        .into_iter()
+        .collect()
+}
+
+/// How far the farthest point of the body moves per radian when the robot turns
+/// about its kinematic center (m); for a circle, only its centre moves.
+fn turning_radius(shape: &Shape) -> f64 {
+    match *shape {
+        Shape::Rect {
+            cx,
+            cy,
+            half_length,
+            half_width,
+        } => (cx.abs() + half_length).hypot(cy.abs() + half_width),
+        Shape::Circle { cx, cy, .. } => cx.hypot(cy),
+    }
+}
+
+/// The headings of an even grid, fine enough for [`CORNER_STEP`] at `radius`,
+/// that lie inside one of the `arcs` (each heading once, however many turns pass
+/// through it).
+fn headings_in(arcs: &[(f64, f64)], radius: f64) -> Vec<f64> {
+    if arcs.is_empty() || radius <= 0.0 || !radius.is_finite() {
+        return Vec::new();
+    }
+    let n = ((TAU * radius / CORNER_STEP).ceil() as usize).clamp(8, 100_000);
+    (0..n)
+        .map(|i| TAU * i as f64 / n as f64)
+        .filter(|h| {
+            arcs.iter()
+                .any(|&(start, extent)| (h - start).rem_euclid(TAU) <= extent)
+        })
         .collect()
 }
 
@@ -491,6 +724,117 @@ mod tests {
         let g = two_edges(0.0, 2.0, 10.0, 0.0);
         assert!(!overlap_of(&g, &d));
         assert!(overlap_of(&g, &o));
+    }
+
+    #[test]
+    fn field_sweep_starts_at_the_body_front_and_is_wider() {
+        // body 2 m x 1 m on a 10 m edge east: the fields cover x 1 .. 11.3 and are
+        // 0.1 m wider on each side
+        let t = TypeRef::test_rect("ACME/X1", Kinematics::Differential, 2.0, 1.0);
+        let f = field_sweep(&graph(), 0, &t, 0.25).expect("sweep");
+        let (x0, y0, x1, y1) = f.bounds;
+        assert!(near(x0, 1.0) && near(x1, 11.3), "{:?}", f.bounds);
+        assert!(near(y0, -0.6) && near(y1, 0.6), "{:?}", f.bounds);
+        assert!(field_sweep(&graph(), 99, &t, 0.25).is_none());
+        // a zero step falls back to the field length: no gaps, no panic
+        let f = field_sweep(&graph(), 0, &t, 0.0).expect("sweep");
+        assert!(f.bodies.len() >= 35);
+    }
+
+    /// Does any of the bodies reach into a small circle at (x, y)?
+    fn reaches(bodies: &[Body], x: f64, y: f64) -> bool {
+        let dot = Body::Circle(circle(point(x, y), 0.01));
+        bodies.iter().any(|b| bodies_overlap(b, &dot))
+    }
+
+    /// Nodes A (-5, 0), N (0, 0), B (0, 5) and C (0.125, 0.125); edges `A-N`
+    /// east, `N-B` north (with `extra` in its properties for the type) and the
+    /// short left arc `N-C` of radius 0.125 m (0.196 m long).
+    fn corner(extra: &str) -> Graph {
+        let ty = r#""mobileRobotTypes":[{"manufacturer":"ACME","seriesName":"X1"}]"#;
+        let node = |id: &str, x: f64, y: f64| {
+            format!(
+                r#"{{"nodeId":"{id}","mapId":"M","nodePosition":{{"x":{x},"y":{y}}},"mobileRobotTypeNodeProperties":[{{{ty}}}]}}"#
+            )
+        };
+        let edge = |a: &str, b: &str, props: &str| {
+            format!(
+                r#"{{"edgeId":"{a}-{b}","startNodeId":"{a}","endNodeId":"{b}","mobileRobotTypeEdgeProperties":[{{{ty}{props}}}]}}"#
+            )
+        };
+        let arc = r#","trajectory":{"degree":2,"knotVector":[0,0,0,1,1,1],"controlPoints":[{"x":0,"y":0},{"x":0.125,"y":0,"weight":0.7071067811865476},{"x":0.125,"y":0.125}]}"#;
+        let lif: Lif = serde_json::from_str(&format!(
+            r#"{{"metaInformation":{{"lifId":"x","creator":"t","exportTimestamp":"2026-01-01T00:00:00Z","lifVersion":"1.0.0"}},
+            "origins":[{{"originId":"O","layouts":[{{"layoutId":"L","layoutVersion":"1",
+            "nodes":[{},{},{},{}],"edges":[{},{},{}]}}]}}]}}"#,
+            node("A", -5.0, 0.0),
+            node("N", 0.0, 0.0),
+            node("B", 0.0, 5.0),
+            node("C", 0.125, 0.125),
+            edge("A", "N", ""),
+            edge("N", "B", extra),
+            edge("N", "C", arc),
+        ))
+        .expect("test LIF parses");
+        Graph::from_lif(&lif).expect("graph")
+    }
+
+    #[test]
+    fn a_curve_shorter_than_the_step_is_sampled_in_between() {
+        let t = TypeRef::test_rect("ACME/X1", Kinematics::Differential, 0.48, 0.24);
+        let g = corner("");
+        let arc = g.edge_idx("N-C").expect("arc");
+        let s = sweep(&g, arc, &t, 0.25).expect("sweep");
+        assert!(s.bodies.len() > 10, "{}", s.bodies.len());
+        // the front right corner in mid turn reaches a place neither end does
+        let ends = [s.bodies[0], *s.bodies.last().expect("end")];
+        assert!(!reaches(&ends, 0.325, 0.11));
+        assert!(reaches(&s.bodies, 0.325, 0.11));
+        // however large the step is
+        let s = sweep(&g, arc, &t, 100.0).expect("sweep");
+        assert!(reaches(&s.bodies, 0.325, 0.11));
+    }
+
+    /// A point at `degrees` and `radius` from the node N.
+    fn around(degrees: f64, radius: f64) -> (f64, f64) {
+        let (s, c) = degrees.to_radians().sin_cos();
+        (radius * c, radius * s)
+    }
+
+    #[test]
+    fn a_node_is_swept_over_the_turn() {
+        // 2 x 1 body: its corners are 1.118 m from the node
+        let t = TypeRef::test_rect("ACME/X1", Kinematics::Differential, 2.0, 1.0);
+        let g = corner("");
+        let n = g.node_idx("N").expect("N");
+        let bodies = node_bodies(&g, n, &t);
+        // turning left from east (in) to north (out): a corner passes 40 degrees
+        let (x, y) = around(40.0, 1.08);
+        assert!(reaches(&bodies, x, y));
+        // but no corner passes 135 degrees: the robot does not turn the long way
+        let (x, y) = around(135.0, 1.08);
+        assert!(!reaches(&bodies, x, y));
+        // if the layout only allows the long way (clockwise), it does
+        let g = corner(r#","rotationAtStartNodeAllowed":"CW""#);
+        let (x, y) = around(135.0, 1.08);
+        assert!(reaches(&node_bodies(&g, n, &t), x, y));
+        // a car-like robot cannot turn on the spot
+        let car = TypeRef::test_rect("ACME/X1", Kinematics::ThreeWheel, 2.0, 1.0);
+        let (x, y) = around(40.0, 1.08);
+        assert!(!reaches(&node_bodies(&corner(""), n, &car), x, y));
+    }
+
+    #[test]
+    fn turn_directions_follow_the_driver() {
+        let half = PI / 2.0;
+        // the shorter way, else the other one, else none
+        assert_eq!(turn_arcs(0.0, half, Rotation::Both), [(0.0, half)]);
+        assert_eq!(turn_arcs(0.0, half, Rotation::Cw), [(half, 3.0 * half)]);
+        assert!(turn_arcs(0.0, half, Rotation::None).is_empty());
+        assert!(turn_arcs(1.0, 1.0, Rotation::Both).is_empty());
+        // a U-turn may go either way
+        assert_eq!(turn_arcs(0.0, PI, Rotation::Both).len(), 2);
+        assert_eq!(turn_arcs(0.0, PI, Rotation::Ccw), [(0.0, PI)]);
     }
 
     #[test]

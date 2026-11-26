@@ -23,9 +23,11 @@ pub mod sweep;
 pub mod types;
 
 pub use conflict::{
-    CLEARANCE, Conflict, ConflictMap, MIN_OVERLAP, MapOptions, NodeConflict, NodeTypePair,
-    TypePair, compute, to_json,
+    CLEARANCE, Conflict, ConflictMap, MIN_OVERLAP, MapOptions, NodeConflict, NodeNodeConflict,
+    NodeNodeTypePair, NodeTypePair, TypePair, compute, to_json,
 };
 pub use places::{LayoutIndex, Place, PlaceKind};
-pub use sweep::{Body, Contact, SAMPLE_STEP, Sweep, node_bodies, sweep};
+pub use sweep::{
+    Body, CORNER_STEP, Contact, SAMPLE_STEP, Sweep, field_sweep, node_bodies, sweep,
+};
 pub use types::TypeRef;

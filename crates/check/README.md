@@ -62,7 +62,9 @@ with their depth (`node_pairs`). Ids only; see the note for the viewer for the f
 ## How the swept outline is made
 
 `Graph::edge_path` of `botsim-core` (the LIF trajectory, a NURBS curve, sampled; or the
-straight line) is sampled every 0.25 m. At each sample the body outline of the factsheet
+straight line) is sampled every 0.25 m, curves much more finely (no corner moves more than 2 cm
+between samples); at a node the body is swept over the turns on the spot (see
+`crates/sweep/README.md`). At each sample the body outline of the factsheet
 (`envelopes2d` without safety fields, else length × width) is placed at the kinematic center
 and turned to the direction of travel. An omnidirectional robot gets a circle round its
 kinematic center that holds the body in any heading (more conflicts than real). Overlap and
@@ -95,7 +97,7 @@ What comes out is expected for demonstration fragments, not a sign of wrong chec
 
 - Clearance: only the deepest hit per edge (no position of the hit along the edge); depth is
   exact for convex obstacles only.
-- Two robots standing on two different nodes (the nodes of G3 are checked only along edges).
+- Two robots on two different nodes: in the conflict map (`node_node_pairs`), but no finding yet.
 - The protective field and driving backwards in the swept outline.
 - G2 (turn arc does not fit): needs an arc radius, which the layout and the factsheet do not give
   (open question). G5 (branch inside a siding): no separate check; the uncovered conflicts of
