@@ -17,6 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
+use std::ops::RangeInclusive;
 
 use crate::groups::Route;
 
@@ -161,12 +162,29 @@ fn events(order: Before) -> (Event, Event) {
     (from, to)
 }
 
+/// An order as it is filed by who waits: the robot, the node whose release it
+/// holds back, the order.
+type ByWaiter = (usize, usize, Before);
+
+fn by_waiter(order: Before) -> ByWaiter {
+    let node = Progress::given_with(order.then.piece);
+    (order.then.robot, node, order)
+}
+
+/// No order sorts before this one.
+const LEAST: Before = Before {
+    first: Pass { robot: 0, piece: 0 },
+    then: Pass { robot: 0, piece: 0 },
+};
+
 /// The robots' events and the orders between different robots.
 #[derive(Debug, Clone, Default)]
 pub struct OrderGraph {
     robots: Vec<Progress>,
     /// Event → the events of other robots that wait for it.
     waiting: BTreeMap<Event, BTreeSet<Waiter>>,
+    /// The same orders once more, to find those of one robot that waits.
+    waiters: BTreeSet<ByWaiter>,
 }
 
 impl OrderGraph {
@@ -222,11 +240,10 @@ impl OrderGraph {
             }
         };
         let waiting = std::mem::take(&mut self.waiting);
+        self.waiters.clear();
         for (_, order) in waiting.into_values().flatten() {
             if let (Some(first), Some(then)) = (renamed(order.first), renamed(order.then)) {
-                let order = Before { first, then };
-                let (from, to) = events(order);
-                self.waiting.entry(from).or_default().insert((to, order));
+                self.file(Before { first, then });
             }
         }
         true
@@ -268,16 +285,41 @@ impl OrderGraph {
     /// The orders that keep node `node`, with the edge before it, from the robot:
     /// those about these pieces whose first pass is not over.
     pub(crate) fn holding_back(&self, robot: usize, node: usize) -> Vec<Before> {
-        let to = Event {
-            robot,
-            moment: Moment::Released(node),
-        };
-        self.waiting
-            .values()
-            .flatten()
-            .filter(|(event, order)| *event == to && !self.has_left(order.first))
-            .map(|&(_, order)| order)
+        self.of_waiter(robot, node..=node)
+            .filter(|order| !self.has_left(order.first))
             .collect()
+    }
+
+    /// The orders that hold back the release to the robot of one of these nodes.
+    fn of_waiter(
+        &self,
+        robot: usize,
+        nodes: RangeInclusive<usize>,
+    ) -> impl Iterator<Item = Before> {
+        let last = *nodes.end();
+        self.waiters
+            .range((robot, *nodes.start(), LEAST)..)
+            .take_while(move |&&(r, node, _)| r == robot && node <= last)
+            .map(|&(_, _, order)| order)
+    }
+
+    /// File an order; `true` if it was not there.
+    fn file(&mut self, order: Before) -> bool {
+        let (from, to) = events(order);
+        self.waiters.insert(by_waiter(order));
+        self.waiting.entry(from).or_default().insert((to, order))
+    }
+
+    /// Take an order out, if it is there.
+    fn unfile(&mut self, order: Before) {
+        let (from, to) = events(order);
+        if let Some(set) = self.waiting.get_mut(&from) {
+            set.remove(&(to, order));
+            if set.is_empty() {
+                self.waiting.remove(&from);
+            }
+        }
+        self.waiters.remove(&by_waiter(order));
     }
 
     /// Release the next node to the robot. `false` if its route has no further one,
@@ -335,8 +377,15 @@ impl OrderGraph {
         p.last = p.released;
         let end = 2 * p.last;
         let gone = |pass: Pass| pass.robot == robot && pass.piece > end;
+        let waiters = &mut self.waiters;
         self.waiting.retain(|_, set| {
-            set.retain(|(_, o)| !gone(o.first) && !gone(o.then));
+            set.retain(|&(_, o)| {
+                let stays = !gone(o.first) && !gone(o.then);
+                if !stays {
+                    waiters.remove(&by_waiter(o));
+                }
+                stays
+            });
             !set.is_empty()
         });
         true
@@ -366,13 +415,7 @@ impl OrderGraph {
     /// Take these orders out of the graph.
     pub(crate) fn remove(&mut self, orders: &[Before]) {
         for &order in orders {
-            let (from, to) = events(order);
-            if let Some(set) = self.waiting.get_mut(&from) {
-                set.remove(&(to, order));
-                if set.is_empty() {
-                    self.waiting.remove(&from);
-                }
-            }
+            self.unfile(order);
         }
     }
 
@@ -380,10 +423,19 @@ impl OrderGraph {
     /// they make nobody wait any more.
     pub(crate) fn remove_passed(&mut self) {
         let robots = &self.robots;
+        let waiters = &mut self.waiters;
         // an order is filed under the arrival that ends its first pass
-        self.waiting.retain(|from, _| match from.moment {
-            Moment::Reached(node) => robots.get(from.robot).is_some_and(|p| p.reached < node),
-            Moment::Released(_) => true,
+        self.waiting.retain(|from, set| {
+            let stays = match from.moment {
+                Moment::Reached(node) => robots.get(from.robot).is_some_and(|p| p.reached < node),
+                Moment::Released(_) => true,
+            };
+            if !stays {
+                for &(_, order) in set.iter() {
+                    waiters.remove(&by_waiter(order));
+                }
+            }
+            stays
         });
     }
 
@@ -397,27 +449,35 @@ impl OrderGraph {
                 .is_some_and(|p| Progress::leaves_at(pass.piece) > p.last)
         };
         let pieces: BTreeSet<usize> = self
-            .waiting
-            .values()
-            .flatten()
-            .map(|(_, o)| o)
-            .filter(|o| o.then.robot == robot && never(o.first))
+            .of_waiter(robot, 0..=usize::MAX)
+            .filter(|o| never(o.first))
             .map(|o| o.then.piece)
             .collect();
         pieces.into_iter().collect()
     }
 
-    /// All orders in the graph, for tests that check it by other means.
+    /// All orders in the graph, for tests that check it by other means. Each must
+    /// be filed in its place, both ways.
     #[cfg(test)]
     pub(crate) fn orders(&self) -> BTreeSet<Before> {
-        self.waiting.values().flatten().map(|w| w.1).collect()
+        for (from, set) in &self.waiting {
+            assert!(!set.is_empty());
+            for &(to, order) in set {
+                assert_eq!((*from, to), events(order));
+            }
+        }
+        let all: BTreeSet<Before> = self.waiting.values().flatten().map(|w| w.1).collect();
+        let again: BTreeSet<ByWaiter> = all.iter().map(|&o| by_waiter(o)).collect();
+        assert_eq!(self.waiters, again);
+        all
     }
 
     /// Is this order in the graph?
     pub fn is_ordered(&self, order: &Before) -> bool {
+        let (from, to) = events(*order);
         self.waiting
-            .values()
-            .any(|set| set.iter().any(|(_, o)| o == order))
+            .get(&from)
+            .is_some_and(|set| set.contains(&(to, *order)))
     }
 
     /// Take all these orders, or none of them if one is refused.
@@ -425,17 +485,10 @@ impl OrderGraph {
         let mut added = Vec::new();
         for order in orders {
             match self.insert(*order) {
-                Ok(Some(edge)) => added.push(edge),
-                Ok(None) => {} // it was there already
+                Ok(true) => added.push(*order),
+                Ok(false) => {} // it was there already
                 Err(refused) => {
-                    for (from, entry) in added {
-                        if let Some(set) = self.waiting.get_mut(&from) {
-                            set.remove(&entry);
-                            if set.is_empty() {
-                                self.waiting.remove(&from);
-                            }
-                        }
-                    }
+                    self.remove(&added);
                     return Err(refused);
                 }
             }
@@ -450,20 +503,18 @@ impl OrderGraph {
     /// the standing robot's events, so no cycle can come of it.
     pub(crate) fn wait_for_standing(&mut self, orders: &[Before]) {
         for &order in orders {
-            let (from, to) = events(order);
-            self.waiting.entry(from).or_default().insert((to, order));
+            self.file(order);
         }
     }
 
-    /// Add one order; returns what is new in `waiting`.
-    fn insert(&mut self, order: Before) -> Result<Option<(Event, Waiter)>, Refused> {
+    /// Add one order; `true` if it was not there.
+    fn insert(&mut self, order: Before) -> Result<bool, Refused> {
         self.allows(order)?;
         let (from, to) = events(order);
         if self.reaches(to, from) {
             return Err(Refused::Cycle(order));
         }
-        let new = self.waiting.entry(from).or_default().insert((to, order));
-        Ok(new.then_some((from, (to, order))))
+        Ok(self.file(order))
     }
 
     /// The robot of the pass, if the pass exists.

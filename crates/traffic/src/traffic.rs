@@ -40,7 +40,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::graph::{BadProgress, Before, OrderGraph, Pass, Refused};
-use crate::groups::{Route, UnknownName, check, groups_where};
+use crate::groups::{Against, Route, UnknownName, groups_where};
 use crate::spots::{Piece, Spots};
 
 /// "Cannot place this route": what another route should keep clear of.
@@ -232,30 +232,36 @@ impl Traffic {
     /// robot stands at the end of the part taken; `None` if no other robot does, or
     /// the robot does not stand so.
     pub fn next_holder(&self, robot: usize) -> Option<usize> {
-        let wanted = self.wanted.get(&robot)?;
-        let end = self.route_end(robot)?;
-        if !self.graph.at_end(robot) {
-            return None;
-        }
-        let node = wanted.pieces().get(2 * end + 2)?;
+        let node = self.next_node(robot)?;
         self.holder(node).filter(|&holder| holder != robot)
     }
 
-    /// For a robot that stands at the end of the part taken of its route and wants
-    /// to go on, whom it waits for: the holder of its next node, else those who
-    /// keep the rest from being taken. `None` for any other robot.
-    fn waits_for(&self, robot: usize) -> Option<Vec<usize>> {
-        if !self.wanted.contains_key(&robot) || !self.graph.at_end(robot) {
+    /// Does the robot stand at the end of the part taken of its route, and want to
+    /// go on?
+    fn stands_waiting(&self, robot: usize) -> bool {
+        self.wanted.contains_key(&robot) && self.graph.at_end(robot)
+    }
+
+    /// The next node of the route the robot wants, while it stands so.
+    fn next_node(&self, robot: usize) -> Option<&Piece> {
+        if !self.stands_waiting(robot) {
             return None;
         }
-        Some(match self.next_holder(robot) {
+        let end = self.route_end(robot)?;
+        self.wanted.get(&robot)?.pieces().get(2 * end + 2)
+    }
+
+    /// For a robot that stands waiting so, whom it waits for: the holder of its
+    /// next node, given as `holder`, else those who keep the rest from being taken.
+    fn waits_for(&self, robot: usize, holder: Option<usize>) -> Vec<usize> {
+        match holder {
             Some(holder) => vec![holder],
             None => {
                 let mut by = self.refused_by(robot);
                 by.retain(|&other| other != robot);
                 by
             }
-        })
+        }
     }
 
     /// The ring query. Of the robots that stand at the end of the part taken of
@@ -265,10 +271,18 @@ impl Traffic {
     /// each with the robots on the rings it comes to. A robot is on a ring itself
     /// if it is among them.
     pub fn waiting_on_rings(&self) -> BTreeMap<usize, BTreeSet<usize>> {
+        let holders = self.holders();
         let waits: BTreeMap<usize, Vec<usize>> = self
             .wanted
             .keys()
-            .filter_map(|&robot| Some((robot, self.waits_for(robot)?)))
+            .filter(|&&robot| self.stands_waiting(robot))
+            .map(|&robot| {
+                let holder = self
+                    .next_node(robot)
+                    .and_then(|node| holders.get(node).copied())
+                    .filter(|&holder| holder != robot);
+                (robot, self.waits_for(robot, holder))
+            })
             .collect();
         // all a robot waits for, directly or through others
         let behind = |robot: usize| {
@@ -301,14 +315,13 @@ impl Traffic {
     /// otherwise, and if the repair is off.
     fn ring_avoid(&self, robot: usize) -> Option<Piece> {
         // the query is only needed for a robot that stands waiting
-        if !self.ring_repair || self.waits_for(robot).is_none() {
+        if !self.ring_repair || !self.stands_waiting(robot) {
             return None;
         }
         if !self.waiting_on_rings().contains_key(&robot) {
             return None;
         }
-        let end = self.route_end(robot)?;
-        self.wanted.get(&robot)?.pieces().get(2 * end + 2).cloned()
+        self.next_node(robot).cloned()
     }
 
     /// **Experiment (D3 "A", after SCALE), off unless called.** From now on a part
@@ -602,6 +615,18 @@ impl Traffic {
         (0..self.routes.len()).find(|&robot| self.held(robot).any(|held| held == piece))
     }
 
+    /// For every node and edge that has one, the robot [`holder`](Traffic::holder)
+    /// names: all at once, for those who ask about many.
+    fn holders(&self) -> BTreeMap<&Piece, usize> {
+        let mut holders = BTreeMap::new();
+        for robot in 0..self.routes.len() {
+            for piece in self.held(robot) {
+                holders.entry(piece).or_insert(robot);
+            }
+        }
+        holders
+    }
+
     /// Who holds the robot back: the robots ordered to pass before it where its
     /// next node would take it, that have not left there; lowest number first.
     /// Empty if the node is free to be released, the route has no further node, or
@@ -634,6 +659,7 @@ impl Traffic {
     /// already cannot be held back; the answer names them. Only a robot whose type
     /// or first node is unknown is not kept.
     pub fn add(&mut self, route: Route) -> Result<usize, NotAdded> {
+        let route = self.numbered(route);
         let mut graph = self.graph.clone();
         let new = graph.add_robot(&route);
         match self.place_far(graph, new, route.clone()) {
@@ -661,6 +687,13 @@ impl Traffic {
         }
     }
 
+    /// A route as the module takes it in: its names looked up once for all. One
+    /// with an unknown name stays as it is, for the placement to tell.
+    fn numbered(&self, mut route: Route) -> Route {
+        let _ = route.number(&self.spots);
+        route
+    }
+
     fn note_refused_by(&mut self, robot: usize, by: Vec<usize>) {
         if by.is_empty() {
             self.refused_by.remove(&robot);
@@ -674,7 +707,7 @@ impl Traffic {
     /// released there. Returns what to answer.
     fn keep_standing(&mut self, mut route: Route, why: NotAdded) -> NotAdded {
         route.cut(0);
-        if check(&self.spots, &route).is_err() {
+        if route.number(&self.spots).is_err() {
             return why;
         }
         // the number it gets
@@ -733,6 +766,7 @@ impl Traffic {
         if held.type_name() != route.type_name() || !route.pieces().starts_with(held.pieces()) {
             return Err(NotAdded::OtherRoute);
         }
+        let route = self.numbered(route);
         let mut graph = self.graph.clone();
         graph.lengthen(robot, route.pieces().len() / 2);
         match self.place_far(graph, robot, route.clone()) {
@@ -793,6 +827,7 @@ impl Traffic {
         if old.type_name() != route.type_name() || old.pieces().last() != route.pieces().first() {
             return Err(NotAdded::OtherRoute);
         }
+        let route = self.numbered(route);
         match self.place_far(graph, robot, route.clone()) {
             Ok((graph, taken, by)) => {
                 self.take(graph, robot, route, taken, by);
@@ -981,8 +1016,9 @@ impl Traffic {
         route: &Route,
         routes: &[Route],
     ) -> Result<OrderGraph, Blocked> {
+        // one look-up table of the new route for all others; its names are checked
         // also when there is no other robot
-        check(&self.spots, route)?;
+        let mut against = Against::new(&self.spots, route)?;
         // the last piece the robot holds already
         let held = 2 * graph.released(new).unwrap_or(0);
 
@@ -1003,7 +1039,7 @@ impl Traffic {
                 piece,
             };
             let new_pass = |piece| Pass { robot: new, piece };
-            let found = groups_where(&self.spots, theirs, route, |q, p| {
+            let found = against.groups_where(theirs, |q, p| {
                 !graph.has_left(theirs_pass(q)) && !graph.has_left(new_pass(p))
             })?;
             for group in found {

@@ -11,6 +11,7 @@
 //! deadlock, so a connected run of conflicts, head-on or following, is one order
 //! decision.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
@@ -20,11 +21,47 @@ use crate::spots::{Piece, Spots};
 
 /// A robot's route: node, edge, node, … The index of a piece is its VDA 5050
 /// `sequenceId` in an order that starts at 0.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Route {
     /// `manufacturer/seriesName` of the robot.
     type_name: String,
     pieces: Vec<Piece>,
+    /// The same as numbers, once [`number`](Route::number) has looked them up.
+    numbers: Option<Numbers>,
+}
+
+/// Two routes are the same if their type and pieces are.
+impl PartialEq for Route {
+    fn eq(&self, other: &Route) -> bool {
+        self.type_name == other.type_name && self.pieces == other.pieces
+    }
+}
+
+impl Eq for Route {}
+
+/// The type and the pieces of a route as the numbers the spots have for them.
+#[derive(Debug, Clone)]
+struct Numbers {
+    type_number: usize,
+    pieces: Vec<usize>,
+}
+
+impl Numbers {
+    /// An error for the type, else for the first piece, the spots do not have.
+    fn of(spots: &Spots, route: &Route) -> Result<Numbers, UnknownName> {
+        let type_number = spots
+            .type_number(&route.type_name)
+            .ok_or_else(|| UnknownName::Type(route.type_name.clone()))?;
+        let pieces = route.pieces.iter().map(|piece| {
+            spots
+                .piece_number(piece)
+                .ok_or_else(|| UnknownName::Piece(piece.clone()))
+        });
+        Ok(Numbers {
+            type_number,
+            pieces: pieces.collect::<Result<_, _>>()?,
+        })
+    }
 }
 
 impl Route {
@@ -43,7 +80,26 @@ impl Route {
         Some(Route {
             type_name: type_name.to_string(),
             pieces,
+            numbers: None,
         })
+    }
+
+    /// Keep the numbers these spots have for the route, so that its names are not
+    /// looked up again; for a route that stays with them. With a name they do not
+    /// have, it keeps none.
+    pub(crate) fn number(&mut self, spots: &Spots) -> Result<(), UnknownName> {
+        if self.numbers.is_none() {
+            self.numbers = Some(Numbers::of(spots, self)?);
+        }
+        Ok(())
+    }
+
+    /// The numbers: those kept, else looked up now.
+    fn numbers(&self, spots: &Spots) -> Result<Cow<'_, Numbers>, UnknownName> {
+        match &self.numbers {
+            Some(numbers) => Ok(Cow::Borrowed(numbers)),
+            None => Numbers::of(spots, self).map(Cow::Owned),
+        }
     }
 
     pub fn type_name(&self) -> &str {
@@ -56,8 +112,11 @@ impl Route {
 
     /// Drop everything after node `node` (its index among the nodes).
     pub(crate) fn cut(&mut self, node: usize) {
-        self.pieces
-            .truncate(node.saturating_mul(2).saturating_add(1));
+        let length = node.saturating_mul(2).saturating_add(1);
+        self.pieces.truncate(length);
+        if let Some(numbers) = &mut self.numbers {
+            numbers.pieces.truncate(length);
+        }
     }
 }
 
@@ -97,26 +156,72 @@ pub(crate) fn groups_where(
     b: &Route,
     live: impl Fn(usize, usize) -> bool,
 ) -> Result<Vec<Group>, UnknownName> {
-    check(spots, a)?;
-    check(spots, b)?;
+    // an unknown name in `a` is told first
+    a.numbers(spots)?;
+    Against::new(spots, b)?.groups_where(a, live)
+}
 
-    let mut in_b: BTreeMap<&Piece, Vec<usize>> = BTreeMap::new();
-    for (q, piece) in b.pieces.iter().enumerate() {
-        in_b.entry(piece).or_default().push(q);
+/// One route, to find the groups of others against it. Which pieces of a type of
+/// robot conflict with which of the route's is worked out once for the type; then
+/// each piece of another route takes one look-up.
+pub(crate) struct Against<'a> {
+    spots: &'a Spots,
+    route: Cow<'a, Numbers>,
+    /// By the other type: (its piece, index in the route), sorted.
+    by_type: BTreeMap<usize, Vec<(usize, usize)>>,
+}
+
+impl<'a> Against<'a> {
+    pub(crate) fn new(spots: &'a Spots, route: &'a Route) -> Result<Against<'a>, UnknownName> {
+        Ok(Against {
+            spots,
+            route: route.numbers(spots)?,
+            by_type: BTreeMap::new(),
+        })
     }
-    // the conflicts not yet in a group
-    let mut open = BTreeSet::new();
-    for (p, piece) in a.pieces.iter().enumerate() {
-        let others = spots.conflicting(&a.type_name, piece, &b.type_name);
-        for other in others.into_iter().flatten() {
-            for &q in in_b.get(other).into_iter().flatten() {
+
+    /// As [`groups_where`] gives them for `a` and this route.
+    pub(crate) fn groups_where(
+        &mut self,
+        a: &Route,
+        live: impl Fn(usize, usize) -> bool,
+    ) -> Result<Vec<Group>, UnknownName> {
+        let theirs = a.numbers(self.spots)?;
+        let found = self
+            .by_type
+            .entry(theirs.type_number)
+            .or_insert_with(|| conflicts(self.spots, &self.route, theirs.type_number));
+        // the conflicts not yet in a group
+        let mut open = BTreeSet::new();
+        for (p, &piece) in theirs.pieces.iter().enumerate() {
+            let from = found.partition_point(|&(other, _)| other < piece);
+            let same = found.iter().skip(from);
+            for &(_, q) in same.take_while(|&&(other, _)| other == piece) {
                 if live(p, q) {
                     open.insert((p, q));
                 }
             }
         }
+        Ok(connected(open))
     }
+}
 
+/// For a robot of type `other`: each of its pieces that conflicts with a piece of
+/// the route, with that piece's index in the route; sorted.
+fn conflicts(spots: &Spots, route: &Numbers, other: usize) -> Vec<(usize, usize)> {
+    let mut found = Vec::new();
+    for (q, &piece) in route.pieces.iter().enumerate() {
+        found.push((piece, q)); // the same piece
+        // the list goes both ways
+        let listed = spots.listed_against(route.type_number, piece, other);
+        found.extend(listed.map(|theirs| (theirs, q)));
+    }
+    found.sort_unstable();
+    found
+}
+
+/// These conflicts in their groups.
+fn connected(mut open: BTreeSet<(usize, usize)>) -> Vec<Group> {
     let mut groups = Vec::new();
     while let Some(first) = open.pop_first() {
         let mut group = vec![first];
@@ -134,18 +239,7 @@ pub(crate) fn groups_where(
         group.sort_unstable();
         groups.push(group);
     }
-    Ok(groups)
-}
-
-/// Does the layout and the conflict map have everything the route names?
-pub(crate) fn check(spots: &Spots, route: &Route) -> Result<(), UnknownName> {
-    if !spots.has_type(&route.type_name) {
-        return Err(UnknownName::Type(route.type_name.clone()));
-    }
-    match route.pieces.iter().find(|p| !spots.has_piece(p)) {
-        Some(p) => Err(UnknownName::Piece(p.clone())),
-        None => Ok(()),
-    }
+    groups
 }
 
 /// The piece indices that touch piece `p` of a route, `p` too: for a node (even
@@ -159,7 +253,7 @@ fn touching(p: usize) -> RangeInclusive<usize> {
 mod tests {
     use super::*;
     use crate::testing::{LARGE, SMALL, edge, edge_pair, empty_map, lif, node};
-    use botsim_sweep::ConflictMap;
+    use botsim_sweep::{ConflictMap, NodeConflict, NodeTypePair};
     use vdma_lif::Lif;
 
     fn route(type_name: &str, nodes: &[&str], edges: &[&str]) -> Route {
@@ -286,6 +380,72 @@ mod tests {
         let on_a = |ty| route(ty, &["A0", "A1"], &["E1"]);
         assert_eq!(groups(&spots, &on_a(SMALL), &large), Ok(vec![vec![(1, 1)]]));
         assert_eq!(groups(&spots, &on_a(LARGE), &large), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn groups_hold_just_the_conflicts_the_spots_name() {
+        // maps and routes drawn by a small generator; the routes need not be
+        // drivable
+        let mut state = 1u64;
+        let mut draw = |below: usize| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize % below
+        };
+        let layout = two_lines();
+        let nodes = ["A0", "A1", "A2", "B0", "B1", "B2"];
+        let edges = ["E1", "E2", "F1", "F2"];
+        let types = [SMALL, LARGE];
+        let mut conflicts = 0;
+        for _ in 0..2_000 {
+            let mut map = empty_map();
+            for _ in 0..draw(6) {
+                let (a, b) = (types[draw(2)], types[draw(2)]);
+                map.pairs
+                    .push(edge_pair(a, edges[draw(4)], b, edges[draw(4)]));
+            }
+            for _ in 0..draw(6) {
+                map.node_pairs.push(NodeTypePair {
+                    type_node: types[draw(2)].into(),
+                    type_edge: types[draw(2)].into(),
+                    conflicts: vec![NodeConflict {
+                        node: nodes[draw(6)].into(),
+                        edge: edges[draw(4)].into(),
+                        junction_nodes: None,
+                        depth: 0.2,
+                        distance: 0.0,
+                    }],
+                });
+            }
+            let spots = Spots::new(&layout, &map).expect("setup");
+            let mut drawn = || {
+                let length = draw(4);
+                let on: Vec<&str> = (0..=length).map(|_| nodes[draw(6)]).collect();
+                let by: Vec<&str> = (0..length).map(|_| edges[draw(4)]).collect();
+                route(types[draw(2)], &on, &by)
+            };
+            let (a, b) = (drawn(), drawn());
+            let mut named = Vec::new();
+            for (p, x) in a.pieces().iter().enumerate() {
+                for (q, y) in b.pieces().iter().enumerate() {
+                    if spots.conflict(a.type_name(), x, b.type_name(), y) == Some(true) {
+                        named.push((p, q));
+                    }
+                }
+            }
+            conflicts += named.len();
+            let found = groups(&spots, &a, &b).expect("names");
+            let mut all = found.concat();
+            all.sort_unstable();
+            assert_eq!(all, named);
+            // the same with the numbers kept
+            let (mut a_kept, mut b_kept) = (a.clone(), b.clone());
+            assert_eq!(a_kept.number(&spots), Ok(()));
+            assert_eq!(b_kept.number(&spots), Ok(()));
+            assert_eq!(groups(&spots, &a_kept, &b_kept), Ok(found));
+        }
+        assert!(conflicts > 1_000);
     }
 
     #[test]

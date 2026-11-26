@@ -218,6 +218,27 @@ impl Spots {
         self.index.contains_key(piece)
     }
 
+    /// The number a type has here, so that its name is looked up only once.
+    pub(crate) fn type_number(&self, type_name: &str) -> Option<usize> {
+        self.types.get(type_name).copied()
+    }
+
+    /// The number a node or edge has here.
+    pub(crate) fn piece_number(&self, piece: &Piece) -> Option<usize> {
+        self.index.get(piece).copied()
+    }
+
+    /// By their numbers: the pieces listed against piece `p` of type `a` for a
+    /// robot of type `b`. The piece itself, which conflicts too, is not among them.
+    pub(crate) fn listed_against(
+        &self,
+        a: usize,
+        p: usize,
+        b: usize,
+    ) -> impl Iterator<Item = usize> {
+        self.listed.get(&(a, p, b)).into_iter().flatten().copied()
+    }
+
     fn add_piece(&mut self, piece: Piece) -> Result<(), SetupError> {
         if self
             .index
