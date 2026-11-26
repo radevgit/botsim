@@ -276,6 +276,12 @@ impl OrderGraph {
         self.robots.get(robot).map(|p| p.released)
     }
 
+    /// How far the robot is: the node it has reached and the last one released to
+    /// it; `None` for an unknown robot.
+    pub(crate) fn position(&self, robot: usize) -> Option<(usize, usize)> {
+        self.robots.get(robot).map(|p| (p.reached, p.released))
+    }
+
     /// Does the robot stand on the last node of its route? `false` for an unknown
     /// robot.
     pub(crate) fn at_end(&self, robot: usize) -> bool {
@@ -420,8 +426,9 @@ impl OrderGraph {
     }
 
     /// Remove the orders whose first pass is over: the robot has left the piece, so
-    /// they make nobody wait any more.
-    pub(crate) fn remove_passed(&mut self) {
+    /// they make nobody wait any more. `true` if there was one to remove.
+    pub(crate) fn remove_passed(&mut self) -> bool {
+        let before = self.waiters.len();
         let robots = &self.robots;
         let waiters = &mut self.waiters;
         // an order is filed under the arrival that ends its first pass
@@ -437,6 +444,7 @@ impl OrderGraph {
             }
             stays
         });
+        self.waiters.len() != before
     }
 
     /// The pieces of the robot that wait for a pass that is never over, because the

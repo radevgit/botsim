@@ -19,6 +19,10 @@
 //! release query takes more when it can. The order then guarantees no collision,
 //! but not that robots waiting at the ends of their parts will all get on.
 //!
+//! **A failed attempt is not made again** while nothing has changed that it
+//! depends on, to take more of a route or to give a robot its next node: it would
+//! fail the same way.
+//!
 //! A **changed route** ([`Traffic::change`]) keeps what is released. The rest of
 //! the old route is removed and the rest of the new one is added in the same way
 //! (D4). If none of it can be taken, the robot's route ends at its last released
@@ -185,6 +189,19 @@ pub struct Traffic {
     look_ahead: Option<usize>,
     /// Experiment (D3 "B"): are the robots on and behind a ring asked to re-route?
     ring_repair: bool,
+    /// Goes up whenever something changes that an attempt to take more of a route,
+    /// or to give a robot its next node, depends on: the order graph, the routes
+    /// taken and wanted, the look ahead. Also when a robot's `refused_by` may
+    /// change other than by its own attempt.
+    changes: u64,
+    /// By robot: what `changes` was at its last attempt to take more of its route
+    /// that failed.
+    failed_take: BTreeMap<usize, u64>,
+    /// The same for its next node.
+    failed_give: BTreeMap<usize, u64>,
+    /// How many attempts would have been skipped; tests make them all the same.
+    #[cfg(test)]
+    skipped: usize,
 }
 
 /// Why a route cannot be placed.
@@ -217,7 +234,38 @@ impl Traffic {
             wanted: BTreeMap::new(),
             look_ahead: None,
             ring_repair: false,
+            changes: 0,
+            failed_take: BTreeMap::new(),
+            failed_give: BTreeMap::new(),
+            #[cfg(test)]
+            skipped: 0,
         }
+    }
+
+    /// Note a change: failed attempts are worth making again.
+    fn changed(&mut self) {
+        self.changes = self.changes.wrapping_add(1);
+    }
+
+    /// In tests an attempt that would be skipped is made all the same: it must
+    /// fail again and change nothing.
+    #[cfg(test)]
+    fn check_skipped(&mut self, attempt: impl FnOnce(&mut Traffic) -> bool) {
+        let state = |t: &Traffic| {
+            let routes = (&t.routes, &t.wanted, &t.refused, &t.refused_by);
+            format!("{:?} {routes:?}", t.graph)
+        };
+        let (before, changes) = (state(self), self.changes);
+        assert!(!attempt(self), "a skipped attempt succeeds");
+        assert_eq!(state(self), before, "a skipped attempt changes something");
+        self.changes = changes;
+        self.skipped += 1;
+    }
+
+    /// How many attempts the checks have seen that would have been skipped.
+    #[cfg(test)]
+    pub(crate) fn skipped(&self) -> usize {
+        self.skipped
     }
 
     /// **Experiment (D3 "B", after IJRR), off unless called.** From now on every
@@ -338,6 +386,7 @@ impl Traffic {
     /// later ([`give_next`](Traffic::give_next)) are not checked.
     pub fn look_ahead(&mut self, steps: usize) {
         self.look_ahead = Some(steps);
+        self.changed();
     }
 
     pub fn graph(&self) -> &OrderGraph {
@@ -358,12 +407,30 @@ impl Traffic {
     /// Take more of the route the robot wants, if that can be done now: as by
     /// [`change`](Traffic::change), if it gets further than what is taken.
     /// Otherwise nothing changes but what [`refused_by`](Traffic::refused_by) says.
+    /// After a failure it tries again only once something has changed.
     fn take_more(&mut self, robot: usize) {
-        let Some(whole) = self.wanted.get(&robot).cloned() else {
+        if self.failed_take.get(&robot) == Some(&self.changes) {
+            #[cfg(test)]
+            self.check_skipped(|t| t.try_take_more(robot));
             return;
+        }
+        let before = self.changes;
+        if self.try_take_more(robot) {
+            self.changed();
+        } else {
+            // what the attempt did has been undone
+            self.changes = before;
+            self.failed_take.insert(robot, before);
+        }
+    }
+
+    /// The attempt of [`take_more`](Traffic::take_more); `true` if it got further.
+    fn try_take_more(&mut self, robot: usize) -> bool {
+        let Some(whole) = self.wanted.get(&robot).cloned() else {
+            return false;
         };
         let Some(old) = self.routes.get(robot).cloned() else {
-            return;
+            return false;
         };
         let end = old.pieces().len() / 2;
         let graph = self.graph.clone();
@@ -381,6 +448,7 @@ impl Traffic {
             };
             self.wanted.insert(robot, whole);
         }
+        further
     }
 
     /// See [`OrderGraph::progress`].
@@ -390,7 +458,13 @@ impl Traffic {
         reached: usize,
         released: usize,
     ) -> Result<(), BadProgress> {
-        self.graph.progress(robot, reached, released)
+        let before = self.graph.position(robot);
+        let taken = self.graph.progress(robot, reached, released);
+        // most reports say what the one before said
+        if self.graph.position(robot) != before {
+            self.changed();
+        }
+        taken
     }
 
     /// The start of a cycle: take the progress of the robots, then remove what has
@@ -399,9 +473,11 @@ impl Traffic {
     pub fn cycle_start(&mut self, reports: &[Report]) -> Vec<BadProgress> {
         let bad = reports
             .iter()
-            .filter_map(|r| self.graph.progress(r.robot, r.reached, r.released).err())
+            .filter_map(|r| self.progress(r.robot, r.reached, r.released).err())
             .collect();
-        self.graph.remove_passed();
+        if self.graph.remove_passed() {
+            self.changed();
+        }
         bad
     }
 
@@ -419,6 +495,7 @@ impl Traffic {
             route.cut(released);
         }
         self.wanted.remove(&robot);
+        self.changed();
         self.graph.cut(robot)
     }
 
@@ -445,6 +522,7 @@ impl Traffic {
             route.cut(node);
         }
         self.wanted.remove(&robot);
+        self.changed();
         Ok(true)
     }
 
@@ -470,6 +548,7 @@ impl Traffic {
             return Err(Refused::NoOrder(a, b));
         }
         self.graph = turned(&self.graph, &old)?;
+        self.changed();
         Ok(())
     }
 
@@ -479,8 +558,25 @@ impl Traffic {
     /// together, under the rules of [`reverse`](Traffic::reverse), and stay turned
     /// only if the robot then gets the node. `true`: the node is released to it.
     /// `false`: it has to wait, its route has no further node, or there is no such
-    /// robot; nothing has changed.
+    /// robot; nothing has changed. After that it tries again only once something
+    /// has changed.
     pub fn give_next(&mut self, robot: usize) -> bool {
+        if self.failed_give.get(&robot) == Some(&self.changes) {
+            #[cfg(test)]
+            self.check_skipped(|t| t.try_give_next(robot));
+            return false;
+        }
+        let given = self.try_give_next(robot);
+        if given {
+            self.changed();
+        } else {
+            self.failed_give.insert(robot, self.changes);
+        }
+        given
+    }
+
+    /// The attempt of [`give_next`](Traffic::give_next).
+    fn try_give_next(&mut self, robot: usize) -> bool {
         let Some(released) = self.graph.released(robot) else {
             return false;
         };
@@ -659,6 +755,7 @@ impl Traffic {
     /// already cannot be held back; the answer names them. Only a robot whose type
     /// or first node is unknown is not kept.
     pub fn add(&mut self, route: Route) -> Result<usize, NotAdded> {
+        self.changed();
         let route = self.numbered(route);
         let mut graph = self.graph.clone();
         let new = graph.add_robot(&route);
@@ -827,6 +924,9 @@ impl Traffic {
         if old.type_name() != route.type_name() || old.pieces().last() != route.pieces().first() {
             return Err(NotAdded::OtherRoute);
         }
+        // a robot that is refused above can be offered its order again and again
+        // without anything changing
+        self.changed();
         let route = self.numbered(route);
         match self.place_far(graph, robot, route.clone()) {
             Ok((graph, taken, by)) => {

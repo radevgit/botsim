@@ -12,7 +12,7 @@ use crate::graph::{Before, Pass};
 use crate::groups::{Route, groups_where};
 use crate::spots::{Piece, Spots};
 use crate::testing::{SMALL, edge_pair, empty_map, lif, route};
-use crate::traffic::{Cancel, NotAdded, Traffic};
+use crate::traffic::{Cancel, NotAdded, Report, Traffic};
 
 /// Cases of the test that always runs, and of the long one.
 const CASES: u64 = 5_000;
@@ -691,6 +691,99 @@ fn changing_a_route_agrees_with_brute_force() {
 #[test]
 fn a_new_order_agrees_with_brute_force() {
     compare_known(CASES, new_order_case);
+}
+
+/// Robots that ask for releases again and again, between whatever else happens to
+/// them; returns how many attempts the module would have skipped. In tests it makes
+/// those all the same and panics if one succeeds or changes something.
+fn releases_between_changes(seed: u64) -> usize {
+    let mut random = Random(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+    let nodes: Vec<String> = (0..6 + random.below(7)).map(|i| format!("N{i}")).collect();
+    let spots = random_spots(&mut random, &nodes);
+    let mut traffic = Traffic::new(spots);
+    if seed.is_multiple_of(3) {
+        traffic.look_ahead(1 + random.below(3));
+    }
+    if seed.is_multiple_of(2) {
+        traffic.repair_rings();
+    }
+    let mut fleet = Fleet::default();
+    // the route each robot was offered last; the module has a first part of it
+    let mut offered: Vec<Route> = Vec::new();
+    for _ in 0..200 {
+        let robots = fleet.routes.len();
+        if robots == 0 || (robots < 5 && random.below(20) == 0) {
+            let route = random_route(&mut random, &nodes, &fleet);
+            match traffic.add(route.clone()) {
+                Ok(_) | Err(NotAdded::Standing { .. }) => {}
+                Err(other) => panic!("seed {seed}: {other}"),
+            }
+            fleet.routes.push(taken(&traffic, robots, route.clone()));
+            fleet.reached.push(0);
+            fleet.released.push(0);
+            offered.push(route);
+        } else {
+            let r = random.below(robots);
+            match random.below(20) {
+                0 => {
+                    let route = random_change(&mut random, &nodes, &fleet, r);
+                    match traffic.change(r, route.clone()) {
+                        Ok(()) | Err(NotAdded::Reroute(_)) => offered[r] = route,
+                        Err(other) => panic!("seed {seed}: {other}"),
+                    }
+                }
+                1 => {
+                    assert!(traffic.cut_short(r));
+                    offered[r] = taken(&traffic, r, offered[r].clone());
+                }
+                2 => {
+                    fleet.cancel(&mut random, &mut traffic, r);
+                    offered[r] = fleet.routes[r].clone();
+                }
+                3 | 4 if fleet.reached[r] == fleet.last(r) => {
+                    let route = random_next(&mut random, &nodes, &fleet, r);
+                    match traffic.new_order(r, route.clone()) {
+                        Ok(()) | Err(NotAdded::Reroute(_)) => {
+                            offered[r] = route;
+                            fleet.reached[r] = 0;
+                        }
+                        Err(other) => panic!("seed {seed}: {other}"),
+                    }
+                }
+                // one that goes on, or only reports what it reported before
+                5..=8 => {
+                    if fleet.reached[r] < fleet.released[r] && random.below(2) == 0 {
+                        fleet.reached[r] += 1;
+                    }
+                    let report = Report {
+                        robot: r,
+                        reached: fleet.reached[r],
+                        released: fleet.released[r],
+                    };
+                    assert_eq!(traffic.cycle_start(&[report]), [], "seed {seed}");
+                }
+                9 => {
+                    traffic.give_next(r);
+                }
+                _ => {
+                    let limit = fleet.released[r] + random.below(3);
+                    assert!(traffic.release(r, limit).is_some());
+                }
+            }
+        }
+        // as the module has it now
+        for (r, route) in offered.iter().enumerate() {
+            fleet.released[r] = traffic.graph().released(r).expect("a robot");
+            fleet.routes[r] = taken(&traffic, r, route.clone());
+        }
+    }
+    traffic.skipped()
+}
+
+#[test]
+fn a_skipped_attempt_would_fail_again() {
+    let skipped: usize = (0..CASES / 5).map(releases_between_changes).sum();
+    assert!(skipped > 20_000, "only {skipped} to check");
 }
 
 /// `cargo test -p botsim-traffic --release many_cases -- --ignored --nocapture`
