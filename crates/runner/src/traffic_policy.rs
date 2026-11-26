@@ -15,22 +15,15 @@
 //! route and are skipped.
 //!
 //! **Routes.** The module takes as much of a route as it can order and, in every
-//! release, more when it can. While it can take nothing, it asks for another way.
-//! The dispatcher can only be told nodes to keep clear of, so an edge to avoid is
+//! release, more when it can. While it can take nothing, it asks for another way,
+//! as it does for the robots on and behind a ring of waiting robots. The
+//! dispatcher can only be told nodes to keep clear of, so an edge to avoid is
 //! given as the node it ends at.
 //!
-//! **Who holds a robot back** is what the module says: who is ordered before it at
-//! its next node, or, at the end of what is taken of its route, who keeps the rest
-//! from being taken. Of several, the one with the lowest module number is named.
-//!
-//! **Experiment (D3 "A").** With the environment variable
-//! `BOTSIM_TRAFFIC_LOOK_AHEAD` set to a number of node steps, the module looks
-//! that far ahead before it takes a part of a route ([`Traffic::look_ahead`]).
-//!
-//! **Experiment (D3 "B").** With `BOTSIM_TRAFFIC_RING_REPAIR=1` the module asks
-//! the robots on and behind a ring of waiting robots for another way
-//! ([`Traffic::repair_rings`]), and a robot at the end of the part taken of its
-//! route is held back by who holds its next node, where somebody does.
+//! **Who holds a robot back** is what the module says. At the end of what is taken
+//! of its route, it is who holds its next node, where somebody does. Else it is
+//! who is ordered before it at its next node, or who keeps the rest from being
+//! taken; of several, the one with the lowest module number is named.
 //!
 //! Built so far: plain job runs. Not yet: routes that are given up (cancel), RELEASE
 //! zones (no request is answered), the dispatcher's holder queries and the
@@ -62,8 +55,6 @@ pub struct TrafficAdapter {
     types: Vec<String>,
     /// By controller number; `None` for a robot the module does not have.
     robots: Vec<Option<Robot>>,
-    /// Experiment (D3 "B"): are rings repaired?
-    ring_repair: bool,
 }
 
 /// What the adapter knows of a robot of the module.
@@ -109,38 +100,14 @@ impl TrafficAdapter {
         let map = botsim_sweep::compute(&lif, &types, &options)
             .ok_or("no conflict map: the layout cannot be turned into a graph")?;
         let spots = Spots::new(&lif, &map).map_err(|e| e.to_string())?;
-        let mut traffic = Traffic::new(spots);
-        if let Some(value) = std::env::var_os("BOTSIM_TRAFFIC_LOOK_AHEAD") {
-            let steps = value.to_str().and_then(|v| v.parse().ok());
-            let steps = steps.ok_or_else(|| {
-                format!("BOTSIM_TRAFFIC_LOOK_AHEAD {value:?} is not a number of steps")
-            })?;
-            traffic.look_ahead(steps);
-        }
-        let ring_repair = match std::env::var_os("BOTSIM_TRAFFIC_RING_REPAIR") {
-            None => false,
-            Some(value) => match value.to_str() {
-                Some("0") => false,
-                Some("1") => true,
-                _ => {
-                    return Err(format!(
-                        "BOTSIM_TRAFFIC_RING_REPAIR {value:?} is not 0 or 1"
-                    ));
-                }
-            },
-        };
-        if ring_repair {
-            traffic.repair_rings();
-        }
         Ok(TrafficAdapter {
-            traffic,
+            traffic: Traffic::new(spots),
             nodes: Vec::new(),
             edges: Vec::new(),
             node_by_id: BTreeMap::new(),
             edge_by_id: BTreeMap::new(),
             types: Vec::new(),
             robots: Vec::new(),
-            ring_repair,
         })
     }
 
@@ -332,10 +299,7 @@ impl TrafficPolicy for TrafficAdapter {
         } else {
             held_back
         };
-        let holder = self
-            .ring_repair
-            .then(|| self.traffic.next_holder(known.number))
-            .flatten();
+        let holder = self.traffic.next_holder(known.number);
         let other = holder.or_else(|| others.into_iter().find(|&o| o != known.number))?;
         self.robots
             .iter()

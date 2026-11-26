@@ -19,6 +19,12 @@
 //! release query takes more when it can. The order then guarantees no collision,
 //! but not that robots waiting at the ends of their parts will all get on.
 //!
+//! **Rings** (D3, after IJRR). A robot that stands at the end of the part taken
+//! and wants to go on waits for the holder of its next node, or for those who keep
+//! the rest from being taken. A robot on a ring of such waits, or behind one, is
+//! asked to keep clear of its own next node
+//! ([`Traffic::waiting_on_rings`]).
+//!
 //! **A failed attempt is not made again** while nothing has changed that it
 //! depends on, to take more of a route or to give a robot its next node: it would
 //! fail the same way.
@@ -184,15 +190,10 @@ pub struct Traffic {
     /// The whole route of each robot of which only a part, or nothing beyond what
     /// it holds, is taken.
     wanted: BTreeMap<usize, Route>,
-    /// Experiment (D3 "A"): how many steps of each wanted route beyond what is
-    /// taken must be orderable too; `None`: not looked at.
-    look_ahead: Option<usize>,
-    /// Experiment (D3 "B"): are the robots on and behind a ring asked to re-route?
-    ring_repair: bool,
     /// Goes up whenever something changes that an attempt to take more of a route,
-    /// or to give a robot its next node, depends on: the order graph, the routes
-    /// taken and wanted, the look ahead. Also when a robot's `refused_by` may
-    /// change other than by its own attempt.
+    /// or to give a robot its next node, depends on: the order graph and the routes
+    /// taken and wanted. Also when a robot's `refused_by` may change other than by
+    /// its own attempt.
     changes: u64,
     /// By robot: what `changes` was at its last attempt to take more of its route
     /// that failed.
@@ -232,8 +233,6 @@ impl Traffic {
             refused: BTreeMap::new(),
             refused_by: BTreeMap::new(),
             wanted: BTreeMap::new(),
-            look_ahead: None,
-            ring_repair: false,
             changes: 0,
             failed_take: BTreeMap::new(),
             failed_give: BTreeMap::new(),
@@ -266,14 +265,6 @@ impl Traffic {
     #[cfg(test)]
     pub(crate) fn skipped(&self) -> usize {
         self.skipped
-    }
-
-    /// **Experiment (D3 "B", after IJRR), off unless called.** From now on every
-    /// robot of [`waiting_on_rings`](Traffic::waiting_on_rings) is told to
-    /// re-route ([`reroute_needed`](Traffic::reroute_needed)), keeping clear of the
-    /// next node of the route it wants, and of nothing else.
-    pub fn repair_rings(&mut self) {
-        self.ring_repair = true;
     }
 
     /// The robot that holds the next node of the route the robot wants, while the
@@ -358,35 +349,18 @@ impl Traffic {
             .collect()
     }
 
-    /// The node a ring repair asks the robot to keep clear of: the next one of the
-    /// route it wants, while it is on a ring of waiting robots or behind one; `None`
-    /// otherwise, and if the repair is off.
+    /// The node the robot shall keep clear of so that a ring opens (D3): the next
+    /// one of the route it wants, while it is on a ring of waiting robots or behind
+    /// one; `None` otherwise.
     fn ring_avoid(&self, robot: usize) -> Option<Piece> {
         // the query is only needed for a robot that stands waiting
-        if !self.ring_repair || !self.stands_waiting(robot) {
+        if !self.stands_waiting(robot) {
             return None;
         }
         if !self.waiting_on_rings().contains_key(&robot) {
             return None;
         }
         self.next_node(robot).cloned()
-    }
-
-    /// **Experiment (D3 "A", after SCALE), off unless called.** From now on a part
-    /// of a route is taken only if, on a copy of the order with that part, every
-    /// robot's next `steps` node steps beyond what is taken of its route can be
-    /// ordered too; if what keeps them from it includes the part, a shorter part is
-    /// tried. A window that ends where its route ends stays there; one that ends
-    /// before is taken to be left again. The windows are placed one robot after
-    /// another, so a part can be refused though some order of them exists. The part
-    /// is included in a cycle of waiting that goes through the robot beyond what it
-    /// holds, and in a window that cannot be placed if it is the robot's own, or one
-    /// that can be placed without the part; what goes wrong among others only is
-    /// not looked into. Nothing of the copy is kept, and the orders turned round
-    /// later ([`give_next`](Traffic::give_next)) are not checked.
-    pub fn look_ahead(&mut self, steps: usize) {
-        self.look_ahead = Some(steps);
-        self.changed();
     }
 
     pub fn graph(&self) -> &OrderGraph {
@@ -642,9 +616,9 @@ impl Traffic {
     /// route of it is taken; and while a piece of its route waits for a robot whose
     /// route ends there. If it has no other way, it goes on waiting.
     ///
-    /// With [`repair_rings`](Traffic::repair_rings), also while it is on a ring of
-    /// waiting robots or behind one; it is then told to keep clear of the next node
-    /// of the route it wants only, whatever else there is.
+    /// Also while it is on a ring of waiting robots or behind one
+    /// ([`waiting_on_rings`](Traffic::waiting_on_rings)); it is then told to keep
+    /// clear of the next node of the route it wants only, whatever else there is.
     pub fn reroute_needed(&self, robot: usize) -> Option<Reroute> {
         let route = self.routes.get(robot)?;
         if let Some(node) = self.ring_avoid(robot) {
@@ -974,29 +948,15 @@ impl Traffic {
             part.cut(end);
             let mut shorter = graph.clone();
             shorter.lengthen(robot, end);
-            // the end of a shorter part to try, and what is to blame
-            let (next, reason, blamed) = match self.place(shorter, robot, &part, &self.routes) {
-                Ok(placed) => {
-                    // a part that gets the robot no further needs no look ahead
-                    let ahead = (end > held)
-                        .then(|| self.look_ahead_fails(&placed, robot, &part, &route))
-                        .flatten();
-                    let Some(blamed) = ahead else {
-                        return Ok((placed, part, by.into_iter().collect()));
-                    };
-                    (end.checked_sub(1), reroute(&route, []), blamed)
-                }
-                // the node before the first piece that is to blame; each time an
-                // earlier one, as that piece is on the part tried
-                Err(blocked) => (
-                    blocked.first.map(|piece| piece.saturating_sub(1) / 2),
-                    blocked.why,
-                    blocked.by,
-                ),
+            let blocked = match self.place(shorter, robot, &part) {
+                Ok(placed) => return Ok((placed, part, by.into_iter().collect())),
+                Err(blocked) => blocked,
             };
-            why.get_or_insert(reason);
-            by = blamed;
-            match next {
+            why.get_or_insert(blocked.why);
+            by = blocked.by;
+            // the node before the first piece that is to blame; each time an
+            // earlier one, as that piece is on the part tried
+            match blocked.first.map(|piece| piece.saturating_sub(1) / 2) {
                 Some(node) if node > held => end = node,
                 _ => break,
             }
@@ -1009,113 +969,10 @@ impl Traffic {
         })
     }
 
-    /// The look ahead ([`look_ahead`](Traffic::look_ahead)) at taking `part` of
-    /// `whole`, the route of `robot`, with the orders in `graph`: `None` if it is
-    /// off or nothing it finds includes the part, else the robots to blame.
-    fn look_ahead_fails(
-        &self,
-        graph: &OrderGraph,
-        robot: usize,
-        part: &Route,
-        whole: &Route,
-    ) -> Option<BTreeSet<usize>> {
-        let steps = self.look_ahead?;
-        let mut routes = self.routes.clone();
-        match routes.get_mut(robot) {
-            Some(route) => *route = part.clone(),
-            None => routes.push(part.clone()), // a robot being added
-        }
-        // each robot with more to go
-        let mut windows = Vec::new();
-        for (i, taken) in routes.iter().enumerate() {
-            let wanted = if i == robot {
-                Some(whole)
-            } else {
-                self.wanted.get(&i)
-            };
-            let Some(wanted) = wanted else { continue };
-            let (taken_end, wanted_end) = (taken.pieces().len() / 2, wanted.pieces().len() / 2);
-            if wanted_end <= taken_end {
-                continue;
-            }
-            let end = wanted_end.min(taken_end.saturating_add(steps));
-            let mut window = wanted.clone();
-            window.cut(end);
-            // one node more in the graph, without any conflict, has the end left
-            windows.push(Window {
-                robot: i,
-                route: window,
-                last: if end == wanted_end { end } else { end + 1 },
-            });
-        }
-        let held = graph.released(robot).unwrap_or(0);
-        let copy = lengthened(graph.clone(), &windows);
-        let in_cycle = copy.has_cycle() && copy.on_cycle(robot, held);
-        let mut by = BTreeSet::new();
-        if in_cycle {
-            by.extend(windows.iter().map(|w| w.robot));
-        }
-        let mut failed = self.unplaceable(copy, routes.clone(), &windows);
-        // another's window that cannot be placed without the part either does not
-        // include it
-        if failed.keys().any(|&i| i != robot) {
-            let mut without = graph.clone();
-            without.cut(robot);
-            if let Some(route) = routes.get_mut(robot) {
-                route.cut(held);
-            }
-            windows.retain(|w| w.robot != robot);
-            let anyway = self.unplaceable(lengthened(without, &windows), routes, &windows);
-            failed.retain(|&i, _| i == robot || !anyway.contains_key(&i));
-        }
-        if !in_cycle && failed.is_empty() {
-            return None;
-        }
-        for (i, blocking) in failed {
-            by.insert(i);
-            by.extend(blocking);
-        }
-        by.remove(&robot);
-        Some(by)
-    }
-
-    /// Place these windows one after another on top of `graph` and `routes`,
-    /// leaving out those that cannot be; returns the robots of these, each with who
-    /// keeps its window from being placed.
-    fn unplaceable(
-        &self,
-        mut graph: OrderGraph,
-        mut routes: Vec<Route>,
-        windows: &[Window],
-    ) -> BTreeMap<usize, BTreeSet<usize>> {
-        let mut failed = BTreeMap::new();
-        for window in windows {
-            match self.place(graph.clone(), window.robot, &window.route, &routes) {
-                Ok(placed) => {
-                    graph = placed;
-                    if let Some(route) = routes.get_mut(window.robot) {
-                        *route = window.route.clone();
-                    }
-                }
-                Err(blocked) => {
-                    failed.insert(window.robot, blocked.by);
-                }
-            }
-        }
-        failed
-    }
-
     /// Order the passes of robot `new`, with this route, that have no order yet
-    /// against those of the other robots, whose routes are `routes` by number.
-    /// `graph` knows the route's length and how far the robot is; the result is
-    /// that graph with the orders.
-    fn place(
-        &self,
-        graph: OrderGraph,
-        new: usize,
-        route: &Route,
-        routes: &[Route],
-    ) -> Result<OrderGraph, Blocked> {
+    /// against those of the other robots. `graph` knows the route's length and how
+    /// far the robot is; the result is that graph with the orders.
+    fn place(&self, graph: OrderGraph, new: usize, route: &Route) -> Result<OrderGraph, Blocked> {
         // one look-up table of the new route for all others; its names are checked
         // also when there is no other robot
         let mut against = Against::new(&self.spots, route)?;
@@ -1130,7 +987,7 @@ impl Traffic {
         let mut refused = false;
         let mut blocked = BTreeSet::new();
         let mut by = BTreeSet::new();
-        for (other, theirs) in routes.iter().enumerate() {
+        for (other, theirs) in self.routes.iter().enumerate() {
             if other == new {
                 continue;
             }
@@ -1224,23 +1081,6 @@ impl Traffic {
             ahead.extend(new_first);
         }
     }
-}
-
-/// What the look ahead sees of one robot's route.
-struct Window {
-    robot: usize,
-    /// Its wanted route as far as it is looked at.
-    route: Route,
-    /// The last node the robot's route has in the graph for it.
-    last: usize,
-}
-
-/// The graph with the routes as long as the windows need them.
-fn lengthened(mut graph: OrderGraph, windows: &[Window]) -> OrderGraph {
-    for window in windows {
-        graph.lengthen(window.robot, window.last);
-    }
-    graph
 }
 
 /// The graph with these orders turned round, if each turned one is allowed and
@@ -2280,78 +2120,6 @@ mod tests {
         assert_eq!(t.route_end(1), Some(0));
     }
 
-    #[test]
-    fn looking_ahead_keeps_a_part_further_from_a_robot_in_the_way() {
-        // b stands on T and stays, the last node of a's way
-        let (a, b) = (["P", "Q", "R", "S", "T"], ["T"]);
-        let end_with = |steps: Option<usize>| {
-            let mut t = traffic(&[&a, &b], &empty_map());
-            if let Some(steps) = steps {
-                t.look_ahead(steps);
-            }
-            assert_eq!(t.add(route(&b)), Ok(0));
-            let added = t.add(route(&a)).map_err(|_| ());
-            (added, t.route_end(1))
-        };
-        // without it a is taken up to S, next to b
-        assert_eq!(end_with(None), (Ok(1), Some(3)));
-        // the next step from there would have to pass b
-        assert_eq!(end_with(Some(1)), (Ok(1), Some(2)));
-        assert_eq!(end_with(Some(2)), (Ok(1), Some(1)));
-        // nothing beyond P: refused, and a stands there
-        assert_eq!(end_with(Some(3)), (Err(()), Some(0)));
-    }
-
-    #[test]
-    fn looking_ahead_lets_a_part_further_once_the_way_ahead_is_free() {
-        let (a, b, away) = (["P", "Q", "R", "S", "T"], ["T"], ["T", "U"]);
-        let mut t = traffic(&[&a, &b, &away], &empty_map());
-        t.look_ahead(2);
-        assert_eq!(t.add(route(&b)), Ok(0));
-        assert_eq!(t.add(route(&a)), Ok(1));
-        assert_eq!(t.release(1, 4), released(1, None));
-        assert_eq!(t.refused_by(1), [0]);
-        assert_eq!(t.new_order(0, route(&away)), Ok(()));
-        assert_eq!(t.release(1, 4), released(3, None));
-        assert_eq!(t.route_end(1), Some(4));
-    }
-
-    #[test]
-    fn looking_ahead_leaves_what_goes_wrong_among_others_aside() {
-        // b wants to end on X, where c stands: b's window cannot be ordered,
-        // whatever a takes
-        let (a, b, c) = (["P", "Q", "R"], ["U", "V", "X"], ["X"]);
-        let mut t = traffic(&[&a, &b, &c], &empty_map());
-        assert_eq!(t.add(route(&c)), Ok(0));
-        assert_eq!(t.add(route(&b)), Ok(1));
-        t.look_ahead(2);
-        assert_eq!(t.add(route(&a)), Ok(2));
-        assert_eq!(t.route_end(2), Some(2));
-        assert_eq!(t.refused_by(2), NOBODY);
-    }
-
-    #[test]
-    fn looking_ahead_refuses_a_part_that_blocks_another_window() {
-        // b wants to end on Q, where c stands until it has driven to Z
-        let (a, b, c) = (["P", "Q"], ["S", "Q"], ["Q", "Z"]);
-        let add_a = |steps: Option<usize>| {
-            let mut t = traffic(&[&a, &b, &c], &empty_map());
-            assert_eq!(t.add(route(&["Q"])), Ok(0));
-            assert!(t.add(route(&b)).is_err());
-            assert_eq!(t.new_order(0, route(&c)), Ok(()));
-            assert_eq!(t.release(0, 1), released(1, None));
-            assert_eq!(t.progress(0, 1, 1), Ok(()));
-            if let Some(steps) = steps {
-                t.look_ahead(steps);
-            }
-            let added = t.add(route(&a)).map_err(|_| ());
-            (added, t.route_end(2), t.refused_by(2))
-        };
-        assert_eq!(add_a(None), (Ok(2), Some(1), vec![]));
-        // a would end on Q too
-        assert_eq!(add_a(Some(2)), (Err(()), Some(0), vec![1]));
-    }
-
     /// Robots standing on the first node of each of these routes, which then all
     /// ask for their route; none of them can take any of it.
     fn all_standing(routes: &[&[&str]], map: &ConflictMap) -> Traffic {
@@ -2374,17 +2142,13 @@ mod tests {
             &["C", "A", "V"],
             &["D", "A", "W"],
         ];
-        let mut t = all_standing(&routes, &empty_map());
+        let t = all_standing(&routes, &empty_map());
         assert_eq!(t.next_holder(3), Some(0));
         let ring = BTreeSet::from([0, 1, 2]);
         let all: BTreeMap<_, _> = (0..4).map(|robot| (robot, ring.clone())).collect();
         assert_eq!(t.waiting_on_rings(), all);
-        // off: only what keeps the route from being taken
-        let avoid = |t: &Traffic, robot| t.reroute_needed(robot).map(|r| r.avoid);
-        assert_eq!(avoid(&t, 0), Some(vec![node("B")]));
-        assert_eq!(avoid(&t, 3), Some(vec![node("A")]));
-        t.repair_rings();
         // on the ring and behind it: the next node, not the ring's others
+        let avoid = |t: &Traffic, robot| t.reroute_needed(robot).map(|r| r.avoid);
         assert_eq!(avoid(&t, 0), Some(vec![node("B")]));
         assert_eq!(avoid(&t, 3), Some(vec![node("A")]));
     }
@@ -2412,11 +2176,9 @@ mod tests {
             t.waiting_on_rings(),
             BTreeMap::from([(0, both.clone()), (1, both)])
         );
-        // off, what keeps the route from being taken is more than the next node
-        let asked = |t: &mut Traffic| t.release(0, 2).and_then(|r| r.reroute);
-        assert_ne!(asked(&mut t).map(|r| r.avoid), Some(vec![node("M")]));
-        t.repair_rings();
-        assert_eq!(asked(&mut t).map(|r| r.avoid), Some(vec![node("M")]));
+        // the next node only, not all that keeps the route from being taken
+        let asked = t.release(0, 2).and_then(|r| r.reroute);
+        assert_eq!(asked.map(|r| r.avoid), Some(vec![node("M")]));
     }
 
     #[test]

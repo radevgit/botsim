@@ -701,12 +701,6 @@ fn releases_between_changes(seed: u64) -> usize {
     let nodes: Vec<String> = (0..6 + random.below(7)).map(|i| format!("N{i}")).collect();
     let spots = random_spots(&mut random, &nodes);
     let mut traffic = Traffic::new(spots);
-    if seed.is_multiple_of(3) {
-        traffic.look_ahead(1 + random.below(3));
-    }
-    if seed.is_multiple_of(2) {
-        traffic.repair_rings();
-    }
     let mut fleet = Fleet::default();
     // the route each robot was offered last; the module has a first part of it
     let mut offered: Vec<Route> = Vec::new();
