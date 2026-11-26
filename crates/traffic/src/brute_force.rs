@@ -237,11 +237,11 @@ impl Fleet {
             let r = at_end[random.below(at_end.len())];
             let route = random_next(random, nodes, self, r);
             match traffic.new_order(r, route.clone()) {
-                Ok(()) => {
-                    self.restart(r, route);
+                // where nothing is taken, it is on the new order all the same
+                Ok(()) | Err(NotAdded::Reroute(_)) => {
+                    self.restart(r, taken(traffic, r, route));
                     self.new_orders += 1;
                 }
-                Err(NotAdded::Reroute(_)) => {} // not taken: nothing changes
                 Err(other) => panic!("{other}"),
             }
             assert_eq!(traffic.graph().released(r), Some(self.released[r]));
@@ -252,9 +252,9 @@ impl Fleet {
             0 => {
                 let route = random_change(random, nodes, self, r);
                 match traffic.change(r, route.clone()) {
-                    Ok(()) => self.routes[r] = route,
-                    // not taken: only what is released stays
-                    Err(NotAdded::Reroute(_)) => self.routes[r].cut(self.released[r]),
+                    Ok(()) | Err(NotAdded::Reroute(_)) => {
+                        self.routes[r] = taken(traffic, r, route);
+                    }
                     Err(other) => panic!("{other}"),
                 }
             }
@@ -266,6 +266,12 @@ impl Fleet {
         }
         assert_eq!(traffic.graph().released(r), Some(self.released[r]));
     }
+}
+
+/// The part of `route` the module has taken for the robot.
+fn taken(traffic: &Traffic, robot: usize, mut route: Route) -> Route {
+    route.cut(traffic.route_end(robot).expect("a robot of the module"));
+    route
 }
 
 /// Can the events of all robots be put in a line that keeps their own sequence and
@@ -339,6 +345,8 @@ struct Seen {
     awaited_end: usize,
     /// Some robot had been given a new order before.
     after_a_new_order: usize,
+    /// Only a first part of the route was taken.
+    taken_partly: usize,
 }
 
 /// Random robots that have been added, have moved on and may have had their routes
@@ -360,14 +368,13 @@ fn random_state(seed: u64) -> State {
     for _ in 0..4 + random.below(20) {
         if fleet.routes.len() < 5 && random.below(3) == 0 {
             let route = random_route(&mut random, &nodes, &fleet);
-            let mut stays = route.clone();
-            match traffic.add(route) {
-                Ok(_) => {}
-                // not taken: it stands on its first node
-                Err(NotAdded::Standing { .. }) => stays.cut(0),
+            let new = fleet.routes.len();
+            match traffic.add(route.clone()) {
+                // where nothing is taken, it stands on its first node
+                Ok(_) | Err(NotAdded::Standing { .. }) => {}
                 Err(other) => panic!("{other}"),
             }
-            fleet.routes.push(stays);
+            fleet.routes.push(taken(&traffic, new, route));
             fleet.reached.push(0);
             fleet.released.push(0);
         } else {
@@ -412,6 +419,7 @@ fn random_fleet(seed: u64) -> State {
     if s.fleet.routes.is_empty() {
         let route = random_route(&mut s.random, &s.nodes, &s.fleet);
         assert_eq!(s.traffic.add(route.clone()), Ok(0), "seed {seed}");
+        assert_eq!(s.traffic.route_end(0), Some(route.pieces().len() / 2));
         s.fleet.routes.push(route);
         s.fleet.reached.push(0);
         s.fleet.released.push(0);
@@ -490,33 +498,23 @@ fn new_order_case(seed: u64, seen: &mut Seen) {
     judge(seed, s, robot, kept, place, seen);
 }
 
-/// `place` puts the route of `robot`, which the fleet has already, into the module:
-/// compare what it does with every choice there is. The orders in `kept` stay.
-fn judge(
-    seed: u64,
-    s: State,
-    robot: usize,
-    kept: BTreeSet<Before>,
-    place: impl FnOnce(&mut Traffic) -> Result<(), NotAdded>,
-    seen: &mut Seen,
-) {
-    let State {
-        spots,
-        mut traffic,
-        fleet,
-        ..
-    } = s;
-    let pass = |robot, piece| Pass { robot, piece };
-    let old: Vec<Before> = kept.iter().copied().collect();
+/// The choices there are for the route of one robot.
+struct Choices {
+    /// Per group the orders still to be chosen: with the robot waiting, and first.
+    groups: Vec<[Vec<Before>; 2]>,
+    /// Some group has conflicts with an order and conflicts without.
+    partly_ordered: bool,
+}
 
-    // per group the orders still to be chosen: with the robot waiting, and first
-    let mut choices: Vec<[Vec<Before>; 2]> = Vec::new();
+fn choices(spots: &Spots, fleet: &Fleet, robot: usize, kept: &BTreeSet<Before>) -> Choices {
+    let pass = |robot, piece| Pass { robot, piece };
+    let mut groups = Vec::new();
     let mut partly_ordered = false;
     for (other, theirs) in fleet.routes.iter().enumerate() {
         if other == robot {
             continue;
         }
-        let found = groups_where(&spots, theirs, &fleet.routes[robot], |q, p| {
+        let found = groups_where(spots, theirs, &fleet.routes[robot], |q, p| {
             !fleet.has_left(pass(other, q)) && !fleet.has_left(pass(robot, p))
         })
         .expect("known names");
@@ -537,31 +535,23 @@ fn judge(
                 .unzip();
             if !waits.is_empty() {
                 partly_ordered |= waits.len() < group.len();
-                choices.push([waits, first]);
+                groups.push([waits, first]);
             }
         }
     }
-    if choices.len() > MOST_GROUPS {
-        seen.left_out += 1;
-        return;
+    Choices {
+        groups,
+        partly_ordered,
     }
-    seen.kept_orders += usize::from(
-        old.iter()
-            .any(|o| o.first.robot == robot || o.then.robot == robot),
-    );
-    seen.partly_ordered += usize::from(partly_ordered);
-    seen.after_a_new_order += usize::from(fleet.new_orders > 0);
-    // not `reroute_needed`: that is also said for a route that was refused
-    seen.waiting_for_ever +=
-        usize::from((0..fleet.routes.len()).any(|r| !traffic.graph().waits_for_ever(r).is_empty()));
-    let lasts: Vec<usize> = (0..fleet.routes.len()).map(|r| fleet.last(r)).collect();
-    assert!(free_of_cycles(&lasts, &old), "seed {seed}: cycle before");
+}
 
-    // brute force: bit i set = the robot goes first in group i
-    let valid: Vec<usize> = (0..1usize << choices.len())
+/// Brute force: every valid choice, bit i set = the robot goes first in group i.
+fn valid(fleet: &Fleet, old: &[Before], groups: &[[Vec<Before>; 2]]) -> Vec<usize> {
+    let lasts: Vec<usize> = (0..fleet.routes.len()).map(|r| fleet.last(r)).collect();
+    (0..1usize << groups.len())
         .filter(|mask| {
-            let mut orders = old.clone();
-            for (i, choice) in choices.iter().enumerate() {
+            let mut orders = old.to_vec();
+            for (i, choice) in groups.iter().enumerate() {
                 let taken = &choice[(mask >> i) & 1];
                 if !taken.iter().all(|o| fleet.may(o)) {
                     return false;
@@ -570,15 +560,72 @@ fn judge(
             }
             free_of_cycles(&lasts, &orders)
         })
-        .collect();
+        .collect()
+}
 
-    // the groups where it cannot wait
-    let must = (0..choices.len())
-        .filter(|&i| !choices[i][0].iter().all(|o| fleet.may(o)))
-        .fold(0usize, |mask, i| mask | 1 << i);
+/// `place` puts the route of `robot`, which the fleet has already, into the module:
+/// compare what it does with every choice there is. The orders in `kept` stay.
+///
+/// Where the module takes only a first part, the whole route must have no valid
+/// choice, and the part is checked like a whole route. That no longer part could
+/// have been taken is **not** checked.
+fn judge(
+    seed: u64,
+    s: State,
+    robot: usize,
+    kept: BTreeSet<Before>,
+    place: impl FnOnce(&mut Traffic) -> Result<(), NotAdded>,
+    seen: &mut Seen,
+) {
+    let State {
+        spots,
+        mut traffic,
+        mut fleet,
+        ..
+    } = s;
+    let old: Vec<Before> = kept.iter().copied().collect();
+    let whole = choices(&spots, &fleet, robot, &kept);
+    if whole.groups.len() > MOST_GROUPS {
+        seen.left_out += 1;
+        return;
+    }
+    seen.kept_orders += usize::from(
+        old.iter()
+            .any(|o| o.first.robot == robot || o.then.robot == robot),
+    );
+    seen.partly_ordered += usize::from(whole.partly_ordered);
+    seen.after_a_new_order += usize::from(fleet.new_orders > 0);
+    // not `reroute_needed`: that is also said for a route that was refused
+    seen.waiting_for_ever +=
+        usize::from((0..fleet.routes.len()).any(|r| !traffic.graph().waits_for_ever(r).is_empty()));
+    let lasts: Vec<usize> = (0..fleet.routes.len()).map(|r| fleet.last(r)).collect();
+    assert!(free_of_cycles(&lasts, &old), "seed {seed}: cycle before");
+    let valid_whole = valid(&fleet, &old, &whole.groups);
 
     match place(&mut traffic) {
         Ok(()) => {
+            let part = taken(&traffic, robot, fleet.routes[robot].clone());
+            let cut = part.pieces().len() < fleet.routes[robot].pieces().len();
+            let (choices, valid) = if cut {
+                assert!(valid_whole.is_empty(), "seed {seed}: cut {valid_whole:?}");
+                fleet.routes[robot] = part;
+                // a part goes beyond what is held
+                assert!(fleet.last(robot) > fleet.released[robot], "seed {seed}");
+                let part = choices(&spots, &fleet, robot, &kept);
+                if part.groups.len() > MOST_GROUPS {
+                    seen.left_out += 1;
+                    return;
+                }
+                seen.taken_partly += 1;
+                let valid = valid(&fleet, &old, &part.groups);
+                (part.groups, valid)
+            } else {
+                (whole.groups, valid_whole)
+            };
+            // the groups where it cannot wait
+            let must = (0..choices.len())
+                .filter(|&i| !choices[i][0].iter().all(|o| fleet.may(o)))
+                .fold(0usize, |mask, i| mask | 1 << i);
             let orders: BTreeSet<Before> = traffic.graph().orders();
             let mut expected = kept.clone();
             let mut mask = 0;
@@ -611,8 +658,14 @@ fn judge(
             }
         }
         Err(NotAdded::Reroute(_)) => {
-            assert!(valid.is_empty(), "seed {seed}: missed {valid:?}");
-            let neither = choices
+            assert!(
+                valid_whole.is_empty(),
+                "seed {seed}: missed {valid_whole:?}"
+            );
+            // it holds no more than it did
+            assert_eq!(traffic.route_end(robot), Some(fleet.released[robot]));
+            let neither = whole
+                .groups
                 .iter()
                 .any(|c| c.iter().all(|way| !way.iter().all(|o| fleet.may(o))));
             if neither {
@@ -691,6 +744,7 @@ fn compare(cases: u64, case: fn(u64, &mut Seen)) -> Seen {
         ("refused at once", seen.refused_at_once),
         ("with a robot waiting for ever", seen.waiting_for_ever),
         ("after a new order", seen.after_a_new_order),
+        ("taken partly", seen.taken_partly),
     ] {
         assert!(times as u64 >= at_least(cases), "{kind}: only {times}");
     }

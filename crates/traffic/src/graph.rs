@@ -167,9 +167,6 @@ pub struct OrderGraph {
     robots: Vec<Progress>,
     /// Event → the events of other robots that wait for it.
     waiting: BTreeMap<Event, BTreeSet<Waiter>>,
-    /// Experiment (T36): may a pass wait for a robot that stands on it at the end
-    /// of its route?
-    behind_standing: bool,
 }
 
 impl OrderGraph {
@@ -262,6 +259,12 @@ impl OrderGraph {
         self.robots.get(robot).map(|p| p.released)
     }
 
+    /// Does the robot stand on the last node of its route? `false` for an unknown
+    /// robot.
+    pub(crate) fn at_end(&self, robot: usize) -> bool {
+        self.robots.get(robot).is_some_and(|p| p.reached == p.last)
+    }
+
     /// The orders that keep node `node`, with the edge before it, from the robot:
     /// those about these pieces whose first pass is not over.
     pub(crate) fn holding_back(&self, robot: usize, node: usize) -> Vec<Before> {
@@ -311,8 +314,7 @@ impl OrderGraph {
         if order.first.robot == order.then.robot {
             return Err(Refused::SameRobot(order));
         }
-        let stands = self.behind_standing && first.reached == first.last;
-        if Progress::leaves_at(order.first.piece) > first.last && !stands {
+        if Progress::leaves_at(order.first.piece) > first.last {
             return Err(Refused::NeverLeft(order.first));
         }
         // an order that is already met makes nobody wait
@@ -441,14 +443,6 @@ impl OrderGraph {
         Ok(())
     }
 
-    /// Experiment (T36): from now on [`order`](OrderGraph::order) also takes an
-    /// order whose first pass is the node a robot stands on at the end of its
-    /// route. No cycle can come of one when it is taken, as nothing follows that
-    /// pass yet; a longer route of the standing robot is checked as it is ordered.
-    pub(crate) fn allow_waiting_behind_standing(&mut self) {
-        self.behind_standing = true;
-    }
-
     /// Take orders that make robots wait for a robot which stays where it stands:
     /// `first` of each is the node its route ends on, so they are never met by
     /// progress on that route. [`order`](OrderGraph::order) refuses those. The
@@ -480,6 +474,94 @@ impl OrderGraph {
         }
     }
 
+    /// Do some events wait for each other? [`order`](OrderGraph::order) never
+    /// lets that happen, but a longer route can bring it about: an order waiting
+    /// for a node a robot ended on then waits for something that comes to pass.
+    pub(crate) fn has_cycle(&self) -> bool {
+        // what each event comes before, and how many events each one waits for
+        let mut later: BTreeMap<Event, Vec<Event>> = BTreeMap::new();
+        let mut before: BTreeMap<Event, usize> = BTreeMap::new();
+        for (robot, p) in self.robots.iter().enumerate() {
+            let own = |moment| Event { robot, moment };
+            for k in 0..=p.last {
+                let mut then = vec![(own(Moment::Released(k)), own(Moment::Reached(k)))];
+                if k < p.last {
+                    then.push((own(Moment::Released(k)), own(Moment::Released(k + 1))));
+                    then.push((own(Moment::Reached(k)), own(Moment::Reached(k + 1))));
+                }
+                before.entry(own(Moment::Released(k))).or_default();
+                before.entry(own(Moment::Reached(k))).or_default();
+                for (from, to) in then {
+                    later.entry(from).or_default().push(to);
+                    *before.entry(to).or_default() += 1;
+                }
+            }
+        }
+        for (from, waiters) in &self.waiting {
+            // an event past the end of its route never comes
+            if !before.contains_key(from) {
+                continue;
+            }
+            for (to, _) in waiters {
+                later.entry(*from).or_default().push(*to);
+                *before.entry(*to).or_default() += 1;
+            }
+        }
+        let mut open: Vec<Event> = before
+            .iter()
+            .filter(|&(_, &n)| n == 0)
+            .map(|(&e, _)| e)
+            .collect();
+        let mut taken = 0;
+        while let Some(event) = open.pop() {
+            taken += 1;
+            for to in later.get(&event).into_iter().flatten() {
+                if let Some(n) = before.get_mut(to) {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        open.push(*to);
+                    }
+                }
+            }
+        }
+        taken < before.len()
+    }
+
+    /// Does a cycle of waiting go through an event of this robot beyond node
+    /// `after`?
+    pub(crate) fn on_cycle(&self, robot: usize, after: usize) -> bool {
+        let last = self.robots.get(robot).map_or(0, |p| p.last);
+        (after.saturating_add(1)..=last)
+            .flat_map(|k| [Moment::Released(k), Moment::Reached(k)])
+            .map(|moment| Event { robot, moment })
+            .any(|event| {
+                let mut next = Vec::new();
+                self.add_next(event, &mut next);
+                next.into_iter().any(|next| self.reaches(next, event))
+            })
+    }
+
+    /// Add to `next` the events that come right after this one.
+    fn add_next(&self, event: Event, next: &mut Vec<Event>) {
+        let Event { robot, moment } = event;
+        let last = self.robots.get(robot).map_or(0, |p| p.last);
+        let own = |moment| Event { robot, moment };
+        match moment {
+            Moment::Released(k) => {
+                next.push(own(Moment::Reached(k)));
+                if k < last {
+                    next.push(own(Moment::Released(k + 1)));
+                }
+            }
+            Moment::Reached(k) => {
+                if k < last {
+                    next.push(own(Moment::Reached(k + 1)));
+                }
+            }
+        }
+        next.extend(self.waiting.get(&event).into_iter().flatten().map(|w| w.0));
+    }
+
     /// Must `to` come after `from` (or are they the same)?
     fn reaches(&self, from: Event, to: Event) -> bool {
         let mut seen = BTreeSet::new();
@@ -491,23 +573,7 @@ impl OrderGraph {
             if !seen.insert(event) {
                 continue;
             }
-            let Event { robot, moment } = event;
-            let last = self.robots.get(robot).map_or(0, |p| p.last);
-            let own = |moment| Event { robot, moment };
-            match moment {
-                Moment::Released(k) => {
-                    open.push(own(Moment::Reached(k)));
-                    if k < last {
-                        open.push(own(Moment::Released(k + 1)));
-                    }
-                }
-                Moment::Reached(k) => {
-                    if k < last {
-                        open.push(own(Moment::Reached(k + 1)));
-                    }
-                }
-            }
-            open.extend(self.waiting.get(&event).into_iter().flatten().map(|w| w.0));
+            self.add_next(event, &mut open);
         }
         false
     }

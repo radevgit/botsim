@@ -14,21 +14,23 @@
 //! route, its state still names the order before; such states are not about the new
 //! route and are skipped.
 //!
-//! **A route the module does not take** is offered again when it changes and in
-//! every release; meanwhile nothing more is released and the dispatcher is asked
-//! for another way. The dispatcher can only be told nodes to keep clear of, so an
-//! edge to avoid is given as the node it ends at.
+//! **Routes.** The module takes as much of a route as it can order and, in every
+//! release, more when it can. While it can take nothing, it asks for another way.
+//! The dispatcher can only be told nodes to keep clear of, so an edge to avoid is
+//! given as the node it ends at.
 //!
 //! **Who holds a robot back** is what the module says: who is ordered before it at
-//! its next node, or, where its route or the rest of it is refused, who keeps it
+//! its next node, or, at the end of what is taken of its route, who keeps the rest
 //! from being taken. Of several, the one with the lowest module number is named.
 //!
-//! **Experiments**, not part of the design, each on only with its environment
-//! variable set:
-//! - `BOTSIM_TRAFFIC_WAIT_BEHIND` (T36): a route may wait behind a standing robot
-//!   instead of being refused ([`Traffic::wait_behind_standing`]);
-//! - `BOTSIM_TRAFFIC_PARTLY` (T38): a route is taken as far as it can be
-//!   ([`Traffic::take_routes_partly`]) and the rest offered again in every release.
+//! **Experiment (D3 "A").** With the environment variable
+//! `BOTSIM_TRAFFIC_LOOK_AHEAD` set to a number of node steps, the module looks
+//! that far ahead before it takes a part of a route ([`Traffic::look_ahead`]).
+//!
+//! **Experiment (D3 "B").** With `BOTSIM_TRAFFIC_RING_REPAIR=1` the module asks
+//! the robots on and behind a ring of waiting robots for another way
+//! ([`Traffic::repair_rings`]), and a robot at the end of the part taken of its
+//! route is held back by who holds its next node, where somebody does.
 //!
 //! Built so far: plain job runs. Not yet: routes that are given up (cancel), RELEASE
 //! zones (no request is answered), the dispatcher's holder queries and the
@@ -60,6 +62,8 @@ pub struct TrafficAdapter {
     types: Vec<String>,
     /// By controller number; `None` for a robot the module does not have.
     robots: Vec<Option<Robot>>,
+    /// Experiment (D3 "B"): are rings repaired?
+    ring_repair: bool,
 }
 
 /// What the adapter knows of a robot of the module.
@@ -70,26 +74,9 @@ struct Robot {
     /// The order id its state showed when it got its route; `None` before it has
     /// one. States that show it are not about the route.
     order_before: Option<String>,
-    /// The route the module has not taken yet, or not all of.
-    pending: Option<Pending>,
-}
-
-/// A route to offer to the module.
-#[derive(Debug, Clone)]
-enum Pending {
-    /// A new order.
-    Order(Route),
-    /// A change of the order the module has.
-    Change(Route),
-    /// The whole route of which the module has taken the first part (T38).
-    Rest(Route),
-}
-
-/// What is still to be offered of a route the module has just taken: nothing,
-/// unless it took only a part.
-fn rest(traffic: &Traffic, number: usize, route: Route) -> Option<Pending> {
-    let end = route.pieces().len() / 2;
-    (traffic.route_end(number) < Some(end)).then_some(Pending::Rest(route))
+    /// A new order the module has not started: it does not have the robot at the
+    /// end of the order before.
+    pending: Option<Route>,
 }
 
 impl TrafficAdapter {
@@ -123,11 +110,27 @@ impl TrafficAdapter {
             .ok_or("no conflict map: the layout cannot be turned into a graph")?;
         let spots = Spots::new(&lif, &map).map_err(|e| e.to_string())?;
         let mut traffic = Traffic::new(spots);
-        if std::env::var_os("BOTSIM_TRAFFIC_WAIT_BEHIND").is_some() {
-            traffic.wait_behind_standing();
+        if let Some(value) = std::env::var_os("BOTSIM_TRAFFIC_LOOK_AHEAD") {
+            let steps = value.to_str().and_then(|v| v.parse().ok());
+            let steps = steps.ok_or_else(|| {
+                format!("BOTSIM_TRAFFIC_LOOK_AHEAD {value:?} is not a number of steps")
+            })?;
+            traffic.look_ahead(steps);
         }
-        if std::env::var_os("BOTSIM_TRAFFIC_PARTLY").is_some() {
-            traffic.take_routes_partly();
+        let ring_repair = match std::env::var_os("BOTSIM_TRAFFIC_RING_REPAIR") {
+            None => false,
+            Some(value) => match value.to_str() {
+                Some("0") => false,
+                Some("1") => true,
+                _ => {
+                    return Err(format!(
+                        "BOTSIM_TRAFFIC_RING_REPAIR {value:?} is not 0 or 1"
+                    ));
+                }
+            },
+        };
+        if ring_repair {
+            traffic.repair_rings();
         }
         Ok(TrafficAdapter {
             traffic,
@@ -137,6 +140,7 @@ impl TrafficAdapter {
             edge_by_id: BTreeMap::new(),
             types: Vec::new(),
             robots: Vec::new(),
+            ring_repair,
         })
     }
 
@@ -171,68 +175,57 @@ impl TrafficAdapter {
         (!avoid.is_empty()).then_some(Reroute { avoid })
     }
 
-    /// Put a robot into the module with this route. If the module does not take the
-    /// route, it keeps the robot on its first node.
+    /// Put a robot into the module with this route.
     fn enter(&mut self, robot: usize, route: Route, order_before: Option<String>) {
-        let (number, pending) = match self.traffic.add(route.clone()) {
-            Ok(number) => (number, rest(&self.traffic, number, route)),
-            Err(NotAdded::Standing { robot, .. }) => (robot, Some(Pending::Change(route))),
+        let number = match self.traffic.add(route) {
+            Ok(number) => number,
+            // nothing beyond its first node can be taken yet
+            Err(NotAdded::Standing { robot, .. }) => robot,
             // its type or first node is unknown: it gets nothing released
             Err(_) => return,
         };
-        // a robot without a job has nothing to offer again
-        let pending = pending.filter(|_| order_before.is_some());
         if let Some(slot) = self.robots.get_mut(robot) {
             *slot = Some(Robot {
                 number,
                 order_before,
-                pending,
+                pending: None,
             });
         }
     }
 
-    /// Offer the robot's pending route to the module, if there is one. Returns why
-    /// it is still not taken.
-    fn offer(&mut self, robot: usize) -> Option<NotAdded> {
-        let known = self.robots.get_mut(robot)?.as_mut()?;
-        let number = known.number;
-        let (route, taken) = match known.pending.clone()? {
-            Pending::Order(route) => (route.clone(), self.traffic.new_order(number, route)),
-            Pending::Change(route) => (route.clone(), self.traffic.change(number, route)),
-            Pending::Rest(route) => {
-                self.traffic.extend(number, route.clone());
-                (route, Ok(()))
-            }
+    /// Give the module the new order it has not started, if there is one.
+    fn offer(&mut self, robot: usize) {
+        let Some(Some(known)) = self.robots.get_mut(robot) else {
+            return;
         };
-        if taken.is_ok() {
-            known.pending = rest(&self.traffic, number, route);
+        let Some(route) = known.pending.clone() else {
+            return;
+        };
+        // with a "re-route" it is on the new order too, holding its node
+        if let Ok(()) | Err(NotAdded::Reroute(_)) = self.traffic.new_order(known.number, route) {
+            known.pending = None;
         }
-        taken.err()
     }
 
     /// Offer what is pending, then ask the module how far the robot may go.
     fn answer(&mut self, ask: &Ask) -> Release {
-        let refused = self.offer(ask.robot);
-        let wait = |reroute| Release {
+        self.offer(ask.robot);
+        let wait = Release {
             through: ask.released_through,
-            reroute,
+            reroute: None,
         };
         let Some(Some(robot)) = self.robots.get(ask.robot) else {
-            return wait(None);
+            return wait;
         };
-        if matches!(robot.pending, Some(Pending::Order(_) | Pending::Change(_))) {
-            let wish = match refused {
-                Some(NotAdded::Reroute(wish)) => self.avoid(&wish),
-                _ => None,
-            };
-            return wait(wish);
+        if robot.pending.is_some() {
+            return wait;
         }
         match self.traffic.release(robot.number, ask.limit) {
             Some(release) => Release {
                 through: release.through,
                 reroute: release.reroute.and_then(|wish| self.avoid(&wish)),
             },
-            None => wait(None),
+            None => wait,
         }
     }
 }
@@ -262,7 +255,7 @@ impl TrafficPolicy for TrafficAdapter {
                 let before = robot.order_before.as_ref()?;
                 // the module does not have the new order yet, or the state is not
                 // about it
-                if matches!(robot.pending, Some(Pending::Order(_))) || state.order_id == *before {
+                if robot.pending.is_some() || state.order_id == *before {
                     return None;
                 }
                 Some(Report {
@@ -287,7 +280,7 @@ impl TrafficPolicy for TrafficAdapter {
         match self.robots.get_mut(ask.robot) {
             Some(Some(robot)) => {
                 robot.order_before = Some(before);
-                robot.pending = Some(Pending::Order(route));
+                robot.pending = Some(route);
             }
             _ => self.enter(ask.robot, route, Some(before)),
         }
@@ -305,11 +298,13 @@ impl TrafficPolicy for TrafficAdapter {
         let Some(Some(known)) = self.robots.get_mut(robot) else {
             return;
         };
-        known.pending = Some(match known.pending {
-            Some(Pending::Order(_)) => Pending::Order(route),
-            _ => Pending::Change(route),
-        });
-        self.offer(robot);
+        if known.pending.is_some() {
+            known.pending = Some(route);
+            self.offer(robot);
+        } else {
+            // what the module cannot take now it keeps, and says in the releases
+            let _ = self.traffic.change(known.number, route);
+        }
     }
 
     fn idle(&mut self, robot: usize, node: NodeIdx) {
@@ -330,21 +325,18 @@ impl TrafficPolicy for TrafficAdapter {
 
     fn blocker(&self, robot: usize, _route: &Plan, _released_through: usize) -> Option<usize> {
         let known = self.robots.get(robot)?.as_ref()?;
-        let others = match known.pending {
-            // the route is refused: who keeps it from being taken
-            Some(Pending::Order(_) | Pending::Change(_)) => self.traffic.refused_by(known.number),
-            // at the end of the part taken, the same
-            Some(Pending::Rest(_)) => {
-                let held_back = self.traffic.blockers(known.number);
-                if held_back.is_empty() {
-                    self.traffic.refused_by(known.number)
-                } else {
-                    held_back
-                }
-            }
-            None => self.traffic.blockers(known.number),
+        let held_back = self.traffic.blockers(known.number);
+        // at the end of the part taken: who keeps the rest from being taken
+        let others = if held_back.is_empty() {
+            self.traffic.refused_by(known.number)
+        } else {
+            held_back
         };
-        let other = others.into_iter().find(|&o| o != known.number)?;
+        let holder = self
+            .ring_repair
+            .then(|| self.traffic.next_holder(known.number))
+            .flatten();
+        let other = holder.or_else(|| others.into_iter().find(|&o| o != known.number))?;
         self.robots
             .iter()
             .position(|r| r.as_ref().is_some_and(|r| r.number == other))
