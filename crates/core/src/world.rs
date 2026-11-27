@@ -43,26 +43,11 @@ use crate::waiting::{HeldBack, Place, Wait, WaitReason, WaitTotal};
 use crate::zone_requests::ZoneRequestTiming;
 use crate::zones::Zones;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
 
 /// VDA 5050 version written in the headers.
 pub const PROTOCOL_VERSION: &str = "3.0.1";
-
-/// Identity of a robot, as in the VDA 5050 topic.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RobotId {
-    pub manufacturer: String,
-    pub serial_number: String,
-}
-
-impl RobotId {
-    pub fn new(manufacturer: &str, serial_number: &str) -> RobotId {
-        RobotId {
-            manufacturer: manufacturer.to_string(),
-            serial_number: serial_number.to_string(),
-        }
-    }
-}
 
 /// A robot that the protective field stops again within this time after it last held
 /// it is still in the same safety stop (see [`World::safety_stops`]).

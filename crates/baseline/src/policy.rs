@@ -25,9 +25,9 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 
 use botsim_core::observer::Reservation;
-use botsim_core::world::RobotId;
 use botsim_core::zones::Zones;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::robot::RobotId;
 use botsim_model::spec::Shape;
 use vda5050::state::State;
 

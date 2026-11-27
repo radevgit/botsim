@@ -7,5 +7,6 @@ pub mod angle;
 pub mod graph;
 pub mod orientation;
 pub mod path;
+pub mod robot;
 pub mod safety;
 pub mod spec;

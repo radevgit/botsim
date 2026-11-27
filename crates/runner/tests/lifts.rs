@@ -99,7 +99,7 @@ fn lift_with_stops(stops: &str) -> String {
 #[test]
 fn stops_make_a_ride_possible_and_a_robot_rides_to_the_other_map() {
     use botsim_core::drive::Phase;
-    use botsim_core::world::RobotId;
+    use botsim_model::robot::RobotId;
 
     let text = scenario(&lift_with_stops(r#"[{ node = "N2" }, { node = "N102" }]"#));
     let mut w = build(&text).unwrap();

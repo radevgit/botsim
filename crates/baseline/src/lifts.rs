@@ -34,8 +34,9 @@
 
 use std::collections::HashMap;
 
-use botsim_core::world::{RobotId, World};
+use botsim_core::world::World;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::robot::RobotId;
 
 use crate::order_builder::Plan;
 use crate::route::{Arrival, Mover, plan_path, straight_lengths};

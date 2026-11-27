@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use botsim::scenario::Scenario;
-use botsim_core::world::RobotId;
+use botsim_model::robot::RobotId;
 use vda5050::order::Order;
 
 fn data() -> PathBuf {

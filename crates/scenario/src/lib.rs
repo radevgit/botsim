@@ -89,10 +89,11 @@ use botsim_core::disturbances::{Disturbances, StopSpec, check_duration_variation
 use botsim_core::door::DoorSpec;
 use botsim_core::jobs::{JobGenerator, Rng};
 use botsim_core::lift::{LiftSpec, LiftStop};
-use botsim_core::world::{RobotId, World, unix_ms_from_utc};
+use botsim_core::world::{World, unix_ms_from_utc};
 use botsim_core::zone_requests::ZoneRequestTiming;
 use botsim_core::zones::Zones;
 use botsim_model::graph::Graph;
+use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
 use serde::Deserialize;
 use vda5050::factsheet::Factsheet;

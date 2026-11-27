@@ -1,8 +1,9 @@
 //! The robot's `factsheet` message (S61).
 
 use botsim_core::actions::ActionTimes;
-use botsim_core::world::{PROTOCOL_VERSION, RobotId, World, unix_ms_from_utc};
+use botsim_core::world::{PROTOCOL_VERSION, World, unix_ms_from_utc};
 use botsim_model::graph::Graph;
+use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 use vdma_lif::Lif;

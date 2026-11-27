@@ -20,8 +20,8 @@ use crate::door::DoorStatus;
 use crate::drive::Pose;
 use crate::lift::LiftStatus;
 use crate::waiting::Wait;
-use crate::world::RobotId;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::robot::RobotId;
 use botsim_model::spec::Shape;
 
 /// Receives a run. All methods are called from the simulation thread.

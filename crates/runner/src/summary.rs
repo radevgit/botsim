@@ -441,7 +441,7 @@ fn run_controller<P: TrafficPolicy>(
         })
         .collect();
     let name =
-        |id: &botsim_core::world::RobotId| format!("{}/{}", id.manufacturer, id.serial_number);
+        |id: &botsim_model::robot::RobotId| format!("{}/{}", id.manufacturer, id.serial_number);
     let collisions: Vec<_> = world
         .collisions()
         .iter()

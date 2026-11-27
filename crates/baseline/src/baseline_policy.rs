@@ -910,7 +910,7 @@ mod test_graph;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use botsim_core::world::RobotId;
+    use botsim_model::robot::RobotId;
 
     /// A state of a standing robot; the release rule does not look into it here.
     fn standing() -> State {

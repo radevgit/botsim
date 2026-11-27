@@ -5,8 +5,9 @@ use botsim_baseline::node_grid::NodeGrid;
 use botsim_baseline::route::{distances_to, in_edges, shortest_path, straight_lengths};
 use botsim_core::actions::ActionTimes;
 use botsim_core::jobs::{Job, Rng};
-use botsim_core::world::{RobotId, World};
+use botsim_core::world::World;
 use botsim_model::graph::Graph;
+use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 

@@ -6,8 +6,9 @@ use botsim_core::door::DoorSpec;
 use botsim_core::jobs::Job;
 use botsim_core::lift::DoorState;
 use botsim_core::waiting::{Wait, WaitReason};
-use botsim_core::world::{RobotId, World};
+use botsim_core::world::World;
 use botsim_model::graph::Graph;
+use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 

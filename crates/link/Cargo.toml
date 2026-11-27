@@ -1,0 +1,13 @@
+[package]
+name = "botsim-link"
+description = "Compact messages between the botsim fleet server, robots (VDA 5050 meaning), doors and lifts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors = ["radevgit"]
+
+[dependencies]
+botsim-model = { path = "../model" }
+serde_json = "1.0.154"

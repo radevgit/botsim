@@ -14,6 +14,7 @@ A longer run on a more complex warehouse: [video, 6:40](https://www.youtube.com/
 botsim/
 ├── crates/
 │   ├── model/         layout graph, robot types, path and safety geometry
+│   ├── link/          compact messages: fleet server, robots, doors, lifts
 │   ├── core/          simulation: world, robots, orders, collisions, jobs
 │   ├── scenario/      scenario file (TOML): loading, building the world
 │   ├── baseline/      bundled baseline fleet controller

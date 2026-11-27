@@ -4,7 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use botsim::scenario::Scenario;
-use botsim_core::world::{RobotId, World};
+use botsim_core::world::World;
+use botsim_model::robot::RobotId;
 
 fn data() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data")
