@@ -87,19 +87,19 @@ cargo run --release -p botsim -- --policy traffic scenarios/mixed_fleet.toml
 ```
 
 The adapter is [`runner/src/traffic_policy.rs`](../runner/src/traffic_policy.rs). It builds
-the conflict map of the whole fleet with the scenario's `conflict_clearance`. `--timing`
-cannot be used with this policy.
+the conflict map of the whole fleet with the scenario's `conflict_clearance`. With the
+scenario's safety stop on, the map also counts what the protective field of a standing robot
+reaches along an edge (`MapOptions::protective_field`), so that the order covers the wait of
+a robot stopped by its field. `--timing` cannot be used with this policy.
 
 ## Not solved
 
 - **Deadlocks remain.** In botsim's M1 measurement (12 robots, 90 runs of two hours, at
-  commit `5da7424`) there were 19 deadlocks, and in 11 runs the whole fleet stopped. No
-  collision. Against a ring the module can only ask for another way; the dispatcher may have
-  none, and botsim's gives none to a job with a lift or a door.
+  commit `dd988c4` with the safety field in the map) there were 19 deadlocks, and in 13 runs
+  the whole fleet stopped. No collision. Against a ring the module can only ask for another
+  way; the dispatcher may have none, and botsim's gives none to a job with a lift or a door.
 - **The way out is not kept free.** A robot that waits next to a station with one way in and
   out can keep the robot there from ever leaving.
-- **The safety field is not in the map yet.** A robot stopped by its protective field can
-  wait for a robot that the order lets wait for it.
 - **Two robots already standing in conflicting places** (the same node, one zone) get no new
   route. A cancel helps only if it stops a released robot short of the conflict; otherwise
   an operator has to move one.

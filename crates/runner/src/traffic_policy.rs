@@ -8,7 +8,9 @@
 //!
 //! **Conflicts.** The module orders every conflict of the map, so the adapter
 //! computes the whole map itself and leaves aside the shorter lists the runner makes
-//! for the baseline.
+//! for the baseline. With the scenario's safety stop on, a robot also waits for one
+//! its protective field reaches; the map then counts what the field of a standing
+//! robot reaches along an edge, so that the order covers that wait.
 //!
 //! **Progress.** The controller's calls carry no order id. When a robot gets a
 //! route, its state still names the order before; such states are not about the new
@@ -40,6 +42,15 @@ use botsim_sweep::{MapOptions, TypeRef};
 use botsim_traffic::{NotAdded, Piece, Report, Route, Spots, Traffic};
 
 use crate::scenario::Scenario;
+
+/// What the module's conflict map counts for a scenario.
+fn map_options(scenario: &Scenario) -> MapOptions {
+    MapOptions {
+        clearance: scenario.conflict_clearance,
+        protective_field: scenario.safety_stop,
+        ..MapOptions::default()
+    }
+}
 
 /// The traffic module as a traffic policy.
 #[derive(Debug)]
@@ -93,11 +104,7 @@ impl TrafficAdapter {
                 types.push(t);
             }
         }
-        let options = MapOptions {
-            clearance: scenario.conflict_clearance,
-            ..MapOptions::default()
-        };
-        let map = botsim_sweep::compute(&lif, &types, &options)
+        let map = botsim_sweep::compute(&lif, &types, &map_options(scenario))
             .ok_or("no conflict map: the layout cannot be turned into a graph")?;
         let spots = Spots::new(&lif, &map).map_err(|e| e.to_string())?;
         Ok(TrafficAdapter {
@@ -304,5 +311,23 @@ impl TrafficPolicy for TrafficAdapter {
         self.robots
             .iter()
             .position(|r| r.as_ref().is_some_and(|r| r.number == other))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_map_counts_the_protective_field_only_with_the_safety_stop() {
+        let text = include_str!("../../../scenarios/m1_short.toml");
+        let mut scenario = Scenario::from_toml(text).expect("scenario");
+        assert!(scenario.safety_stop, "on unless a scenario says otherwise");
+        for safety_stop in [true, false] {
+            scenario.safety_stop = safety_stop;
+            let options = map_options(&scenario);
+            assert_eq!(options.protective_field, safety_stop);
+            assert_eq!(options.clearance, scenario.conflict_clearance);
+        }
     }
 }
