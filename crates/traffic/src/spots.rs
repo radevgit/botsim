@@ -1,8 +1,8 @@
 //! Spots (D2): which pieces of two routes two robots must not use at the same time.
 //!
 //! Two passes conflict if they use the same node, the same edge, or a pair the
-//! conflict map lists for the two robot types (edge–edge or node–edge), or two
-//! pieces of one RELEASE zone ([`Spots::add_zone`]).
+//! conflict map lists for the two robot types (edge–edge, node–edge or
+//! node–node), or two pieces of one RELEASE zone ([`Spots::add_zone`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -121,6 +121,15 @@ impl Spots {
             for c in &pair.conflicts {
                 let p = spots.setup_piece(Piece::Node(c.node.clone()))?;
                 let q = spots.setup_piece(Piece::Edge(c.edge.clone()))?;
+                spots.list(a, p, b, q);
+            }
+        }
+        for pair in &map.node_node_pairs {
+            let a = spots.setup_type(&pair.type_a)?;
+            let b = spots.setup_type(&pair.type_b)?;
+            for c in &pair.conflicts {
+                let p = spots.setup_piece(Piece::Node(c.node_a.clone()))?;
+                let q = spots.setup_piece(Piece::Node(c.node_b.clone()))?;
                 spots.list(a, p, b, q);
             }
         }
@@ -278,7 +287,7 @@ impl Spots {
 mod tests {
     use super::*;
     use crate::testing::{LARGE, SMALL, edge, edge_pair, empty_map, lif, node};
-    use botsim_sweep::{NodeConflict, NodeTypePair};
+    use botsim_sweep::{NodeConflict, NodeNodeConflict, NodeNodeTypePair, NodeTypePair};
 
     /// Two edges without a common node: E1 from A to B, E2 from C to D.
     fn layout() -> Lif {
@@ -344,6 +353,29 @@ mod tests {
         assert_eq!(spots.conflict(LARGE, &c, SMALL, &e1), Some(true));
         assert_eq!(spots.conflict(SMALL, &e1, LARGE, &c), Some(true));
         assert_eq!(spots.conflict(SMALL, &c, LARGE, &e1), Some(false));
+    }
+
+    #[test]
+    fn node_node_pair_counts_for_its_types_in_both_directions() {
+        let mut map = empty_map();
+        map.node_node_pairs.push(NodeNodeTypePair {
+            type_a: SMALL.into(),
+            type_b: LARGE.into(),
+            conflicts: vec![NodeNodeConflict {
+                node_a: "A".into(),
+                node_b: "C".into(),
+                depth: 0.2,
+                distance: 0.0,
+            }],
+        });
+        let spots = Spots::new(&layout(), &map).expect("setup");
+        let (a, c) = (node("A"), node("C"));
+        assert_eq!(spots.conflict(SMALL, &a, LARGE, &c), Some(true));
+        assert_eq!(spots.conflict(LARGE, &c, SMALL, &a), Some(true));
+        // the other way round: the large robot on A, the small one on C
+        assert_eq!(spots.conflict(LARGE, &a, SMALL, &c), Some(false));
+        assert_eq!(spots.conflict(SMALL, &a, SMALL, &c), Some(false));
+        assert_eq!(spots.conflicting(SMALL, &a, LARGE), Some(vec![&a, &c]));
     }
 
     fn inside(types: &[(&str, &[Piece])]) -> BTreeMap<String, Vec<Piece>> {
