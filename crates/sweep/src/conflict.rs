@@ -225,6 +225,13 @@ fn bodies_in_conflict(a: &Sweep, b: &Sweep, o: &MapOptions) -> Option<Contact> {
 }
 
 impl ConflictMap {
+    /// Do the bodies of two swept outlines conflict by the rule this map was made
+    /// with (overlap of at least `min_overlap`, or nearer than `clearance`)?
+    pub fn conflicts(&self, a: &Sweep, b: &Sweep) -> bool {
+        a.contact(b, self.clearance)
+            .is_some_and(|c| body_conflict(c.depth, c.distance, self.min_overlap, self.clearance))
+    }
+
     /// Is an entry of this map, given by its `depth` and `distance`, listed only
     /// because of a protective field ([`MapOptions::protective_field`])? Its
     /// bodies alone do not conflict: they stay `clearance` or more apart, or

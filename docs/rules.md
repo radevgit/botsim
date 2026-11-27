@@ -739,6 +739,17 @@ baseline.
     released for 2 s (`GIVE_WAY_HOLD_SECONDS`, so that a robot only just released is
     not taken from), and the other conditions hold; X is then released although H
     still holds it (`waived`).
+  - **Two nodes (U16):** the map's node-node pairs (`node_node_pairs`: two
+    different nodes too close for a robot on each, standing or turning there; all of
+    them, also far from a junction) are used too
+    (`Controller::set_node_node_conflicts`). A robot is not released to a node while
+    another robot holds a node too close to it for those two types. Go-first treats
+    such a wait like a node-edge one if the other robot only **holds** that node
+    (released to it, not there). While a robot **stands** on it (its reported
+    position is on the node), go-first does nothing (S183): no node is taken over,
+    and a `waived` edge does not let the robot to its end node either. Weak spot,
+    older than this rule and left as it is: a `waived` edge skips **every other**
+    conflict test of that edge, against any robot, not only against H.
   - Result on warehouse 4, first 1100 s (weight 5): collisions 21 to 6 (edge pairs
     only) to 1 (with node-edge conflicts), jobs done 91, 86, 79, 59 to 61 robots
     moving at 1000 s, no stand-off at 1100 s. Not covered: the turn on

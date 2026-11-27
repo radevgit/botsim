@@ -63,7 +63,7 @@ use crate::baseline_policy::BaselinePolicy;
 pub use crate::baseline_policy::{
     GIVE_WAY_AFTER_SECONDS, GIVE_WAY_HOLD_SECONDS, REROUTE_AFTER_SECONDS,
 };
-use crate::conflicts::{ConflictInput, NodeConflictInput};
+use crate::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
 use crate::doors::DoorDesk;
 use crate::lifts::{LiftDesk, LiftRobot};
 use crate::node_grid::NodeGrid;
@@ -309,6 +309,12 @@ impl Controller {
     /// [`BaselinePolicy::set_node_conflicts`].
     pub fn set_node_conflicts(&mut self, input: &[NodeConflictInput]) -> usize {
         self.policy.set_node_conflicts(input)
+    }
+
+    /// Node-node conflicts of the baseline rules, see
+    /// [`BaselinePolicy::set_node_node_conflicts`].
+    pub fn set_node_node_conflicts(&mut self, input: &[NodeNodeConflictInput]) -> usize {
+        self.policy.set_node_node_conflicts(input)
     }
 
     /// Who holds which node and edge.

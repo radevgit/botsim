@@ -35,7 +35,19 @@ pub struct NodeConflictInput {
     pub pairs: Vec<(String, String)>,
 }
 
-/// What a robot holds that keeps another one off an edge (node-edge conflicts).
+/// The node-node conflicts of one pair of robot types, by id: two different nodes
+/// too close for a robot of `type_a` on the first and one of `type_b` on the second,
+/// standing or turning there. The controller reads each pair both ways.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeNodeConflictInput {
+    pub type_a: String,
+    pub type_b: String,
+    /// (node id for `type_a`, node id for `type_b`)
+    pub pairs: Vec<(String, String)>,
+}
+
+/// What a robot holds that keeps another one off an edge (node-edge and node-node
+/// conflicts).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Held {
     Node(NodeIdx),
@@ -53,12 +65,17 @@ pub struct ConflictTable {
     /// `edge_nodes[s][t][n]`: the edges a robot of type `t` may not hold while a
     /// robot of type `s` is released to node `n`.
     edge_nodes: Vec<Vec<HashMap<NodeIdx, Vec<EdgeIdx>>>>,
+    /// `near_nodes[t][s][n]`: the nodes a robot of type `s` may not be on while a
+    /// robot of type `t` is released to node `n`.
+    near_nodes: Vec<Vec<HashMap<NodeIdx, Vec<NodeIdx>>>>,
     /// End node of each edge.
     ends: Vec<NodeIdx>,
     /// Number of conflicting edge pairs, for reports.
     pairs: usize,
     /// Number of node-edge conflicts, for reports.
     node_pairs: usize,
+    /// Number of node-node conflicts, for reports.
+    node_node_pairs: usize,
 }
 
 impl ConflictTable {
@@ -102,9 +119,11 @@ impl ConflictTable {
             by_type,
             node_edges: vec![vec![HashMap::new(); types.len()]; types.len()],
             edge_nodes: vec![vec![HashMap::new(); types.len()]; types.len()],
+            near_nodes: vec![vec![HashMap::new(); types.len()]; types.len()],
             ends: graph.edges.iter().map(|e| e.end).collect(),
             pairs,
             node_pairs: 0,
+            node_node_pairs: 0,
         }
     }
 
@@ -167,6 +186,75 @@ impl ConflictTable {
         self.node_pairs
     }
 
+    /// Add the node-node conflicts (two robots on two nodes too close for both).
+    /// Returns the number read; ids the layout does not have and types the fleet does
+    /// not have are left out.
+    pub fn add_node_node_conflicts(
+        &mut self,
+        graph: &Graph,
+        types: &[String],
+        input: &[NodeNodeConflictInput],
+    ) -> usize {
+        let type_idx = |name: &str| types.iter().position(|t| t == name);
+        let node_ids: HashMap<&str, NodeIdx> = graph
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id.as_str(), i))
+            .collect();
+        let mut read = 0;
+        for c in input {
+            let (Some(a), Some(b)) = (type_idx(&c.type_a), type_idx(&c.type_b)) else {
+                continue;
+            };
+            for (na, nb) in &c.pairs {
+                let (Some(&x), Some(&y)) = (node_ids.get(na.as_str()), node_ids.get(nb.as_str()))
+                else {
+                    continue;
+                };
+                // a robot of type a going to x keeps clear of type b on y, and the
+                // other way round
+                self.near_nodes[a][b].entry(x).or_default().push(y);
+                self.near_nodes[b][a].entry(y).or_default().push(x);
+                read += 1;
+            }
+        }
+        for row in self.near_nodes.iter_mut().flatten() {
+            for list in row.values_mut() {
+                list.sort_unstable();
+                list.dedup();
+            }
+        }
+        self.node_node_pairs += read;
+        read
+    }
+
+    /// Number of node-node conflicts read.
+    pub fn node_node_pairs(&self) -> usize {
+        self.node_node_pairs
+    }
+
+    /// The robot that **stands** on a node too close to the node edge `e` ends at for
+    /// `robot` to go there (`standing[r]`: the node robot `r` stands on, whether or
+    /// not it holds it); `None` if no robot does.
+    pub fn standing_blocker(
+        &self,
+        standing: &[Option<NodeIdx>],
+        type_of: &[usize],
+        robot: usize,
+        e: EdgeIdx,
+    ) -> Option<usize> {
+        if self.node_node_pairs == 0 {
+            return None;
+        }
+        let row = &self.near_nodes[type_of[robot]];
+        let end = self.ends[e];
+        standing.iter().enumerate().find_map(|(r, on)| {
+            let near = row[type_of[r]].get(&end)?;
+            (r != robot && near.contains(&(*on)?)).then_some(r)
+        })
+    }
+
     /// Number of conflicting edge pairs read (both orders of two different types
     /// count once each).
     pub fn pairs(&self) -> usize {
@@ -187,9 +275,9 @@ impl ConflictTable {
             || self.node_blocked(reservations, type_of, robot, e)
     }
 
-    /// Node-edge conflicts: is a robot standing on (holding) a node that edge `e`
-    /// passes too close to, or does a robot hold an edge that passes too close to the
-    /// node `e` ends at?
+    /// Node-edge and node-node conflicts: is a robot standing on (holding) a node
+    /// that edge `e` passes too close to, or does a robot hold an edge that passes too
+    /// close to the node `e` ends at, or a node too close to it?
     fn node_blocked(
         &self,
         reservations: &Reservations,
@@ -200,9 +288,10 @@ impl ConflictTable {
         self.node_blocker(reservations, type_of, robot, e).is_some()
     }
 
-    /// The robot that keeps `robot` off edge `e` because of a node-edge conflict, with
-    /// what it holds (the node `e` passes too close to, or the edge that passes too
-    /// close to the node `e` ends at); `None` if no robot does.
+    /// The robot that keeps `robot` off edge `e` because of a node-edge or node-node
+    /// conflict, with what it holds (the node `e` passes too close to, the edge that
+    /// passes too close to the node `e` ends at, or a node too close to that node);
+    /// `None` if no robot does.
     pub fn node_blocker(
         &self,
         reservations: &Reservations,
@@ -210,7 +299,7 @@ impl ConflictTable {
         robot: usize,
         e: EdgeIdx,
     ) -> Option<(usize, Held)> {
-        if self.node_pairs == 0 {
+        if self.node_pairs == 0 && self.node_node_pairs == 0 {
             return None;
         }
         let t = type_of[robot];
@@ -226,10 +315,20 @@ impl ConflictTable {
         }
         // the robot will stand at the end node: others drive edges near it
         let end = self.ends[e];
-        self.edge_nodes[t].iter().enumerate().find_map(|(s, map)| {
+        let driving = self.edge_nodes[t].iter().enumerate().find_map(|(s, map)| {
             map.get(&end)?.iter().find_map(|&f| {
                 let h = reservations.edge_holder(f)?;
                 (h != robot && type_of[h] == s).then_some((h, Held::Edge(f)))
+            })
+        });
+        if driving.is_some() {
+            return driving;
+        }
+        // ... or hold a node too close to it
+        self.near_nodes[t].iter().enumerate().find_map(|(s, map)| {
+            map.get(&end)?.iter().find_map(|&n| {
+                let h = reservations.node_holder(n)?;
+                (h != robot && type_of[h] == s).then_some((h, Held::Node(n)))
             })
         })
     }

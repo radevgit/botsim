@@ -31,7 +31,7 @@ use botsim_core::world::RobotId;
 use botsim_core::zones::Zones;
 use vda5050::state::State;
 
-use crate::conflicts::{ConflictInput, NodeConflictInput};
+use crate::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
 use crate::order_builder::{Plan, RELEASE_WINDOW};
 use crate::zone_grants::Answer;
 
@@ -133,6 +133,9 @@ pub trait TrafficPolicy: Debug {
     /// The node-edge pairs; called after [`conflicts`](TrafficPolicy::conflicts).
     fn node_conflicts(&mut self, _nodes: &[NodeConflictInput]) {}
 
+    /// The node-node pairs; called after [`conflicts`](TrafficPolicy::conflicts).
+    fn node_node_conflicts(&mut self, _nodes: &[NodeNodeConflictInput]) {}
+
     /// How many nodes ahead of the robot may be released.
     fn window(&self) -> usize {
         RELEASE_WINDOW
@@ -208,6 +211,9 @@ impl<T: TrafficPolicy + ?Sized> TrafficPolicy for Box<T> {
     }
     fn node_conflicts(&mut self, nodes: &[NodeConflictInput]) {
         (**self).node_conflicts(nodes);
+    }
+    fn node_node_conflicts(&mut self, nodes: &[NodeNodeConflictInput]) {
+        (**self).node_node_conflicts(nodes);
     }
     fn window(&self) -> usize {
         (**self).window()

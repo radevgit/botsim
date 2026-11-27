@@ -11,6 +11,8 @@
 //! - **Re-routing** (S53): a robot that has stood at the end of its released
 //!   route for [`REROUTE_AFTER_SECONDS`] because another robot holds the way asks
 //!   the dispatcher for a new route around the nodes others hold.
+//! - **Swept-area reservation** (see [`crate::conflicts`]): a robot is not released
+//!   onto an edge, or to a node, whose swept area meets what another robot holds.
 //! - **Go first** (S77), see `go_first`.
 //!
 //! These rules are frozen (brief U10): only bug fixes; they are the reference other
@@ -26,7 +28,9 @@ use botsim_core::safety::LATERAL_MARGIN;
 use botsim_core::spec::Shape;
 use vda5050::state::State;
 
-use crate::conflicts::{ConflictInput, ConflictTable, Held, NodeConflictInput};
+use crate::conflicts::{
+    ConflictInput, ConflictTable, Held, NodeConflictInput, NodeNodeConflictInput,
+};
 use crate::controller::NODE_TOLERANCE;
 use crate::node_grid::NodeGrid;
 use crate::order_builder::Plan;
@@ -70,9 +74,14 @@ pub struct BaselinePolicy {
     reservations: Reservations,
     /// Edges whose swept outlines overlap; `None` reserves nodes and edges only.
     conflicts: Option<ConflictTable>,
-    /// Robot → the edge it may be released onto although it conflicts with an edge
-    /// another robot holds (go-first, S77); cleared when it has been released.
+    /// Robot → the edge it may be released onto although it conflicts with what
+    /// another robot holds (go-first, S77); cleared when it has been released. The
+    /// edge skips every conflict test but one: a robot standing on a node too close
+    /// to the edge's end node still keeps it off (S183).
     waived: HashMap<usize, EdgeIdx>,
+    /// The node each robot stands on (by its reported position), seen at the start of
+    /// the cycle; `None` between nodes.
+    standing: Vec<Option<NodeIdx>>,
     /// How long each robot has stood at the end of its released route because the
     /// next node or edge is held by another robot (S53); 0 on a new route.
     blocked_seconds: Vec<f64>,
@@ -100,6 +109,7 @@ impl BaselinePolicy {
             reservations: Reservations::new(graph),
             conflicts: None,
             waived: HashMap::new(),
+            standing: Vec::new(),
             blocked_seconds: Vec::new(),
             still_seconds: Vec::new(),
             zone_grants: None,
@@ -129,6 +139,17 @@ impl BaselinePolicy {
         table.add_node_conflicts(&self.graph, &self.type_names, input)
     }
 
+    /// Node-node conflicts for the swept-area reservation: a robot is not released
+    /// to a node that is too close to a node another robot holds. Call after
+    /// [`BaselinePolicy::set_conflicts`]; returns the number read (0 if that was not
+    /// called).
+    pub fn set_node_node_conflicts(&mut self, input: &[NodeNodeConflictInput]) -> usize {
+        let Some(table) = self.conflicts.as_mut() else {
+            return 0;
+        };
+        table.add_node_node_conflicts(&self.graph, &self.type_names, input)
+    }
+
     /// Who holds which node and edge.
     pub fn table(&self) -> &Reservations {
         &self.reservations
@@ -146,6 +167,7 @@ impl BaselinePolicy {
     /// way. H cannot move until X does, so X goes first: it takes the node over (H
     /// gets it back when X lets go of it) and its release goes on as usual. Not
     /// done head-on (X heading against H): there both would run into each other.
+    /// Nor while a robot stands on a node too close to the one X would go to (S183).
     fn go_first(&mut self, fleet: &Fleet) {
         let states = fleet.states;
         for i in 0..self.robots.len() {
@@ -161,6 +183,10 @@ impl BaselinePolicy {
             else {
                 continue;
             };
+            // a robot standing too close to that node cannot be gone around (S183)
+            if self.stands_too_close(i, edge).is_some() {
+                continue;
+            }
             // X waits for the node, or for an edge whose swept area overlaps the one
             // of its next edge (swept-area reservation): the holder is H
             let all_node_holder = self.reservations.node_holder(node).filter(|&h| h != i);
@@ -354,6 +380,14 @@ impl BaselinePolicy {
         }
     }
 
+    /// The robot standing on a node too close to the node edge `edge` ends at for
+    /// robot `robot` to go there (node-node conflict).
+    fn stands_too_close(&self, robot: usize, edge: EdgeIdx) -> Option<usize> {
+        self.conflicts
+            .as_ref()?
+            .standing_blocker(&self.standing, &self.robot_types, robot, edge)
+    }
+
     /// Does robot `x` stand in the way of robot `h`: on the area `h` covers, its
     /// body widened by the protective field's side margin, from where it is along
     /// its released route up to `until` (a node, or the end of an edge)?
@@ -433,6 +467,7 @@ impl TrafficPolicy for BaselinePolicy {
         self.robot_types = self.robots.iter().map(|r| r.type_idx).collect();
         self.blocked_seconds = vec![0.0; self.robots.len()];
         self.still_seconds = vec![0.0; self.robots.len()];
+        self.standing = vec![None; self.robots.len()];
         self.zone_grants = setup.zones.cloned().map(ZoneGrants::new);
     }
 
@@ -442,6 +477,14 @@ impl TrafficPolicy for BaselinePolicy {
 
     fn node_conflicts(&mut self, nodes: &[NodeConflictInput]) {
         self.set_node_conflicts(nodes);
+    }
+
+    fn node_node_conflicts(&mut self, nodes: &[NodeNodeConflictInput]) {
+        self.set_node_node_conflicts(nodes);
+    }
+
+    fn cycle_start(&mut self, fleet: &Fleet) {
+        self.standing = fleet.states.iter().map(|s| self.node_of(s)).collect();
     }
 
     fn place(&mut self, ask: &Ask) -> Release {
@@ -462,6 +505,7 @@ impl TrafficPolicy for BaselinePolicy {
             ask.limit,
             swept,
             None,
+            &self.standing,
         );
         Release {
             through,
@@ -519,7 +563,16 @@ impl TrafficPolicy for BaselinePolicy {
             .as_ref()
             .map(|c| (c, self.robot_types.as_slice()));
         let waived = self.waived.get(&i).copied();
-        let rt = reserve_up_to(&mut self.reservations, plan, i, from, limit, swept, waived);
+        let rt = reserve_up_to(
+            &mut self.reservations,
+            plan,
+            i,
+            from,
+            limit,
+            swept,
+            waived,
+            &self.standing,
+        );
         if rt > from {
             self.waived.remove(&i);
         }
@@ -623,8 +676,8 @@ impl TrafficPolicy for BaselinePolicy {
     }
 
     // the first of: who holds the next node, who holds the edge to it, who holds an
-    // edge whose swept area meets it, who is on the other side of a node-edge
-    // conflict (the checks of `reserve_up_to`)
+    // edge whose swept area meets it, who is on the other side of a node-edge or
+    // node-node conflict (the checks of `reserve_up_to`)
     fn blocker(&self, robot: usize, route: &Plan, released_through: usize) -> Option<usize> {
         let &edge = route.edges.get(released_through)?;
         let &node = route.nodes.get(released_through + 1)?;
@@ -632,11 +685,12 @@ impl TrafficPolicy for BaselinePolicy {
         other(self.reservations.node_holder(node))
             .or_else(|| other(self.reservations.edge_holder(edge)))
             .or_else(|| {
-                // (a robot that went first is let onto this edge despite a conflict)
-                let table = self
-                    .conflicts
-                    .as_ref()
-                    .filter(|_| self.waived.get(&robot) != Some(&edge))?;
+                // (a robot that went first is let onto this edge despite a conflict,
+                // but not while a robot stands too close to its end node)
+                if self.waived.get(&robot) == Some(&edge) {
+                    return self.stands_too_close(robot, edge);
+                }
+                let table = self.conflicts.as_ref()?;
                 let (held, types) = (&self.reservations, &self.robot_types);
                 table
                     .blocker(held, types, robot, edge)
@@ -813,9 +867,11 @@ fn angle_between(a: f64, b: f64) -> f64 {
 
 /// Reserve plan nodes `from + 1 ..= wanted` for `robot`, in order, each together
 /// with the edge leading to it; stop at the first one somebody else holds, or whose
-/// edge conflicts with an edge another robot holds (`swept`: the conflict table and
-/// the type of each robot). Returns the index of the last node now released (`from`
-/// if none).
+/// edge or end node conflicts with what another robot holds (`swept`: the conflict
+/// table and the type of each robot). On the `waived` edge only a robot standing too
+/// close to its end node stops it (`standing`: the node each robot stands on).
+/// Returns the index of the last node now released (`from` if none).
+#[allow(clippy::too_many_arguments)]
 fn reserve_up_to(
     reservations: &mut Reservations,
     plan: &Plan,
@@ -824,13 +880,19 @@ fn reserve_up_to(
     wanted: usize,
     swept: Option<(&ConflictTable, &[usize])>,
     waived: Option<EdgeIdx>,
+    standing: &[Option<NodeIdx>],
 ) -> usize {
     let mut rt = from;
     while rt < wanted {
         let e = plan.edges[rt];
-        if waived != Some(e)
-            && swept.is_some_and(|(table, types)| table.blocks(reservations, types, robot, e))
-        {
+        let kept = swept.is_some_and(|(table, types)| {
+            if waived == Some(e) {
+                table.standing_blocker(standing, types, robot, e).is_some()
+            } else {
+                table.blocks(reservations, types, robot, e)
+            }
+        });
+        if kept {
             break;
         }
         if !reservations.reserve_step(e, plan.nodes[rt + 1], robot) {
@@ -951,6 +1013,224 @@ mod tests {
     #[test]
     fn a_robot_beside_the_way_does_not_go_first() {
         assert!(!x_goes_first((1.8, 2.0)));
+    }
+
+    /// Node-node conflicts and go-first (S183). H stands on A (heading east),
+    /// released to C through B; X, in H's way on a side road to B, waits for B; S
+    /// holds E and is at `s_at`. `pair` are two nodes too close for a robot on each.
+    /// Returns how far X is released after some cycles of go-first, and who holds B.
+    fn go_first_beside_a_close_node(
+        pair: (&str, &str),
+        s_at: (f64, f64),
+    ) -> (usize, Option<usize>) {
+        let g = test_graph::graph(
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 3.0, 0.0),
+                ("C", 6.0, 0.0),
+                ("D", 1.8, 0.85),
+                ("E", 3.0, 1.0),
+            ],
+            &[("A", "B"), ("B", "C"), ("D", "B")],
+        );
+        let n = |id: &str| g.node_idx(id).unwrap();
+        let h_route = Plan::new(&g, n("A"), vec![0, 1]);
+        let x_route = Plan::new(&g, n("D"), vec![2, 1]);
+        let robot = |serial: &str| PolicyRobot {
+            id: RobotId::new("ACME", serial),
+            series: "X1".into(),
+            type_idx: 0,
+            shape: Shape::Circle {
+                cx: 0.0,
+                cy: 0.0,
+                radius: 0.4,
+            },
+            omnidirectional: false,
+        };
+        let mut policy = BaselinePolicy::new(&g);
+        policy.start(&Setup {
+            graph: &g,
+            types: &["ACME/X1".to_string()],
+            robots: &[robot("H"), robot("X"), robot("S")],
+            zones: None,
+        });
+        policy.set_conflicts(&[ConflictInput {
+            type_a: "ACME/X1".into(),
+            type_b: "ACME/X1".into(),
+            edges: vec![],
+        }]);
+        policy.set_node_node_conflicts(&[NodeNodeConflictInput {
+            type_a: "ACME/X1".into(),
+            type_b: "ACME/X1".into(),
+            pairs: vec![(pair.0.into(), pair.1.into())],
+        }]);
+        let at = |x: f64, y: f64, theta: f64| {
+            let mut state = standing();
+            state.mobile_robot_position = serde_json::from_str(&format!(
+                r#"{{"x":{x},"y":{y},"theta":{theta},"mapId":"M","localized":true}}"#
+            ))
+            .unwrap();
+            state
+        };
+        let heading = (-0.85f64).atan2(3.0 - 1.8);
+        let states = [
+            at(0.0, 0.0, 0.0),
+            at(1.8, 0.85, heading),
+            at(s_at.0, s_at.1, 0.0),
+        ];
+        let view = |route, released_through| {
+            Some(RouteView {
+                route,
+                released_through,
+                cancelling: false,
+            })
+        };
+        // a question about one of the two routes, from node 0
+        fn ask<'a>(
+            states: &'a [State],
+            route: &'a Plan,
+            robot: usize,
+            (released_through, limit): (usize, usize),
+            elapsed: f64,
+        ) -> Ask<'a> {
+            Ask {
+                robot,
+                state: &states[robot],
+                route,
+                at: 0,
+                released_through,
+                limit,
+                elapsed,
+            }
+        }
+        let routes = [view(&h_route, 2), view(&x_route, 0), None];
+        fn fleet<'a>(states: &'a [State], routes: &'a [Option<RouteView<'a>>]) -> Fleet<'a> {
+            Fleet {
+                tick: 0,
+                elapsed: 0.05,
+                states,
+                routes,
+            }
+        }
+        policy.cycle_start(&fleet(&states, &routes));
+        assert_eq!(
+            policy
+                .place(&ask(&states, &h_route, 0, (0, 2), 0.0))
+                .through,
+            2
+        );
+        // then S holds E (it stands there, or is on its way to it)
+        policy.idle(2, n("E"));
+        assert_eq!(
+            policy
+                .place(&ask(&states, &x_route, 1, (0, 0), 0.0))
+                .through,
+            0
+        );
+        // H has stood long enough with its way released, X has waited long enough
+        policy.release(&ask(
+            &states,
+            &h_route,
+            0,
+            (2, 2),
+            GIVE_WAY_HOLD_SECONDS + 1.0,
+        ));
+        let mut elapsed = GIVE_WAY_AFTER_SECONDS + 1.0;
+        let mut x = 0;
+        // two cycles: go-first may first take B over, then let X past a conflict
+        for _ in 0..3 {
+            x = policy
+                .release(&ask(&states, &x_route, 1, (0, 1), elapsed))
+                .through;
+            if x > 0 {
+                break;
+            }
+            elapsed = 0.05;
+            policy.after_releases(&fleet(&states, &routes));
+        }
+        (x, policy.node_holder(n("B")))
+    }
+
+    /// S stands on E, too close to B: X is not let go first, B stays H's.
+    #[test]
+    fn go_first_does_not_pass_a_robot_standing_too_close() {
+        let outcome = go_first_beside_a_close_node(("B", "E"), (3.0, 1.0));
+        assert_eq!(outcome, (0, Some(0)));
+    }
+
+    /// The same layout with S off its node (it only holds E): the node B goes to X
+    /// (go-first), but S is not H, so its conflict still keeps X.
+    #[test]
+    fn go_first_waits_for_a_third_robot_that_only_reserved_a_close_node() {
+        let outcome = go_first_beside_a_close_node(("B", "E"), (3.0, 3.0));
+        assert_eq!(outcome, (0, Some(1)));
+    }
+
+    /// The conflicting node C is only reserved (for H, which stands before it):
+    /// go-first skips the check, like the other conflicts.
+    #[test]
+    fn go_first_skips_a_node_node_conflict_with_a_reserved_node() {
+        let outcome = go_first_beside_a_close_node(("B", "C"), (3.0, 3.0));
+        assert_eq!(outcome, (1, Some(1)));
+    }
+
+    /// A go-first waiver for X's edge does not let it past a robot that has come to
+    /// stand too close; that robot is named; X goes on when it has left.
+    #[test]
+    fn a_waived_edge_still_waits_for_a_robot_standing_too_close() {
+        let g = test_graph::graph(
+            &[("A", 0.0, 0.0), ("B", 3.0, 0.0), ("E", 3.0, 1.0)],
+            &[("A", "B")],
+        );
+        let n = |id: &str| g.node_idx(id).unwrap();
+        let route = Plan::new(&g, n("A"), vec![0]);
+        let robot = |serial: &str| PolicyRobot {
+            id: RobotId::new("ACME", serial),
+            series: "X1".into(),
+            type_idx: 0,
+            shape: Shape::Circle {
+                cx: 0.0,
+                cy: 0.0,
+                radius: 0.4,
+            },
+            omnidirectional: false,
+        };
+        let mut policy = BaselinePolicy::new(&g);
+        policy.start(&Setup {
+            graph: &g,
+            types: &["ACME/X1".to_string()],
+            robots: &[robot("X"), robot("S")],
+            zones: None,
+        });
+        policy.set_conflicts(&[ConflictInput {
+            type_a: "ACME/X1".into(),
+            type_b: "ACME/X1".into(),
+            edges: vec![],
+        }]);
+        policy.set_node_node_conflicts(&[NodeNodeConflictInput {
+            type_a: "ACME/X1".into(),
+            type_b: "ACME/X1".into(),
+            pairs: vec![("B".into(), "E".into())],
+        }]);
+        let state = standing();
+        let ask = Ask {
+            robot: 0,
+            state: &state,
+            route: &route,
+            at: 0,
+            released_through: 0,
+            limit: 1,
+            elapsed: 0.05,
+        };
+        policy.waived.insert(0, 0);
+        policy.standing = vec![Some(n("A")), Some(n("E"))];
+        assert_eq!(policy.release(&ask).through, 0);
+        assert_eq!(policy.blocker(0, &route, 0), Some(1));
+        // S has left E but still holds it: the waiver skips that
+        policy.idle(1, n("E"));
+        policy.standing[1] = None;
+        assert_eq!(policy.blocker(0, &route, 0), None);
+        assert_eq!(policy.release(&ask).through, 1);
     }
 
     /// A robot that turns on the spot, or drives sideways, with its way released is

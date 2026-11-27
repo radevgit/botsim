@@ -9,7 +9,7 @@
 //!
 //! Not yet: deadlocks, controller time per step.
 
-use botsim_baseline::conflicts::{ConflictInput, NodeConflictInput};
+use botsim_baseline::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
 use botsim_baseline::controller::{ChargePolicy, Controller};
 use botsim_baseline::policy::TrafficPolicy;
 use botsim_core::jobs::Job;
@@ -342,9 +342,10 @@ fn run_controller<P: TrafficPolicy>(
         if scenario.conflict_reservation
             && let Some(path) = &scenario.source
         {
-            let (edges, nodes) = conflict_input(scenario, path);
+            let (edges, nodes, node_nodes) = conflict_input(scenario, path);
             c.policy_mut().conflicts(&edges);
             c.policy_mut().node_conflicts(&nodes);
+            c.policy_mut().node_node_conflicts(&node_nodes);
         }
         c
     });
@@ -538,16 +539,21 @@ fn run_controller<P: TrafficPolicy>(
     })
 }
 
+/// What the baseline reads of the conflict map: edge pairs, node-edge pairs and
+/// node-node pairs.
+type ConflictLists = (
+    Vec<ConflictInput>,
+    Vec<NodeConflictInput>,
+    Vec<NodeNodeConflictInput>,
+);
+
 /// The conflict map of the layout for the fleet (`botsim-sweep`): edge pairs whose
 /// swept outlines overlap or come nearer than the scenario's `conflict_clearance`
-/// and that have no node in common (the node reservation covers the others), and
-/// nodes against edges. Empty if the scenario's files cannot be read again or the
-/// layout is not a graph.
-fn conflict_input(
-    scenario: &Scenario,
-    scenario_file: &std::path::Path,
-) -> (Vec<ConflictInput>, Vec<NodeConflictInput>) {
-    let none = (Vec::new(), Vec::new());
+/// and that have no node in common (the node reservation covers the others), nodes
+/// against edges, and all pairs of nodes too close for a robot on each. Empty if the
+/// scenario's files cannot be read again or the layout is not a graph.
+fn conflict_input(scenario: &Scenario, scenario_file: &std::path::Path) -> ConflictLists {
+    let none = (Vec::new(), Vec::new(), Vec::new());
     let base = scenario_file.parent().unwrap_or(std::path::Path::new("."));
     let read = |path: &std::path::Path| std::fs::read_to_string(path).ok();
     let Some(lif) = read(&base.join(&scenario.lif))
@@ -605,5 +611,19 @@ fn conflict_input(
                 .collect(),
         })
         .collect();
-    (edges, nodes)
+    // two robots on two nodes
+    let node_nodes = map
+        .node_node_pairs
+        .into_iter()
+        .map(|p| NodeNodeConflictInput {
+            type_a: p.type_a,
+            type_b: p.type_b,
+            pairs: p
+                .conflicts
+                .into_iter()
+                .map(|c| (c.node_a, c.node_b))
+                .collect(),
+        })
+        .collect();
+    (edges, nodes, node_nodes)
 }

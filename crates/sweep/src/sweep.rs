@@ -481,6 +481,14 @@ fn turn_arcs(from: f64, to: f64, allowed: Rotation) -> Vec<(f64, f64)> {
         .collect()
 }
 
+/// The body of a robot of type `t` standing on a node in one heading (radians),
+/// without the turns of [`node_bodies`]: e.g. as it arrived on an edge. `None`
+/// for a node the graph does not have.
+pub fn standing_body(graph: &Graph, node: usize, t: &TypeRef, heading: f64) -> Option<Body> {
+    let n = graph.nodes.get(node)?;
+    Some(body_at(&t.shape, t.kinematics, n.x, n.y, heading))
+}
+
 /// How far the farthest point of the body moves per radian when the robot turns
 /// about its kinematic center (m); for a circle, only its centre moves.
 fn turning_radius(shape: &Shape) -> f64 {
