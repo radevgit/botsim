@@ -1,76 +1,12 @@
 # botsim
 
-Headless simulator for mixed robot fleets. Robots of different sizes and types
-execute VDA 5050 orders on a LIF track layout, so that a controller can be
-measured on throughput, waiting, deadlocks and collisions.
+Headless simulator for mixed robot fleets: robots execute VDA 5050 orders on a
+LIF layout, and a controller is measured on throughput, waiting, deadlocks and
+collisions. Work in progress.
 
-Status: work in progress.
+[![botsim warehouse simulation](https://img.youtube.com/vi/wbVRCgwhrG8/maxresdefault.jpg)](https://www.youtube.com/watch?v=wbVRCgwhrG8)
 
-## Try it
-
-```sh
-cargo run --release -p botsim -- scenarios/ring_jobs.toml
-```
-
-It runs the scenario to its end and prints a JSON summary (jobs, throughput,
-waiting, collisions, where each robot ended). The same file always gives the
-same output. Edit `scenarios/ring_jobs.toml` to change robots, jobs and seed.
-Add `--timing` (before or after the file name) to also get the real time the
-controller needed per step; that is the only thing that differs between runs.
-
-`scenarios/mixed_fleet.toml` runs two robot types on one layout (a small carrier
-and a larger, slower forklift; the layout says which type may use which edge
-and at what speed).
-
-`scenarios/lift_jobs.toml` is another example: two floors, one lift and jobs
-between the floors (`cargo run --release -p botsim -- scenarios/lift_jobs.toml`).
-
-## Check a layout
-
-```sh
-cargo run --release -p botsim-check -- --geometry scenarios/warehouse4.geometry.json scenarios/warehouse4.toml
-```
-
-Static checks of the LIF layout for the fleet of a scenario, without running a
-simulation. Prints findings as text; add `--json` for JSON, and
-`--conflicts conflicts.json` to also write the conflict map (which pairs of edges
-two robots must not use at the same time, per pair of robot types). Exit code 0: no
-errors, 1: errors found, 2: usage or load error. `--geometry` is optional: with
-the geometry file the swept robot outlines are also checked against walls, racks
-and shelves.
-
-## Record a run and watch it
-
-```sh
-# 1. run and record (a snapshot every 0.5 s; the geometry file draws walls and racks)
-cargo run --release -p botsim -- --record data/warehouse4.jsonl --record-interval 0.5 \
-    --geometry scenarios/warehouse4.geometry.json scenarios/warehouse4.toml
-
-# 2. watch it in a window
-cargo run --release -p botsim-viewer -- data/warehouse4.jsonl
-
-# the same, with the findings of the layout check drawn on the map
-cargo run --release -p botsim-viewer -- --check scenarios/warehouse4.toml data/warehouse4.jsonl
-
-# 3. the use of the roads, as text (busiest edges, waiting, groups of roads)
-cargo run --release -p botsim-viewer --example usage_report -- data/warehouse4.jsonl --to 600
-
-# 4. a video: PNG frames, then ffmpeg (see crates/export)
-cargo run --release -p botsim-export -- data/warehouse4.jsonl frames --speed 10
-```
-
-The viewer (`botsim-viewer`) plays, pauses and scrubs the recording and shows what a
-robot is doing when you click it (wheel zooms, drag moves, double click shows all).
-With `--check <scenario.toml>` it runs the layout checker in the background and
-draws each finding as a ring (red error, orange warning, blue info; click one for
-the text), with one box for each severity and the pairs of edges that overlap
-without a common node as lines. The **Usage** box shows only a heat map of how long
-each road was reserved and where robots waited, for a window of time ("from" and
-"to"); with `<scenario>.groups.json` next to the scenario (the generated warehouse
-scenarios have one) it also lists the use by group of roads. A run that freezes
-says most about its first minutes, so use the window. The time line at the bottom is
-a stacked histogram of the robot statuses over time (one colour for each, as in the table
-at the right) and is also the scrubber: click or drag on it to jump, the line is now.
+A longer run on a more complex warehouse: [video, 6:40](https://www.youtube.com/watch?v=WVp4MgZwQKg)
 
 ## Workspace
 
@@ -91,6 +27,24 @@ botsim/
 ```
 
 Each crate's package is `botsim-<folder>`, except the runner, which is `botsim`.
+
+Details: [run](crates/runner/README.md), [check](crates/check/README.md),
+[conflict map](crates/sweep/README.md), [viewer](crates/viewer/README.md),
+[video](crates/export/README.md).
+
+## Quick start
+
+```sh
+# run a scenario, print a JSON summary
+cargo run --release -p botsim -- scenarios/ring_jobs.toml
+
+# check a layout without simulating
+cargo run --release -p botsim-check -- scenarios/warehouse4.toml
+
+# record a run and watch it
+cargo run --release -p botsim -- --record run.jsonl scenarios/warehouse.toml
+cargo run --release -p botsim-viewer -- run.jsonl
+```
 
 ## Licence
 

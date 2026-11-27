@@ -645,7 +645,8 @@ impl eframe::App for ViewerApp {
             .size_range(200.0..=900.0)
             .show(ui, |ui| {
                 // at the bottom: every status a robot can have, and how many robots have it now
-                egui::Panel::bottom("status_counts").show(ui, |ui| {
+                let height = ui.available_height();
+                let table = egui::Panel::bottom("status_counts").show(ui, |ui| {
                     ui.add_space(4.0);
                     ui.strong(format!("Statuses at {time:.0} s"));
                     egui::Grid::new("status_grid")
@@ -670,53 +671,70 @@ impl eframe::App for ViewerApp {
                             ui.end_row();
                         });
                 });
-                if let (true, Some(u)) = (self.show_heat, &self.usage) {
-                    ui.add_space(8.0);
-                    ui.strong("Use of the roads");
-                    ui.label(format!(
-                        "reserved share of {:.0} s; busiest edge {:.0} %",
-                        u.duration,
-                        100.0 * u.max_edge_share()
-                    ));
-                    if !self.groups.is_empty() {
-                        ui.label("by group of roads (mean share reserved):");
-                        for r in group_table(&self.recording.layout, u, &self.groups) {
+                // the rest scrolls in the room above the table (a long route or a long list
+                // would be drawn over it); no smallest height, so that a low window does not
+                // push it into the table either, and nothing at all if there is no room for a
+                // line. The room is the height of the panel less that of the table: a table
+                // higher than the window leaves none (egui gives it the whole height; its
+                // top is then not where it is drawn).
+                let room = height - table.response.rect.height();
+                if room < ui.text_style_height(&egui::TextStyle::Body) {
+                    return;
+                }
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .min_scrolled_height(0.0)
+                    .max_height(room)
+                    .show(ui, |ui| {
+                        if let (true, Some(u)) = (self.show_heat, &self.usage) {
+                            ui.add_space(8.0);
+                            ui.strong("Use of the roads");
                             ui.label(format!(
-                                "  {}  {:.1} %  ({} edges, busiest {:.0} %)",
-                                r.name,
-                                100.0 * r.mean_share,
-                                r.edges,
-                                100.0 * r.max_share
+                                "reserved share of {:.0} s; busiest edge {:.0} %",
+                                u.duration,
+                                100.0 * u.max_edge_share()
                             ));
+                            if !self.groups.is_empty() {
+                                ui.label("by group of roads (mean share reserved):");
+                                for r in group_table(&self.recording.layout, u, &self.groups) {
+                                    ui.label(format!(
+                                        "  {}  {:.1} %  ({} edges, busiest {:.0} %)",
+                                        r.name,
+                                        100.0 * r.mean_share,
+                                        r.edges,
+                                        100.0 * r.max_share
+                                    ));
+                                }
+                            }
+                            ui.label("busiest edges:");
+                            for (id, share) in busiest_edges(&self.recording.layout, u, 15) {
+                                ui.label(format!("  {id}  {:.0} %", 100.0 * share));
+                            }
+                            ui.label("most waiting (robot-seconds / run):");
+                            for (id, share) in most_waited_nodes(&self.recording.layout, u, 10) {
+                                ui.label(format!("  {id}  {:.2}", share));
+                            }
+                            ui.separator();
                         }
-                    }
-                    ui.label("busiest edges:");
-                    for (id, share) in busiest_edges(&self.recording.layout, u, 15) {
-                        ui.label(format!("  {id}  {:.0} %", 100.0 * share));
-                    }
-                    ui.label("most waiting (robot-seconds / run):");
-                    for (id, share) in most_waited_nodes(&self.recording.layout, u, 10) {
-                        ui.label(format!("  {id}  {:.2}", share));
-                    }
-                    ui.separator();
-                }
-                if let Some(f) = self.selected_finding.and_then(|i| self.findings.get(i)) {
-                    ui.add_space(8.0);
-                    ui.strong(format!("{} [{}]", f.level, f.check));
-                    if let Some(r) = &f.robot_type {
-                        ui.label(format!("robot type: {r}"));
-                    }
-                    ui.label(&f.text);
-                    let places: Vec<&str> = f.places.iter().map(|p| p.id.as_str()).collect();
-                    ui.label(format!("{} place(s): {}", places.len(), places.join(", ")));
-                    ui.separator();
-                }
-                robot_panel(
-                    ui,
-                    &self.recording.layout,
-                    &snapshot,
-                    self.selected.as_deref(),
-                );
+                        if let Some(f) = self.selected_finding.and_then(|i| self.findings.get(i)) {
+                            ui.add_space(8.0);
+                            ui.strong(format!("{} [{}]", f.level, f.check));
+                            if let Some(r) = &f.robot_type {
+                                ui.label(format!("robot type: {r}"));
+                            }
+                            ui.label(&f.text);
+                            let places: Vec<&str> =
+                                f.places.iter().map(|p| p.id.as_str()).collect();
+                            ui.label(format!("{} place(s): {}", places.len(), places.join(", ")));
+                            ui.separator();
+                        }
+                        robot_panel(
+                            ui,
+                            &self.recording.layout,
+                            &snapshot,
+                            self.selected.as_deref(),
+                        );
+                    });
             });
 
         // the picture, for the size of what is left of the window

@@ -9,6 +9,13 @@ cargo run --release -p botsim-check -- --geometry scenarios/warehouse4.geometry.
 cargo run --release -p botsim-check -- --json --conflicts conflicts.json scenarios/warehouse4.toml
 ```
 
+Findings are printed as text, or as JSON with `--json`. `--conflicts <file>` also
+writes the conflict map: which pairs of edges two robots must not use at the same
+time, per pair of robot types. `--geometry <file>` also checks the swept robot
+outlines against walls, racks and shelves.
+
+Exit code: 0 no errors, 1 errors found, 2 usage or load error.
+
 ```rust
 let report = botsim_check::run_scenario(path, &botsim_check::Options::default())?;
 // report.findings, report.conflict_map, report.to_json()
@@ -37,16 +44,20 @@ of the fleet (types of the scenario's factsheets), on the whole LIF file.
 | `spacing` | edges whose end nodes are closer than the longest allowed robot plus its protective field (from the factsheet's safety envelope, else the simulator's 0.3 m) | warning | G3 |
 | `length` | straight edges longer than 2.5 times the longest allowed robot (a convoy cannot form); the text gives the share of the road | warning | G4 |
 | `conflict` | pairs of edges **without a common node** whose swept robot outlines overlap, per pair of robot types (including a type with itself); overlaps shallower than `min_overlap` (0.05 m) are left out | warning | check 5, G5, G6, G11 |
+| `conflict` (node-edge) | a robot **standing on a node** (with the heading of an edge to or from it) against an edge that does not touch that node, driven by another robot; per ordered pair of robot types; the finding lists the nodes and the edges as places and the deepest case in the text | warning | check 5, G6 |
 | `clearance` | needs the geometry file (`--geometry`, or `Options::geometry` / `Inputs::geometry`): the swept outline of a robot type against walls (polyline segments), racks and shelves (filled polygons) on the same map; station outlines and `other` shapes are not obstacles; the finding gives the deepest overlap (m), hits not deeper than 1 mm or than `min_overlap` (0.05 m) are left out; shapes on a map the layout does not have are ignored (info) | warning / info | check 4, G9 (partly) |
-
 | `exits` | nodes of a type's biggest connected set that have only one edge the type may drive out of them (a held-up robot cannot be re-routed); count and share in the text, the nodes as places | info | G12 |
 | `exit-block` | needs the conflict map: a **place** (a station's interaction node, or a dead-end node with one neighbour) with one edge out, whose **way out** (the only edge that may follow, up to the first node with two or more choices) a robot can block from a node where it **waits** for the place: both can stand there at once (as they arrived), the node is on the way or conflicts with it in the map, and on a shortest way from it to the place the next edge or its end node conflicts with the robot on the place, or ends at it. One finding per layout and pair of types. It names the risk of a deadlock; whether a controller lets a robot wait there it cannot say | warning | brief U6 |
 | `loop` | closed one-way loops (simple cycles of drivable edges, turn rules apply, up to 150 m, two-way roads excluded) that hold fewer robots (length / (robot length + protective field)) than the scenario has robots of that type; needs a scenario (robot counts) | warning | G10 |
 | `shelving` | needs the geometry file: an interaction node of a station of type `rack` or `shelf` with no rack or shelf within 2.5 m on its map | warning | G9 |
 | `corner` | a node within 3 m of the corner of a turn arc (an edge with a trajectory turning 25 to 100 degrees; the corner is where the tangents at its two ends meet) that is not the arc's start or end; a node exactly at the corner (< 5 cm) is the junction's own corner node and not reported (that case is G6, found by the node-edge `conflict`). `warning` only if a robot standing on the node overlaps the swept outline of that arc (a node-edge conflict in the conflict map), else `info` (also `info` without a conflict map) | warning / info | G6b, viewer request |
 | `door` | scenario `[[door]]`: edge missing in the layout (error); a robot type wider than `passage_width` on a door edge it may drive (warning). `[[lift]]`: floor that is not a map, stop node missing or not on a floor of the lift (error). The cabin size is not in the scenario, so it is not checked | error / warning | check 3 |
-| | the two kinds of `conflict` finding (edge-edge and node-edge) are **classified**: *near a junction* (a diverge or merge: one node of one edge and one node of the other are at most 2 edges apart in the graph, or closer than the longer of the two robots plus its protective field) is `info`, with the junction nodes as places; the rest (*parallel*) is `warning`. In the map: `junction_nodes` on a conflict | info / warning | viewer request |
-| `conflict` (node-edge) | a robot **standing on a node** (with the heading of an edge to or from it) against an edge that does not touch that node, driven by another robot; per ordered pair of robot types; the finding lists the nodes and the edges as places and the deepest case in the text | warning | check 5, G6 |
+
+Both kinds of `conflict` finding (edge-edge and node-edge) are classified. *Near a
+junction* (a diverge or merge: a node of one edge and a node of the other are at most
+2 edges apart in the graph, or closer than the longer of the two robots plus its
+protective field) is `info`, with the junction nodes as places; the rest (*parallel*)
+is `warning`. In the map, a conflict then has `junction_nodes`.
 
 The swept outlines and the conflict map are computed by the library crate `botsim-sweep`
 (`crates/sweep`); the checker turns the map into findings. `Options::clearance` (default
