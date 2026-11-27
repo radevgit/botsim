@@ -161,6 +161,44 @@ pub(crate) fn groups_where(
     Against::new(spots, b)?.groups_where(a, live)
 }
 
+/// The one group of [`groups_where`] that holds the pair `at`; empty if that is
+/// not a conflict `live` keeps. Only the group is walked, not the whole routes.
+pub(crate) fn group_where(
+    spots: &Spots,
+    a: &Route,
+    b: &Route,
+    at: (usize, usize),
+    live: impl Fn(usize, usize) -> bool,
+) -> Result<Group, UnknownName> {
+    let a = a.numbers(spots)?;
+    let b = b.numbers(spots)?;
+    let open = |p: usize, q: usize| match (a.pieces.get(p), b.pieces.get(q)) {
+        (Some(&x), Some(&y)) => {
+            spots.numbers_conflict(b.type_number, y, a.type_number, x) && live(p, q)
+        }
+        _ => false,
+    };
+    if !open(at.0, at.1) {
+        return Ok(Vec::new());
+    }
+    let mut found = BTreeSet::from([at]);
+    let mut group = vec![at];
+    let mut next = 0;
+    while let Some(&(p, q)) = group.get(next) {
+        next += 1;
+        for p2 in touching(p) {
+            for q2 in touching(q) {
+                if !found.contains(&(p2, q2)) && open(p2, q2) {
+                    found.insert((p2, q2));
+                    group.push((p2, q2));
+                }
+            }
+        }
+    }
+    group.sort_unstable();
+    Ok(group)
+}
+
 /// One route, to find the groups of others against it. Which pieces of a type of
 /// robot conflict with which of the route's is worked out once for the type; then
 /// each piece of another route takes one look-up.

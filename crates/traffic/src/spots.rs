@@ -214,7 +214,7 @@ impl Spots {
         let b = *self.types.get(type_b)?;
         let p = *self.index.get(piece_a)?;
         let q = *self.index.get(piece_b)?;
-        Some(p == q || self.listed.get(&(a, p, b)).is_some_and(|s| s.contains(&q)))
+        Some(self.numbers_conflict(a, p, b, q))
     }
 
     /// Is this `manufacturer/seriesName` in the conflict map's type list?
@@ -246,6 +246,16 @@ impl Spots {
         b: usize,
     ) -> impl Iterator<Item = usize> {
         self.listed.get(&(a, p, b)).into_iter().flatten().copied()
+    }
+
+    /// By their numbers: do piece `p` of type `a` and piece `q` of type `b`
+    /// conflict, being the same or listed against each other?
+    pub(crate) fn numbers_conflict(&self, a: usize, p: usize, b: usize, q: usize) -> bool {
+        p == q
+            || self
+                .listed
+                .get(&(a, p, b))
+                .is_some_and(|listed| listed.contains(&q))
     }
 
     fn add_piece(&mut self, piece: Piece) -> Result<(), SetupError> {

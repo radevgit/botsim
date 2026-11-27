@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 
 use crate::graph::{Before, Pass};
-use crate::groups::{Route, groups_where};
+use crate::groups::{Route, group_where, groups_where};
 use crate::spots::{Piece, Spots};
 use crate::testing::{SMALL, edge_pair, empty_map, lif, route};
 use crate::traffic::{Cancel, NotAdded, Report, Traffic};
@@ -388,6 +388,30 @@ fn random_state(seed: u64) -> State {
         traffic,
         fleet,
     }
+}
+
+/// [`group_where`] walks one group alone: on random routes, with random pairs
+/// left out, it is the group of [`groups_where`] that holds the pair, or none.
+#[test]
+fn one_group_walked_alone_is_the_group_among_all() {
+    let mut with_several = 0;
+    for seed in 1..=CASES {
+        let mut s = random_state(seed);
+        let a = random_route(&mut s.random, &s.nodes, &s.fleet);
+        let b = random_route(&mut s.random, &s.nodes, &s.fleet);
+        let (k, n) = (s.random.below(1000), 2 + s.random.below(9));
+        let live = |p: usize, q: usize| !(7 * p + 13 * q + k).is_multiple_of(n);
+        let all = groups_where(&s.spots, &a, &b, live).expect("known names");
+        with_several += usize::from(all.len() > 1);
+        for p in 0..a.pieces().len() {
+            for q in 0..b.pieces().len() {
+                let alone = group_where(&s.spots, &a, &b, (p, q), live).expect("known names");
+                let among = all.iter().find(|g| g.contains(&(p, q)));
+                assert_eq!(alone, among.cloned().unwrap_or_default(), "seed {seed}");
+            }
+        }
+    }
+    assert!(with_several > 100, "{with_several}");
 }
 
 /// A new robot is added.

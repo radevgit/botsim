@@ -52,7 +52,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::graph::{BadProgress, Before, OrderGraph, Pass, Refused};
-use crate::groups::{Against, Route, UnknownName, groups_where};
+use crate::groups::{Against, Route, UnknownName, group_where, groups_where};
 use crate::spots::{Piece, Spots};
 
 /// "Cannot place this route": what another route should keep clear of.
@@ -636,6 +636,9 @@ impl Traffic {
         // each order of each group once, also if a group holds back with several
         let mut old = BTreeSet::new();
         for order in holding {
+            if old.contains(&order) {
+                continue; // its group is there already
+            }
             let (mine, theirs) = (order.then, order.first);
             let (Some(a), Some(b)) = (self.routes.get(mine.robot), self.routes.get(theirs.robot))
             else {
@@ -660,15 +663,10 @@ impl Traffic {
     fn group_orders(&self, route_a: &Route, route_b: &Route, a: Pass, b: Pass) -> Vec<Before> {
         let pass = |robot, piece| Pass { robot, piece };
         // a pass that is over takes no part in a group
-        let found = groups_where(&self.spots, route_a, route_b, |p, q| {
+        let group = group_where(&self.spots, route_a, route_b, (a.piece, b.piece), |p, q| {
             !self.graph.has_left(pass(a.robot, p)) && !self.graph.has_left(pass(b.robot, q))
         });
         // the routes are in the module, so their names are known
-        let group = found
-            .ok()
-            .into_iter()
-            .flatten()
-            .find(|g| g.contains(&(a.piece, b.piece)));
         group
             .iter()
             .flatten()
