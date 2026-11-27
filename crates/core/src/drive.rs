@@ -210,6 +210,18 @@ pub struct Progress {
     pub actions: Vec<(String, String, ActionStatus)>,
 }
 
+/// See [`Driver::glance`]; the fields mean what they mean in [`Progress`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Glance<'a> {
+    pub last_node: Option<&'a PlanNode>,
+    pub remaining_nodes: &'a [PlanNode],
+    pub remaining_edges: &'a [PlanEdge],
+    pub driving: bool,
+    pub held: bool,
+    /// An action is running (`actionStatus` RUNNING).
+    pub acting: bool,
+}
+
 /// A straight edge copied out of the graph, so the driver needs no graph reference.
 #[derive(Debug, Clone)]
 struct Segment {
@@ -918,18 +930,43 @@ impl Driver {
         Ok(())
     }
 
+    /// The part of [`Driver::progress`] the simulator reads itself every step,
+    /// borrowed instead of copied.
+    pub(crate) fn glance(&self) -> Glance<'_> {
+        let (last_node, remaining_nodes, remaining_edges) = match &self.plan {
+            Some(p) => (
+                p.nodes.get(self.current),
+                p.nodes.get(self.current + 1..).unwrap_or(&[]),
+                p.edges.get(self.current..).unwrap_or(&[]),
+            ),
+            None => (None, &[][..], &[][..]),
+        };
+        let stopped = self.is_stopping() && (self.phase == Phase::Rotating || self.along.v <= 1e-9);
+        Glance {
+            last_node,
+            remaining_nodes,
+            remaining_edges,
+            // a held robot that has come to a halt is not driving. Standing at a
+            // node (Acting, Waiting, Finished) is not driving; turning on the spot
+            // is counted as driving (the drive wheels move)
+            driving: self.is_moving() && !stopped,
+            // held or obstructed, the robot reports a protective field violation
+            held: self.is_held() || self.is_obstructed(),
+            // (the actions still to be triggered are WAITING)
+            acting: self
+                .queue
+                .states()
+                .any(|(_, _, s)| s == ActionStatus::Running),
+        }
+    }
+
     /// What the state message reports about the order and the robot's movement.
     pub fn progress(&self) -> Progress {
-        let (order_id, order_update_id, last_node, nodes, edges) = match &self.plan {
-            Some(p) => (
-                p.order_id.clone(),
-                p.order_update_id,
-                p.nodes.get(self.current).cloned(),
-                p.nodes.get(self.current + 1..).unwrap_or(&[]).to_vec(),
-                p.edges.get(self.current..).unwrap_or(&[]).to_vec(),
-            ),
-            None => (String::new(), 0, None, Vec::new(), Vec::new()),
+        let (order_id, order_update_id) = match &self.plan {
+            Some(p) => (p.order_id.clone(), p.order_update_id),
+            None => (String::new(), 0),
         };
+        let now = self.glance();
 
         // Actions: those queued so far, then those still to be triggered (WAITING).
         let mut actions: Vec<(String, String, ActionStatus)> = self
@@ -946,11 +983,7 @@ impl Driver {
         }
 
         let seg = self.segments.get(self.current);
-        // a held robot that has come to a halt is not driving; held or obstructed,
-        // the robot reports a protective field violation
-        let held = self.is_held() || self.is_obstructed();
         let stopping = self.is_stopping();
-        let stopped = stopping && (self.phase == Phase::Rotating || self.along.v <= 1e-9);
         let (vx, vy, omega) = match (self.phase, seg) {
             (Phase::Rotating, _) if stopping => (0.0, 0.0, 0.0),
             // an omnidirectional robot moves sideways as well: the speed along the
@@ -990,13 +1023,11 @@ impl Driver {
         Progress {
             order_id,
             order_update_id,
-            last_node,
-            remaining_nodes: nodes,
-            remaining_edges: edges,
-            // standing at a node (Acting, Waiting, Finished) is not driving; turning on
-            // the spot is counted as driving (the drive wheels move)
-            driving: self.is_moving() && !stopped,
-            held,
+            last_node: now.last_node.cloned(),
+            remaining_nodes: now.remaining_nodes.to_vec(),
+            remaining_edges: now.remaining_edges.to_vec(),
+            driving: now.driving,
+            held: now.held,
             pose: self.pose,
             vx,
             vy,

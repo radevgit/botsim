@@ -32,11 +32,11 @@ use crate::deadlock::{DEFAULT_TIMEOUT_SECONDS, DeadlockDetector};
 use crate::disturbances::{DisturbanceError, StopGenerator, StopSpec, check_duration_variation};
 use crate::door::{Door, DoorError, DoorSpec, DoorStatus};
 use crate::drive::Phase;
-use crate::drive::{DriveError, Pose};
+use crate::drive::{DriveError, Glance, Pose};
 use crate::graph::{EdgeIdx, Graph, NodeIdx};
 use crate::jobs::Rng;
 use crate::lift::{Lift, LiftError, LiftSpec, LiftStatus};
-use crate::metrics::is_waiting;
+use crate::metrics::stands_waiting;
 use crate::observer::{Blocking, Observer, Reservation, RobotSnapshot, RobotStatus, Snapshot};
 use crate::robot::{Reception, Robot, START_NODE_TOLERANCE};
 use crate::spec::RobotSpec;
@@ -1102,14 +1102,14 @@ impl World {
         self.waits.get(i).copied().flatten().filter(|_| !own_stop)
     }
 
-    /// Where robot `i`, with the state `state`, stands: on the node it was at or is
+    /// Where robot `i`, with the progress `now`, stands: on the node it was at or is
     /// going to if it is within [`START_NODE_TOLERANCE`] of it, else on the edge it
-    /// drives; `None` if the state names neither.
-    fn place_of(&self, i: usize, state: &State) -> Option<Place> {
+    /// drives; `None` if its order names neither.
+    fn place_of(&self, i: usize, now: &Glance) -> Option<Place> {
         let p = self.robots[i].robot.pose();
-        let last = self.graph.node_idx(&state.last_node_id);
-        let next = state
-            .node_states
+        let last = now.last_node.and_then(|n| self.graph.node_idx(&n.node_id));
+        let next = now
+            .remaining_nodes
             .first()
             .and_then(|n| self.graph.node_idx(&n.node_id));
         let on = [last, next].into_iter().flatten().find(|&n| {
@@ -1117,7 +1117,7 @@ impl World {
             node.map == p.map && (p.x - node.x).hypot(p.y - node.y) <= START_NODE_TOLERANCE
         });
         let edge = || {
-            let first = state.edge_states.first()?;
+            let first = now.remaining_edges.first()?;
             self.graph.edge_idx(&first.edge_id)
         };
         on.map(Place::Node)
@@ -1258,10 +1258,10 @@ impl World {
             .map(|(_, j)| j)
     }
 
-    /// Who waits, why and for whom (the rule is in [`crate::waiting`]), from the
-    /// robots' state messages; then look for deadlocks among these waits.
+    /// Who waits, why and for whom (the rule is in [`crate::waiting`]), from what
+    /// the robots' state messages report, read from the robots directly (no
+    /// message is built); then look for deadlocks among these waits.
     fn check_deadlocks(&mut self) {
-        let header = plain_header();
         // a robot in a lift cabin stands on no node (map = none)
         let poses: Vec<Pose> = self
             .robots
@@ -1284,16 +1284,12 @@ impl World {
                 .or_default()
                 .push(j);
         }
-        let states: Vec<_> = self
-            .robots
-            .iter()
-            .map(|e| e.robot.state(&self.graph, &header))
-            .collect();
+        let glances: Vec<_> = self.robots.iter().map(|e| e.robot.glance()).collect();
         // Who holds a node: the robot that has it released ahead of it (a reserved
         // node, S73). The lowest index if several do.
         let mut released_by: HashMap<&str, usize> = HashMap::new();
-        for (j, s) in states.iter().enumerate().rev() {
-            for n in s.node_states.iter().filter(|n| n.released) {
+        for (j, g) in glances.iter().enumerate().rev() {
+            for n in g.remaining_nodes.iter().filter(|n| n.released) {
                 released_by.insert(n.node_id.as_str(), j);
             }
         }
@@ -1302,7 +1298,7 @@ impl World {
             .iter()
             .enumerate()
             .map(|(i, e)| {
-                let state = &states[i];
+                let now = &glances[i];
                 // a robot stopped by its protective field waits for the robot in the
                 // field (S54, S76)
                 if e.robot.is_obstructed()
@@ -1313,8 +1309,8 @@ impl World {
                         blocker: Some(j),
                     });
                 }
-                let next = state.node_states.first()?;
-                if !is_waiting(state) {
+                let next = now.remaining_nodes.first()?;
+                if !stands_waiting(now.driving, now.held, now.acting) {
                     return None;
                 }
                 // with a controller, its word; without, the two rules below
@@ -1361,9 +1357,9 @@ impl World {
         self.deadlocks.observe(self.tick, &waits_for);
         // add the waits up, but not those of a robot in its own stop (S170)
         self.waits = waits;
-        for (i, state) in states.iter().enumerate() {
+        for (i, now) in glances.iter().enumerate() {
             if let Some(w) = self.counted_wait(i)
-                && let Some(place) = self.place_of(i, state)
+                && let Some(place) = self.place_of(i, now)
             {
                 let key = (i, w.blocker, w.reason, place);
                 *self.wait_ticks.entry(key).or_insert(0) += 1;

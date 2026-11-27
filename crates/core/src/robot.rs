@@ -30,7 +30,7 @@ use vda5050::state::{ActionStatus, State};
 
 use crate::actions::ActionTimes;
 use crate::battery::Battery;
-use crate::drive::{DriveError, Driver, Phase, Pose};
+use crate::drive::{DriveError, Driver, Glance, Phase, Pose};
 use crate::errors::{ErrorType, RobotError};
 use crate::graph::{EdgeIdx, Graph, NodeIdx};
 use crate::order_route::route_from_order;
@@ -586,6 +586,12 @@ impl Robot {
         }
         self.update_cancel();
         self.update_zone_requests();
+    }
+
+    /// What [`Robot::state`] reports about the order, driving and actions, without
+    /// building the message.
+    pub(crate) fn glance(&self) -> Glance<'_> {
+        self.driver.glance()
     }
 
     /// The state message.

@@ -16,14 +16,18 @@ use vda5050::state::{ActionStatus, State};
 /// not driving and not turning on the spot (`driving` covers both); any running
 /// action makes it busy. Whether the robot has a job is for the caller to know.
 pub fn is_waiting(state: &State) -> bool {
+    let acting = state
+        .action_states
+        .iter()
+        .any(|a| a.action_status == ActionStatus::Running);
+    stands_waiting(state.driving, state.safety_state.field_violation, acting)
+}
+
+/// The rule of [`is_waiting`], on the three things it reads.
+pub(crate) fn stands_waiting(driving: bool, field_violation: bool, acting: bool) -> bool {
     // a robot stopped by an obstacle or a disturbance (protective field
     // violation) is not waiting for the controller
-    !state.driving
-        && !state.safety_state.field_violation
-        && !state
-            .action_states
-            .iter()
-            .any(|a| a.action_status == ActionStatus::Running)
+    !driving && !field_violation && !acting
 }
 
 #[derive(Debug, Clone, PartialEq)]

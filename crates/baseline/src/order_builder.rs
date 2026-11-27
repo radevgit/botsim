@@ -22,8 +22,7 @@
 use botsim_core::graph::{EdgeIdx, EdgeOrientation, Graph, NodeIdx};
 use botsim_core::jobs::Job;
 use botsim_core::world::{PROTOCOL_VERSION, RobotId};
-use serde_json::json;
-use vda5050::order::Order;
+use vda5050::order::{Action, BlockingType, Edge, Node, Order, OrientationType};
 
 use crate::route::{Arrival, shortest_path};
 
@@ -161,55 +160,72 @@ pub fn build_order_with(
         return None; // the first node must be released
     }
 
-    let nodes: Vec<_> = (from..=plan.last())
+    // `None` if a sequence number does not fit the message's 32 bits
+    let nodes = (from..=plan.last())
         .map(|i| {
-            json!({
-                "nodeId": graph.nodes[plan.nodes[i]].id,
-                "sequenceId": 2 * i,
-                "released": i <= released_through,
-                "actions": plan.actions[i]
+            Some(Node {
+                node_id: graph.nodes[plan.nodes[i]].id.clone(),
+                sequence_id: u32::try_from(2 * i).ok()?,
+                node_descriptor: None,
+                released: i <= released_through,
+                node_position: None,
+                actions: plan.actions[i]
                     .iter()
-                    .map(|t| json!({
-                        "actionId": format!("{t}-{i}"),
-                        "actionType": t,
-                        "blockingType": "HARD",
-                    }))
-                    .collect::<Vec<_>>(),
+                    .map(|t| Action {
+                        action_type: t.clone(),
+                        action_id: format!("{t}-{i}"),
+                        action_descriptor: None,
+                        blocking_type: BlockingType::Hard,
+                        action_parameters: None,
+                        retriable: None,
+                    })
+                    .collect(),
             })
         })
-        .collect();
-    let edges: Vec<_> = (from..plan.last())
+        .collect::<Option<Vec<_>>>()?;
+    let edges = (from..plan.last())
         .map(|i| {
-            let mut edge = json!({
-                "edgeId": graph.edges[plan.edges[i]].id,
-                "sequenceId": 2 * i + 1,
-                // an edge is released together with the node it leads to
-                "released": i < released_through,
-                "actions": [],
-            });
             let given = orient.and_then(|(m, s)| graph.edge_orientation(plan.edges[i], m, s));
-            if let Some(o) = given {
-                let (kind, angle) = match o {
-                    EdgeOrientation::Tangential(a) => ("TANGENTIAL", a),
-                    EdgeOrientation::Global(a) => ("GLOBAL", a),
-                };
-                edge["orientationType"] = json!(kind);
-                edge["orientation"] = json!(angle);
-            }
-            edge
+            let (orientation_type, orientation) = match given {
+                Some(EdgeOrientation::Tangential(a)) => {
+                    (Some(OrientationType::Tangential), Some(a))
+                }
+                Some(EdgeOrientation::Global(a)) => (Some(OrientationType::Global), Some(a)),
+                None => (None, None),
+            };
+            Some(Edge {
+                edge_id: graph.edges[plan.edges[i]].id.clone(),
+                sequence_id: u32::try_from(2 * i + 1).ok()?,
+                edge_descriptor: None,
+                // an edge is released together with the node it leads to
+                released: i < released_through,
+                maximum_speed: None,
+                maximum_mobile_robot_height: None,
+                minimum_load_handling_device_height: None,
+                // (JSON has no number that is not finite: such an angle is not sent)
+                orientation: orientation.filter(|a| a.is_finite()),
+                orientation_type,
+                direction: None,
+                reach_orientation_before_entering: None,
+                maximum_rotation_speed: None,
+                trajectory: None,
+                length: None,
+                corridor: None,
+                actions: Vec::new(),
+            })
         })
-        .collect();
+        .collect::<Option<Vec<_>>>()?;
 
-    let message = json!({
-        "headerId": h.header_id,
-        "timestamp": h.timestamp,
-        "version": PROTOCOL_VERSION,
-        "manufacturer": h.robot.manufacturer,
-        "serialNumber": h.robot.serial_number,
-        "orderId": h.order_id,
-        "orderUpdateId": h.order_update_id,
-        "nodes": nodes,
-        "edges": edges,
-    });
-    serde_json::from_value(message).ok()
+    Some(Order {
+        header_id: h.header_id,
+        timestamp: h.timestamp.to_string(),
+        version: PROTOCOL_VERSION.to_string(),
+        manufacturer: h.robot.manufacturer.clone(),
+        serial_number: h.robot.serial_number.clone(),
+        order_id: h.order_id.to_string(),
+        order_update_id: h.order_update_id,
+        order_description: None,
+        nodes,
+        edges,
+    })
 }
