@@ -3,8 +3,8 @@
 
 use std::f64::consts::{FRAC_PI_2, PI};
 
-use botsim_core::orientation::{OrientationError, edge_heading};
-use botsim_core::spec::Kinematics::{Differential, Omnidirectional, ThreeWheel};
+use botsim_model::orientation::{OrientationError, edge_heading};
+use botsim_model::spec::Kinematics::{Differential, Omnidirectional, ThreeWheel};
 use vda5050::order::OrientationType::{Global, Tangential};
 
 fn close(a: f64, b: f64) -> bool {

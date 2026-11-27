@@ -8,8 +8,8 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use botsim_core::graph::{EdgeIdx, Graph, NodeIdx, Rotation};
-use botsim_core::spec::Kinematics;
+use botsim_model::graph::{EdgeIdx, Graph, NodeIdx, Rotation};
+use botsim_model::spec::Kinematics;
 
 /// How a robot gets to the node where a route starts (S73): it matters for the first
 /// edge, if the robot cannot turn there.

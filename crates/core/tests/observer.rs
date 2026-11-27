@@ -2,11 +2,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use botsim_core::actions::ActionTimes;
-use botsim_core::graph::Graph;
 use botsim_core::observer::{Observer, RobotStatus, Snapshot};
 use botsim_core::robot::Reception::Accepted;
-use botsim_core::spec::{RobotSpec, Shape};
 use botsim_core::world::{RobotId, World};
+use botsim_model::graph::Graph;
+use botsim_model::spec::{RobotSpec, Shape};
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;

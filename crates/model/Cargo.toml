@@ -1,0 +1,16 @@
+[package]
+name = "botsim-model"
+description = "Layout graph, robot types, path geometry, orientation and safety geometry shared by the botsim crates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+togo = "0.8.0"
+vda5050 = "0.1.0"
+vdma-lif = "0.1.0"
+
+[dev-dependencies]
+serde_json = "1.0.154"

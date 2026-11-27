@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-botsim-core = { path = "../core" }
+botsim-model = { path = "../model" }
 botsim-scenario = { path = "../scenario" }
 botsim-record = { path = "../record" }
 botsim-sweep = { path = "../sweep" }

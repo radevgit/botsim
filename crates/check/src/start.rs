@@ -71,7 +71,7 @@ pub fn check(inputs: &Inputs) -> Vec<Finding> {
 fn start_heading(
     group: &botsim_scenario::RobotGroup,
     i: usize,
-    g: &botsim_core::graph::Graph,
+    g: &botsim_model::graph::Graph,
     node: usize,
     t: &TypeRef,
 ) -> f64 {
@@ -319,7 +319,7 @@ start_nodes = {start_nodes}
     fn start_heading_follows_the_scenario() {
         let mut i = inputs(r#"["N0", "N1"]"#);
         let t = crate::type_ref(&i.fleet[0]).expect("type");
-        let g = botsim_core::graph::Graph::from_lif(&i.lif).expect("graph");
+        let g = botsim_model::graph::Graph::from_lif(&i.lif).expect("graph");
         let n1 = g.node_idx("N1").expect("N1");
         let group = &mut i.scenario.robots[0];
         // an angle for all, east by default

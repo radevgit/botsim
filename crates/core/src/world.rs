@@ -33,17 +33,17 @@ use crate::disturbances::{DisturbanceError, StopGenerator, StopSpec, check_durat
 use crate::door::{Door, DoorError, DoorSpec, DoorStatus};
 use crate::drive::Phase;
 use crate::drive::{DriveError, Glance, Pose};
-use crate::graph::{EdgeIdx, Graph, NodeIdx};
 use crate::jobs::Rng;
 use crate::lift::{Lift, LiftError, LiftSpec, LiftStatus};
 use crate::metrics::stands_waiting;
 use crate::observer::{Blocking, Observer, Reservation, RobotSnapshot, RobotStatus, Snapshot};
 use crate::robot::{Reception, Robot, START_NODE_TOLERANCE};
-use crate::spec::RobotSpec;
 use crate::state_report::Header;
 use crate::waiting::{HeldBack, Place, Wait, WaitReason, WaitTotal};
 use crate::zone_requests::ZoneRequestTiming;
 use crate::zones::Zones;
+use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::spec::RobotSpec;
 
 /// VDA 5050 version written in the headers.
 pub const PROTOCOL_VERSION: &str = "3.0.1";
@@ -354,7 +354,7 @@ impl World {
         self.safety_stop
     }
 
-    /// Switch the onboard safety stop (S54, see [`crate::safety`]) on or off for
+    /// Switch the onboard safety stop (S54, see [`botsim_model::safety`]) on or off for
     /// all robots. It is **off** by default in the world (the collision tests
     /// need robots that drive into each other); the scenario switches it on.
     pub fn set_safety_stop(&mut self, on: bool) {

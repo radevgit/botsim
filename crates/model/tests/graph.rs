@@ -1,4 +1,4 @@
-use botsim_core::graph::{Graph, GraphError};
+use botsim_model::graph::{Graph, GraphError};
 use vdma_lif::Lif;
 
 const THREE_NODES: &str = include_str!("data/three_nodes.lif.json");

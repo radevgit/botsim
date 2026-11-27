@@ -3,10 +3,10 @@
 
 use botsim_core::actions::ActionTimes;
 use botsim_core::errors::ErrorType;
-use botsim_core::graph::{Graph, GraphError};
 use botsim_core::robot::Reception;
-use botsim_core::spec::RobotSpec;
 use botsim_core::world::{RobotId, World, WorldError};
+use botsim_model::graph::{Graph, GraphError};
+use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;
@@ -76,38 +76,6 @@ fn order(serial: &str, from: &str, edge: &str, to: &str) -> Order {
         "edges":[{{"edgeId":"{edge}","sequenceId":1,"released":true,"actions":[]}}]}}"#
     );
     serde_json::from_str(&json).unwrap()
-}
-
-#[test]
-fn the_graph_knows_which_types_may_use_what_and_the_speed_limits() {
-    let g = layout(Some(0.5)).unwrap();
-    let (a, c) = (g.node_idx("A").unwrap(), g.node_idx("C").unwrap());
-    let (ab, bc) = (g.edge_idx("A-B").unwrap(), g.edge_idx("B-C").unwrap());
-
-    assert!(g.node_allows(a, X1.0, X1.1) && g.node_allows(a, Y2.0, Y2.1));
-    assert!(g.node_allows(c, X1.0, X1.1) && !g.node_allows(c, Y2.0, Y2.1));
-    // a type that is not listed at all
-    assert!(!g.node_allows(a, "ACME", "Z9") && !g.node_allows(a, "Other", "X1"));
-
-    assert!(g.edge_allows(ab, X1.0, X1.1) && g.edge_allows(ab, Y2.0, Y2.1));
-    assert!(g.edge_allows(bc, X1.0, X1.1) && !g.edge_allows(bc, Y2.0, Y2.1));
-
-    assert_eq!(g.edge_max_speed(ab, X1.0, X1.1), None);
-    assert_eq!(g.edge_max_speed(ab, Y2.0, Y2.1), Some(0.5));
-    assert_eq!(
-        g.edge_max_speed(bc, Y2.0, Y2.1),
-        None,
-        "not allowed: no entry"
-    );
-}
-
-#[test]
-fn a_maximum_speed_of_zero_or_less_is_refused_when_the_layout_is_read() {
-    for v in [0.0, -1.0] {
-        let e = layout(Some(v)).unwrap_err();
-        assert_eq!(e, GraphError::BadMaximumSpeed { edge: "A-B".into() });
-        assert!(e.to_string().contains("A-B"));
-    }
 }
 
 #[test]

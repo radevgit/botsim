@@ -4,10 +4,10 @@
 
 use botsim_core::actions::ActionTimes;
 use botsim_core::errors::ErrorType;
-use botsim_core::graph::{Graph, Rotation};
 use botsim_core::robot::Reception;
-use botsim_core::spec::{Kinematics, RobotSpec};
 use botsim_core::world::{RobotId, World};
+use botsim_model::graph::Graph;
+use botsim_model::spec::{Kinematics, RobotSpec};
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;
@@ -127,47 +127,4 @@ fn the_graph_and_the_robot_agree() {
             }
         }
     }
-}
-
-#[test]
-fn the_answers_in_a_few_plain_cases() {
-    // a turn of 90° is allowed for a differential robot, not for a car-like one;
-    // straight on is allowed for both; an omnidirectional robot never turns
-    assert!(graph_says("", "", Kinematics::Differential, "C"));
-    assert!(!graph_says("", "", Kinematics::ThreeWheel, "C"));
-    assert!(graph_says("", "", Kinematics::ThreeWheel, "D"));
-    assert!(graph_says("", "", Kinematics::Omnidirectional, "C"));
-    // no rotation at the node: a differential robot cannot take the turn either,
-    // but can go straight on
-    let none = r#""rotationAtStartNodeAllowed":"NONE""#;
-    assert!(!graph_says("", none, Kinematics::Differential, "C"));
-    assert!(graph_says("", none, Kinematics::Differential, "D"));
-    // only clockwise allowed: the left turn is made the long way round
-    let cw = r#""rotationAtStartNodeAllowed":"CW""#;
-    assert!(graph_says("", cw, Kinematics::Differential, "C"));
-}
-
-#[test]
-fn can_start_looks_at_the_heading_the_robot_has() {
-    let g = graph("", "");
-    let a_b = g.edge_idx("A-B").unwrap();
-    let ask = |heading: f64, k: Kinematics| g.can_start(heading, None, a_b, k, "ACME", "X1");
-    assert!(ask(0.0, Kinematics::ThreeWheel));
-    assert!(ask(0.01, Kinematics::ThreeWheel)); // within about a degree
-    assert!(!ask(0.1, Kinematics::ThreeWheel));
-    assert!(!ask(std::f64::consts::PI, Kinematics::ThreeWheel));
-    // a robot that turns on the spot starts in any heading
-    assert!(ask(std::f64::consts::PI, Kinematics::Differential));
-    // unless the layout allows no rotation at the start node
-    let g = graph(r#""rotationAtStartNodeAllowed":"NONE""#, "");
-    let a_b = g.edge_idx("A-B").unwrap();
-    assert!(!g.can_start(
-        1.0,
-        Some(Rotation::Both),
-        a_b,
-        Kinematics::Differential,
-        "ACME",
-        "X1"
-    ));
-    assert!(g.can_start(0.0, None, a_b, Kinematics::Differential, "ACME", "X1"));
 }

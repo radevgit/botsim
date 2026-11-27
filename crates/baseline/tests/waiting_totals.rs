@@ -4,9 +4,9 @@
 use botsim_baseline::controller::Controller;
 use botsim_core::actions::ActionTimes;
 use botsim_core::jobs::Job;
-use botsim_core::spec::RobotSpec;
 use botsim_core::waiting::{Place, WaitReason};
 use botsim_core::world::{RobotId, World};
+use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 
 mod common;

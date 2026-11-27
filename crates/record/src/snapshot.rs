@@ -3,8 +3,8 @@
 use botsim_core::door::DoorStatus;
 use botsim_core::lift::{Call, DoorState, LiftStatus};
 use botsim_core::observer::{Blocking, Reservation, RobotSnapshot, RobotStatus, Snapshot};
-use botsim_core::spec::Shape;
 use botsim_core::waiting::{Wait, WaitReason};
+use botsim_model::spec::Shape;
 use serde::{Deserialize, Serialize};
 
 /// The world after one step. Robots are referred to by their position in

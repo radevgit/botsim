@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 use vdma_lif::{Layout, Lif};
 
 use crate::finding::{Finding, FindingPlace, Level};
@@ -343,7 +343,7 @@ fn strongly_connected(adj: &[Vec<usize>]) -> Vec<usize> {
 mod tests {
     use super::*;
     use crate::finding::PlaceKind;
-    use botsim_core::spec::Kinematics;
+    use botsim_model::spec::Kinematics;
 
     fn x1(kinematics: Kinematics) -> TypeRef {
         TypeRef::test_rect("ACME/X1", kinematics, 1.0, 0.6)

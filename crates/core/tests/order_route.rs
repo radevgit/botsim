@@ -2,8 +2,8 @@
 #![allow(clippy::approx_constant)]
 
 use botsim_core::drive::RouteEdge;
-use botsim_core::graph::Graph;
 use botsim_core::order_route::{OrderError, route_from_order};
+use botsim_model::graph::Graph;
 use vda5050::order::{Order, OrientationType};
 use vdma_lif::Lif;
 
@@ -180,7 +180,7 @@ fn ids_and_connections_are_checked_against_the_layout() {
 #[test]
 fn route_from_an_order_can_be_driven() {
     use botsim_core::drive::Driver;
-    use botsim_core::spec::RobotSpec;
+    use botsim_model::spec::RobotSpec;
     use vda5050::factsheet::Factsheet;
 
     let g = graph();

@@ -16,7 +16,7 @@ use std::fmt;
 
 use vda5050::order::OrientationType;
 
-use crate::motion::{angle_diff, normalize_angle};
+use crate::angle::{angle_diff, normalize_angle};
 use crate::spec::Kinematics;
 
 /// An orientation of exactly 0 or π is expected, but real layouts write

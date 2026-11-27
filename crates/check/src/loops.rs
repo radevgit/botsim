@@ -10,7 +10,7 @@
 //! a loop. The search has a step budget, so a huge layout is searched only in part
 //! (the finding says so).
 
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 
 use crate::finding::{Finding, Level};
 use crate::places::LayoutIndex;
@@ -182,7 +182,7 @@ fn report_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use botsim_core::spec::Kinematics;
+    use botsim_model::spec::Kinematics;
     use vdma_lif::Lif;
 
     /// A square block of side `side` (m), four one-way edges around it, plus a

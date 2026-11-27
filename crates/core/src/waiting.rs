@@ -21,7 +21,7 @@
 //! metric ([`crate::world::World::wait_totals`]), leaving out the steps in which the
 //! waiting robot is in its own stop (a random stop or an empty battery, S170).
 
-use crate::graph::{EdgeIdx, NodeIdx};
+use botsim_model::graph::{EdgeIdx, NodeIdx};
 
 /// Why a robot waits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

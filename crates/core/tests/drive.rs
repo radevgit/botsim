@@ -1,9 +1,9 @@
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use botsim_core::drive::{DriveError, Driver, Phase, RouteEdge};
-use botsim_core::graph::Graph;
-use botsim_core::orientation::OrientationError;
-use botsim_core::spec::RobotSpec;
+use botsim_model::graph::Graph;
+use botsim_model::orientation::OrientationError;
+use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 use vdma_lif::Lif;
 

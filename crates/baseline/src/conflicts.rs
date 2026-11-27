@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 
 use crate::reservations::Reservations;
 

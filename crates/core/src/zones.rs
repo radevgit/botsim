@@ -19,7 +19,7 @@ use std::fmt;
 
 use vda5050::zone_set::{Vertex, Zone, ZoneKind, ZoneSet};
 
-use crate::graph::{Graph, MapIdx};
+use botsim_model::graph::{Graph, MapIdx};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ZoneError {

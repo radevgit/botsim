@@ -18,11 +18,11 @@
 
 use crate::door::DoorStatus;
 use crate::drive::Pose;
-use crate::graph::{EdgeIdx, Graph, NodeIdx};
 use crate::lift::LiftStatus;
-use crate::spec::Shape;
 use crate::waiting::Wait;
 use crate::world::RobotId;
+use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::spec::Shape;
 
 /// Receives a run. All methods are called from the simulation thread.
 pub trait Observer: std::fmt::Debug {

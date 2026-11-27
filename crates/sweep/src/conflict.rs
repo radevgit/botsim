@@ -16,7 +16,7 @@
 //!
 //! Not yet: driving backwards.
 
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 use serde::Serialize;
 use vdma_lif::Lif;
 
@@ -505,7 +505,7 @@ pub fn to_json(map: &ConflictMap) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use botsim_core::spec::Kinematics;
+    use botsim_model::spec::Kinematics;
 
     /// Edges `(id, from, to)` between nodes `(id, x, y)`, all usable by ACME/X1 and ACME/Y2.
     fn lif(nodes: &[(&str, f64, f64)], edges: &[(&str, &str, &str)]) -> Lif {

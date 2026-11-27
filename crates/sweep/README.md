@@ -40,7 +40,7 @@ let json = botsim_sweep::to_json(&map);
 ## Protective field (option, off by default)
 
 `protective_field: true` also lists a pair when the simulator's **standstill protective field**
-(`botsim_core::safety`: ahead of the body in the direction of travel, 0.3 m long, 0.1 m wider on
+(`botsim_model::safety`: ahead of the body in the direction of travel, 0.3 m long, 0.1 m wider on
 each side) of one robot along its edge meets the other robot's body: such a robot stops and stands
 until the other has left. Either side's field is enough; a robot standing on a node has none. Any
 overlap counts (`clearance` and `min_overlap` do not apply to it). On curves the field is

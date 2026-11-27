@@ -1,9 +1,9 @@
 use botsim_core::actions::ActionTimes;
 use botsim_core::errors::ErrorType::{self, *};
-use botsim_core::graph::Graph;
 use botsim_core::robot::{Reception, Reception::Accepted, Robot};
-use botsim_core::spec::RobotSpec;
 use botsim_core::state_report::Header;
+use botsim_model::graph::Graph;
+use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vda5050::state::State;

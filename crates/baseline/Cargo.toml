@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 botsim-core = { path = "../core" }
+botsim-model = { path = "../model" }
 serde_json = "1.0.154"
 vda5050 = "0.1.0"
 

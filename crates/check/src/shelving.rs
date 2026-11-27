@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 use botsim_record::{GeometryFile, GeometryKind, Outline};
 use vdma_lif::{Layout, Lif};
 

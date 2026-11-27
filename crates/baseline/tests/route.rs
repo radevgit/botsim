@@ -1,5 +1,5 @@
 use botsim_baseline::route::shortest_path;
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 
 mod common;
 use common::graph;

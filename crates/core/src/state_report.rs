@@ -27,7 +27,7 @@ use vda5050::state::{MobileRobotPosition, Velocity};
 
 use crate::drive::Progress;
 use crate::errors::RobotError;
-use crate::graph::Graph;
+use botsim_model::graph::Graph;
 
 /// The header fields of a state message. The simulator's clock and counters
 /// decide these, so the caller supplies them.

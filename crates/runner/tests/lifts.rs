@@ -277,8 +277,8 @@ fn lifts_appear_in_the_observer_snapshots() {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use botsim_core::graph::Graph;
     use botsim_core::observer::{Observer, Snapshot};
+    use botsim_model::graph::Graph;
 
     #[derive(Debug)]
     struct Recorder(Rc<RefCell<Vec<Snapshot>>>);

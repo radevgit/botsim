@@ -7,10 +7,13 @@ use std::fmt;
 
 use vdma_lif::{Layout, Lif};
 
-use crate::drive::THREE_WHEEL_TOLERANCE;
-use crate::motion::angle_diff;
+use crate::angle::angle_diff;
 use crate::path::{Nurbs, Path};
 use crate::spec::Kinematics;
+
+/// How far (rad) a car-like robot's heading may be off the direction an edge starts
+/// in and still count as aligned (S70): about 1 degree.
+pub const THREE_WHEEL_TOLERANCE: f64 = 0.02;
 
 /// Index of a node in [`Graph::nodes`].
 pub type NodeIdx = usize;

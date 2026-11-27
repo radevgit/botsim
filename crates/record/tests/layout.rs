@@ -1,4 +1,4 @@
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 use botsim_record::{FORMAT_VERSION, LayoutLine};
 use vdma_lif::Lif;
 

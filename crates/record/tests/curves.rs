@@ -3,8 +3,8 @@
 use std::fs::File;
 use std::io::BufReader;
 
-use botsim_core::graph::Graph;
 use botsim_core::observer::Observer;
+use botsim_model::graph::Graph;
 use botsim_record::{LayoutLine, LayoutRobot, Recorder, read_recording};
 use vdma_lif::Lif;
 

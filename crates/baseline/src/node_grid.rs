@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use botsim_core::graph::{Graph, NodeIdx};
+use botsim_model::graph::{Graph, NodeIdx};
 
 /// Cell size in metres; it must be at least the largest tolerance asked for.
 const CELL: f64 = 1.0;

@@ -30,9 +30,9 @@ use std::f64::consts::PI;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use botsim_core::graph::Graph;
-use botsim_core::spec::Kinematics;
 use botsim_export::Renderer;
+use botsim_model::graph::Graph;
+use botsim_model::spec::Kinematics;
 use botsim_record::{
     GEOMETRY_VERSION, GeometryFile, GeometryKind, GeometryShape, LayoutLine, Outline, SnapshotLine,
     Vertex,

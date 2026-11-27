@@ -8,7 +8,7 @@
 //!
 //! The scenario has no cabin size, so the cabin is not checked against the robots.
 
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 
 use crate::finding::{Finding, Level};
 use crate::input::Inputs;

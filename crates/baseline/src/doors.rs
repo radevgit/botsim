@@ -27,8 +27,8 @@
 
 use std::collections::HashMap;
 
-use botsim_core::graph::EdgeIdx;
 use botsim_core::world::World;
+use botsim_model::graph::EdgeIdx;
 
 use crate::order_builder::Plan;
 

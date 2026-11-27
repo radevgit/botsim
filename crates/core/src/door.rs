@@ -30,8 +30,8 @@
 use std::fmt;
 
 use crate::actions::TIME_EPSILON;
-use crate::graph::EdgeIdx;
 use crate::lift::DoorState;
+use botsim_model::graph::EdgeIdx;
 
 /// What a door is like.
 #[derive(Debug, Clone, PartialEq)]

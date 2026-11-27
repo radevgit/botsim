@@ -4,9 +4,9 @@
 use botsim_baseline::controller::{ChargePolicy, Controller};
 use botsim_core::actions::ActionTimes;
 use botsim_core::battery::{Battery, BatterySpec};
-use botsim_core::graph::GraphStation;
-use botsim_core::spec::RobotSpec;
 use botsim_core::world::{RobotId, World};
+use botsim_model::graph::GraphStation;
+use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 
 mod common;

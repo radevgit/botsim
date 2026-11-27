@@ -21,11 +21,11 @@
 use std::collections::{HashMap, HashSet};
 
 use botsim_core::collision::{Body, overlap, place};
-use botsim_core::graph::{EdgeIdx, EdgeOrientation, Graph, NodeIdx};
 use botsim_core::metrics::is_waiting;
 use botsim_core::observer::Reservation;
-use botsim_core::safety::LATERAL_MARGIN;
-use botsim_core::spec::Shape;
+use botsim_model::graph::{EdgeIdx, EdgeOrientation, Graph, NodeIdx};
+use botsim_model::safety::LATERAL_MARGIN;
+use botsim_model::spec::Shape;
 use vda5050::state::State;
 
 use crate::conflicts::{

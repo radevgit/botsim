@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 use vdma_lif::{Layout, Lif};
 
 use crate::conflict::ConflictMap;
@@ -203,7 +203,7 @@ mod tests {
         // a robot 1.0 x 0.6 on every node (so C at the corner reaches into the arc)
         let t = crate::reach::TypeRef::test_rect(
             "ACME/X1",
-            botsim_core::spec::Kinematics::Differential,
+            botsim_model::spec::Kinematics::Differential,
             1.0,
             0.6,
         );

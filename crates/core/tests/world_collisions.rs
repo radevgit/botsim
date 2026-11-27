@@ -1,7 +1,7 @@
 use botsim_core::actions::ActionTimes;
-use botsim_core::graph::Graph;
-use botsim_core::spec::RobotSpec;
 use botsim_core::world::{RobotId, World};
+use botsim_model::graph::Graph;
+use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;

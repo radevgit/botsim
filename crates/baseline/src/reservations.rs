@@ -6,8 +6,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use botsim_core::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_core::observer::Reservation;
+use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 
 #[derive(Debug, Clone)]
 pub struct Reservations {

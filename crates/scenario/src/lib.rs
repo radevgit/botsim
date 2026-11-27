@@ -87,13 +87,13 @@ use botsim_core::actions::ActionTimes;
 use botsim_core::battery::{Battery, BatterySpec};
 use botsim_core::disturbances::{Disturbances, StopSpec, check_duration_variation};
 use botsim_core::door::DoorSpec;
-use botsim_core::graph::Graph;
 use botsim_core::jobs::{JobGenerator, Rng};
 use botsim_core::lift::{LiftSpec, LiftStop};
-use botsim_core::spec::RobotSpec;
 use botsim_core::world::{RobotId, World, unix_ms_from_utc};
 use botsim_core::zone_requests::ZoneRequestTiming;
 use botsim_core::zones::Zones;
+use botsim_model::graph::Graph;
+use botsim_model::spec::RobotSpec;
 use serde::Deserialize;
 use vda5050::factsheet::Factsheet;
 use vda5050::zone_set::ZoneSet;
@@ -382,12 +382,12 @@ impl<'de> Deserialize<'de> for StartHeading {
 /// edge in the layout that leaves the node and that the type may drive (an edge
 /// between maps comes last). `None` if no such edge leaves the node.
 pub fn road_heading(
-    graph: &botsim_core::graph::Graph,
-    node: botsim_core::graph::NodeIdx,
+    graph: &botsim_model::graph::Graph,
+    node: botsim_model::graph::NodeIdx,
     manufacturer: &str,
     series: &str,
 ) -> Option<f64> {
-    let usable = |e: &&botsim_core::graph::EdgeIdx| graph.edge_allows(**e, manufacturer, series);
+    let usable = |e: &&botsim_model::graph::EdgeIdx| graph.edge_allows(**e, manufacturer, series);
     let edges = graph.out_edges(node);
     let e = edges
         .iter()

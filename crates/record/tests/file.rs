@@ -7,8 +7,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::rc::Rc;
 
-use botsim_core::graph::Graph;
 use botsim_core::observer::{Observer, Snapshot};
+use botsim_model::graph::Graph;
 use botsim_record::{
     FORMAT_VERSION, LayoutLine, ReadError, Reader, Recorder, SnapshotLine, read_recording,
 };

@@ -1,6 +1,6 @@
 //! Line 1 of a recording: the layout.
 
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 use serde::{Deserialize, Serialize};
 
 use crate::{FORMAT_VERSION, GeometryError, GeometryFile, StaticShape};

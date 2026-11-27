@@ -157,7 +157,7 @@ fn the_second_floor_gets_its_own_map_index() {
     // two_floors.lif.json has two maps; a shape on the second one gets index 1
     let text = common::read("two_floors.lif.json");
     let lif: vdma_lif::Lif = serde_json::from_str(&text).unwrap();
-    let graph = botsim_core::graph::Graph::from_lif(&lif).unwrap();
+    let graph = botsim_model::graph::Graph::from_lif(&lif).unwrap();
     assert!(graph.maps.len() >= 2);
     let second = &graph.maps[1];
     let file = parse(&one(&format!(

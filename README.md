@@ -13,6 +13,7 @@ A longer run on a more complex warehouse: [video, 6:40](https://www.youtube.com/
 ```text
 botsim/
 ├── crates/
+│   ├── model/         layout graph, robot types, path and safety geometry
 │   ├── core/          simulation: world, robots, orders, collisions, jobs
 │   ├── scenario/      scenario file (TOML): loading, building the world
 │   ├── baseline/      bundled baseline fleet controller

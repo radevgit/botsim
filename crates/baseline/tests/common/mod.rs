@@ -1,4 +1,4 @@
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 use vdma_lif::Lif;
 
 /// A layout from nodes (id, x, y) and directed edges (from, to); edge ids are "from-to".

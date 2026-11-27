@@ -1,11 +1,11 @@
 //! The robot type as the sweeps need it.
 
-use botsim_core::spec::{Kinematics, RobotSpec, Shape, SpecError};
+use botsim_model::spec::{Kinematics, RobotSpec, Shape, SpecError};
 use vda5050::factsheet::Factsheet;
 
 /// How far the protective field reaches in front of the body (m): from the
 /// factsheet's `envelopes2d` whose id says "safety" or "field" (the rule
-/// `botsim-core` uses to tell them from the body); if the factsheet has none,
+/// `botsim-model` uses to tell them from the body); if the factsheet has none,
 /// the fixed margin of the simulator's own protective field.
 /// The second value says whether the number is from the factsheet.
 fn field_margin(f: &Factsheet, body: &Shape) -> (f64, bool) {
@@ -31,7 +31,7 @@ fn field_margin(f: &Factsheet, body: &Shape) -> (f64, bool) {
     if field_front.is_finite() {
         ((field_front - body_front).max(0.0), true)
     } else {
-        (botsim_core::safety::FIELD_MARGIN, false)
+        (botsim_model::safety::FIELD_MARGIN, false)
     }
 }
 

@@ -14,7 +14,7 @@ use botsim::summary::{self, Summary};
 use botsim_baseline::order_builder::Plan;
 use botsim_baseline::policy::{Ask, Fleet, Release, Setup, TrafficPolicy};
 use botsim_baseline::zone_grants::Answer;
-use botsim_core::graph::NodeIdx;
+use botsim_model::graph::NodeIdx;
 use vda5050::responses::GrantType;
 use vda5050::state::ZoneRequestType;
 

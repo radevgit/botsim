@@ -21,7 +21,7 @@ use vda5050::order::Order;
 
 use crate::actions::ActionSpec;
 use crate::drive::RouteEdge;
-use crate::graph::{Graph, NodeIdx};
+use botsim_model::graph::{Graph, NodeIdx};
 
 /// The part of an order the robot may drive now.
 #[derive(Debug, Clone, PartialEq)]

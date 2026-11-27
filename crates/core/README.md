@@ -8,10 +8,11 @@ The same inputs and seed give the same run.
 
 ## Main types
 
+The layout graph (`Graph`) and the robot types (`RobotSpec`) are in
+[botsim-model](../model/README.md).
+
 | Type | |
 |---|---|
-| `graph::Graph` | the track graph of a LIF layout (`Graph::from_lif`): nodes on one or more maps, directed edges, per-robot-type edge rules and curves, stations |
-| `spec::RobotSpec` | a robot type from a VDA 5050 factsheet: kinematics, speed and acceleration limits, body outline |
 | `world::World` | the world: add robots, doors and lifts, send them messages, step, read states and results |
 | `jobs::JobGenerator` | seeded random transport jobs (pickup node, drop node) |
 | `observer::Observer` | a read-only view of the run, e.g. for a recording or a viewer |

@@ -40,7 +40,7 @@ use std::collections::VecDeque;
 use std::fmt;
 
 use crate::actions::TIME_EPSILON;
-use crate::graph::{MapIdx, NodeIdx};
+use botsim_model::graph::{MapIdx, NodeIdx};
 
 /// What a lift is like.
 #[derive(Debug, Clone, PartialEq)]

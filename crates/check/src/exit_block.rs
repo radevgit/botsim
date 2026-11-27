@@ -22,7 +22,7 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap, HashMap, HashSet};
 
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 use botsim_sweep::{Sweep, standing_body, sweep};
 use vdma_lif::{Layout, Lif};
 
@@ -492,7 +492,7 @@ fn report(layout: &Layout, pair: (&str, &str), all: &[Case], out: &mut Vec<Findi
 mod tests {
     use super::*;
     use crate::finding::PlaceKind;
-    use botsim_core::spec::Kinematics;
+    use botsim_model::spec::Kinematics;
     use botsim_sweep::{MapOptions, compute};
 
     /// The neighbourhood of the drop-off `D001` (node N0053) of the roadmap

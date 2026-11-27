@@ -32,12 +32,12 @@ use crate::actions::ActionTimes;
 use crate::battery::Battery;
 use crate::drive::{DriveError, Driver, Glance, Phase, Pose};
 use crate::errors::{ErrorType, RobotError};
-use crate::graph::{EdgeIdx, Graph, NodeIdx};
 use crate::order_route::route_from_order;
-use crate::spec::RobotSpec;
 use crate::state_report::{Header, InstantActionState, build_state};
 use crate::zone_requests::{ZoneRequestTiming, ZoneRequester};
 use crate::zones::Zones;
+use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::spec::RobotSpec;
 
 /// How close (metres) the robot must be to the first node of a new order.
 pub const START_NODE_TOLERANCE: f64 = 0.1;
@@ -224,8 +224,8 @@ impl Robot {
     /// How wide the robot is (metres), across its direction of travel.
     pub fn width(&self) -> f64 {
         match self.spec.shape {
-            crate::spec::Shape::Rect { half_width, .. } => 2.0 * half_width,
-            crate::spec::Shape::Circle { radius, .. } => 2.0 * radius,
+            botsim_model::spec::Shape::Rect { half_width, .. } => 2.0 * half_width,
+            botsim_model::spec::Shape::Circle { radius, .. } => 2.0 * radius,
         }
     }
 
@@ -528,12 +528,12 @@ impl Robot {
         self.driver.is_obstructed()
     }
 
-    /// The robot's protective field (see [`crate::safety`]), if it is driving an
+    /// The robot's protective field (see [`botsim_model::safety`]), if it is driving an
     /// edge; `dt` is the length of a time step.
     pub fn protective_field(&self, dt: f64) -> Option<togo::prelude::OrientedRect> {
         let dir = self.driver.travel_direction()?;
         let p = self.driver.pose();
-        Some(crate::safety::protective_field(
+        Some(botsim_model::safety::protective_field(
             &self.spec.shape,
             (p.x, p.y, p.heading),
             dir,
@@ -548,7 +548,7 @@ impl Robot {
     }
 
     /// The body outline, relative to the kinematic center.
-    pub fn shape(&self) -> &crate::spec::Shape {
+    pub fn shape(&self) -> &botsim_model::spec::Shape {
         &self.spec.shape
     }
 

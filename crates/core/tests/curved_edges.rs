@@ -6,10 +6,10 @@ use std::f64::consts::{FRAC_PI_2, PI};
 
 use botsim_core::actions::ActionTimes;
 use botsim_core::drive::{Driver, Phase, RouteEdge};
-use botsim_core::graph::{Graph, GraphError};
 use botsim_core::robot::Reception;
-use botsim_core::spec::RobotSpec;
 use botsim_core::world::{RobotId, World};
+use botsim_model::graph::Graph;
+use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;
@@ -272,21 +272,6 @@ fn it_drives_through_a_node_where_curves_join_smoothly_and_stops_at_a_kink() {
 }
 
 #[test]
-fn the_travel_length_of_an_edge_is_the_length_of_its_curve_for_the_type_that_has_one() {
-    // quarter circle of radius 5: 5π/2 = 7.854 m on a chord of 7.071 m (S74)
-    let g = graph(&format!(",{ARC}"), true);
-    let e = g.edge_idx("A-B").unwrap();
-    let curved = g.edge_travel_length(e, "ACME", "X1");
-    assert!((curved - 5.0 * FRAC_PI_2).abs() < 1e-3, "{curved}");
-    // type Y2 drives the straight chord on the same edge
-    let straight = g.edge_travel_length(e, "ACME", "Y2");
-    assert!((straight - 50.0_f64.sqrt()).abs() < 1e-9, "{straight}");
-    // an edge without a curve: the distance between the nodes
-    let bc = g.edge_idx("B-C").unwrap();
-    assert!((g.edge_travel_length(bc, "ACME", "X1") - 7.0).abs() < 1e-9);
-}
-
-#[test]
 fn the_edge_is_curved_only_for_the_type_whose_properties_have_the_trajectory() {
     // type Y2 is listed on A-B without a trajectory: it drives the straight chord
     let mut w = world(graph(&format!(",{ARC}"), true), "Y2", "DIFFERENTIAL", false);
@@ -399,45 +384,6 @@ fn the_direction_the_robot_travels_in_turns_with_the_curve() {
     let (f, l) = (first.unwrap(), last);
     assert!(f.0 > 0.99 && f.1.abs() < 0.1, "starts east: {f:?}");
     assert!(l.1 > 0.99 && l.0.abs() < 0.1, "ends north: {l:?}");
-}
-
-#[test]
-fn wrong_trajectories_are_refused_when_the_layout_is_read() {
-    let read = |ab: &str| {
-        let types = r#"[{"manufacturer":"ACME","seriesName":"X1"}]"#;
-        let json = format!(
-            r#"{{"metaInformation":{{"lifId":"t","creator":"t","exportTimestamp":"2026-11-21T10:00:00.000Z","lifVersion":"2.0.0"}},
-            "origins":[{{"originId":"O","layouts":[{{"layoutId":"L","layoutVersion":"1",
-            "nodes":[{{"nodeId":"A","mapId":"M","nodePosition":{{"x":0.0,"y":0.0}},"mobileRobotTypeNodeProperties":[{{"mobileRobotTypes":{types}}}]}},
-                     {{"nodeId":"B","mapId":"M","nodePosition":{{"x":5.0,"y":5.0}},"mobileRobotTypeNodeProperties":[{{"mobileRobotTypes":{types}}}]}}],
-            "edges":[{{"edgeId":"A-B","startNodeId":"A","endNodeId":"B","mobileRobotTypeEdgeProperties":[
-              {{"mobileRobotTypes":{types}{ab}}}]}}]}}]}}]}}"#
-        );
-        Graph::from_lif(&serde_json::from_str::<Lif>(&json).unwrap())
-    };
-    assert!(read(&format!(",{ARC}")).is_ok());
-    // it does not end on the end node (5, 5)
-    let e =
-        read(r#","trajectory":{"degree":1,"controlPoints":[{"x":0.0,"y":0.0},{"x":9.0,"y":9.0}]}"#)
-            .unwrap_err();
-    match &e {
-        GraphError::BadTrajectory { edge, reason } => {
-            assert_eq!(edge, "A-B");
-            assert!(reason.contains("end node"), "{reason}");
-        }
-        other => panic!("{other:?}"),
-    }
-    // it does not start on the start node
-    assert!(
-        read(r#","trajectory":{"degree":1,"controlPoints":[{"x":1.0,"y":0.0},{"x":5.0,"y":5.0}]}"#)
-            .is_err()
-    );
-    // not a curve: degree 3 with three points, a zero weight
-    let e = read(r#","trajectory":{"degree":3,"controlPoints":[{"x":0.0,"y":0.0},{"x":1.0,"y":0.0},{"x":5.0,"y":5.0}]}"#)
-        .unwrap_err()
-        .to_string();
-    assert!(e.contains("A-B") && e.contains("control points"), "{e}");
-    assert!(read(r#","trajectory":{"degree":1,"controlPoints":[{"x":0.0,"y":0.0,"weight":0.0},{"x":5.0,"y":5.0}]}"#).is_err());
 }
 
 #[test]

@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 use botsim_record::{GeometryFile, GeometryKind, Outline};
 use vdma_lif::{Layout, Lif};
 
@@ -340,7 +340,7 @@ fn report_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use botsim_core::spec::Kinematics;
+    use botsim_model::spec::Kinematics;
 
     fn lif() -> Lif {
         let ty = r#"{"mobileRobotTypes":[{"manufacturer":"ACME","seriesName":"X1"}]}"#;

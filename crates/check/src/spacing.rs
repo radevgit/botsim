@@ -5,7 +5,7 @@
 //! longest robot that may drive the edge between them (plus a margin for the
 //! protective field), the bodies overlap.
 
-use botsim_core::graph::Graph;
+use botsim_model::graph::Graph;
 use vdma_lif::{Layout, Lif};
 
 use crate::finding::{Finding, Level};
@@ -91,7 +91,7 @@ fn report_layout(layout: &Layout, graph: &Graph, tight: &[Tight], out: &mut Vec<
         format!(
             "; for {} the factsheet has no protective field, so the simulator's default margin ({} m) was used",
             defaults.join(", "),
-            botsim_core::safety::FIELD_MARGIN
+            botsim_model::safety::FIELD_MARGIN
         )
     };
     let idx = LayoutIndex::new(layout);
@@ -117,7 +117,7 @@ fn report_layout(layout: &Layout, graph: &Graph, tight: &[Tight], out: &mut Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use botsim_core::spec::Kinematics;
+    use botsim_model::spec::Kinematics;
 
     fn lif(len: f64) -> Lif {
         let ty = r#"{"mobileRobotTypes":[{"manufacturer":"ACME","seriesName":"X1"}]}"#;

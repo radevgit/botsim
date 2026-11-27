@@ -1,4 +1,4 @@
-use botsim_core::spec::{DEFAULT_ANGULAR_SPEED, Kinematics, RobotSpec, Shape, SpecError};
+use botsim_model::spec::{DEFAULT_ANGULAR_SPEED, Kinematics, RobotSpec, Shape, SpecError};
 use vda5050::factsheet::{Envelope2d, Factsheet, Point2d};
 
 const DIFF_ROBOT: &str = include_str!("data/diff_robot.factsheet.json");
@@ -155,4 +155,26 @@ fn only_safety_fields_means_fallback_and_degenerate_envelope_is_rejected() {
         RobotSpec::from_factsheet(&f).unwrap_err(),
         SpecError::BadShape
     );
+}
+
+fn spec() -> RobotSpec {
+    let f: Factsheet =
+        serde_json::from_str(include_str!("data/diff_robot.factsheet.json")).unwrap();
+    RobotSpec::from_factsheet(&f).unwrap()
+}
+
+#[test]
+fn the_factor_scales_only_the_top_speed() {
+    let s = spec();
+    let slow = s.with_speed_factor(0.9);
+    assert!((slow.limits.max_speed - s.limits.max_speed * 0.9).abs() < 1e-12);
+    assert_eq!(slow.limits.max_acceleration, s.limits.max_acceleration);
+    assert_eq!(slow.limits.max_angular_speed, s.limits.max_angular_speed);
+    assert_eq!(slow.shape, s.shape);
+}
+
+#[test]
+#[should_panic(expected = "speed factor")]
+fn a_factor_above_one_is_a_bug() {
+    spec().with_speed_factor(1.1);
 }

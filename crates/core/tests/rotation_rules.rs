@@ -4,10 +4,10 @@
 use botsim_core::actions::ActionTimes;
 use botsim_core::drive::Phase;
 use botsim_core::errors::ErrorType;
-use botsim_core::graph::{Graph, Rotation};
 use botsim_core::robot::Reception;
-use botsim_core::spec::RobotSpec;
 use botsim_core::world::{RobotId, World};
+use botsim_model::graph::Graph;
+use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;
@@ -104,7 +104,7 @@ fn run(w: &mut World) -> (f64, f64, f64, f64) {
     for step in 0..8000 {
         w.step();
         let h = w.pose(&id()).unwrap().heading;
-        let d = botsim_core::motion::angle_diff(last, h);
+        let d = botsim_model::angle::angle_diff(last, h);
         net += d;
         if d > 0.0 {
             ccw += d;
@@ -117,40 +117,6 @@ fn run(w: &mut World) -> (f64, f64, f64, f64) {
         }
     }
     panic!("never finished");
-}
-
-#[test]
-fn the_layout_rules_are_read_and_combine_as_a_boolean_and() {
-    let g = graph(
-        r#""rotationAtStartNodeAllowed":"NONE","rotationAtEndNodeAllowed":"CW""#,
-        "",
-    );
-    let (ab, bc) = (g.edge_idx("A-B").unwrap(), g.edge_idx("B-C").unwrap());
-    assert_eq!(
-        g.edge_rotation(ab, "ACME", "X1"),
-        (Rotation::None, Rotation::Cw)
-    );
-    // nothing said: both ways
-    assert_eq!(
-        g.edge_rotation(bc, "ACME", "X1"),
-        (Rotation::Both, Rotation::Both)
-    );
-
-    use Rotation::{Both, Ccw, Cw, None};
-    for (a, b, want) in [
-        (Both, Both, Both),
-        (Both, Ccw, Ccw),
-        (Cw, Both, Cw),
-        (Ccw, Cw, None),
-        (None, Both, None),
-        (Ccw, Ccw, Ccw),
-    ] {
-        assert_eq!(a.and(b), want, "{a:?} and {b:?}");
-        assert_eq!(b.and(a), want);
-    }
-    assert!(Both.allows(true) && Both.allows(false));
-    assert!(Ccw.allows(true) && !Ccw.allows(false));
-    assert!(!None.allows(true) && !None.allows(false));
 }
 
 #[test]

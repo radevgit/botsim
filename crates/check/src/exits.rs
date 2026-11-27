@@ -63,7 +63,7 @@ fn report_layout(layout: &Layout, a: &Analysis, t: &TypeRef, out: &mut Vec<Findi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use botsim_core::spec::Kinematics;
+    use botsim_model::spec::Kinematics;
     use vdma_lif::Lif;
 
     #[test]

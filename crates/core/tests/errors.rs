@@ -2,11 +2,11 @@ use std::collections::HashSet;
 
 use botsim_core::drive::{DriveError, Driver, RouteEdge};
 use botsim_core::errors::{ErrorType, RobotError};
-use botsim_core::graph::Graph;
 use botsim_core::order_route::OrderError;
-use botsim_core::orientation::OrientationError;
-use botsim_core::spec::RobotSpec;
 use botsim_core::state_report::{Header, build_state};
+use botsim_model::graph::Graph;
+use botsim_model::orientation::OrientationError;
+use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 use vda5050::state::ErrorLevel::{self, Critical, Fatal, Urgent, Warning};
 use vdma_lif::Lif;

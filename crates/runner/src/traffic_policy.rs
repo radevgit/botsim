@@ -37,7 +37,7 @@ use std::path::Path;
 use botsim_baseline::order_builder::Plan;
 use botsim_baseline::policy::{Ask, Fleet, Release, Reroute, Setup, TrafficPolicy};
 use botsim_baseline::zone_grants::Answer;
-use botsim_core::graph::NodeIdx;
+use botsim_model::graph::NodeIdx;
 use botsim_sweep::{MapOptions, TypeRef};
 use botsim_traffic::{NotAdded, Piece, Report, Route, Spots, Traffic};
 

@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use botsim::scenario::Scenario;
 use botsim::summary;
-use botsim_core::graph::Graph;
 use botsim_core::observer::{Observer, Snapshot};
+use botsim_model::graph::Graph;
 
 #[derive(Debug)]
 struct Recorder(Rc<RefCell<Vec<Snapshot>>>);

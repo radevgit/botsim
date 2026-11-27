@@ -5,7 +5,8 @@
 //! brake to the wanted speed at the end of the path. Rotation at nodes is a
 //! separate step.
 
-use crate::spec::Limits;
+use botsim_model::angle::{angle_diff, normalize_angle};
+use botsim_model::spec::Limits;
 
 /// Position along the edge and speed. Units: m, m/s.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -83,23 +84,6 @@ pub fn advance(st: Along, goal: EdgeGoal, limits: &Limits, dt: f64) -> (Along, b
         },
         false,
     )
-}
-
-/// Normalise an angle to (-π, π].
-pub fn normalize_angle(a: f64) -> f64 {
-    let two_pi = std::f64::consts::TAU;
-    let mut r = a % two_pi; // (-2π, 2π)
-    if r > std::f64::consts::PI {
-        r -= two_pi;
-    } else if r <= -std::f64::consts::PI {
-        r += two_pi;
-    }
-    r
-}
-
-/// Signed shortest rotation from `from` to `to`, in (-π, π]. Positive = counter-clockwise.
-pub fn angle_diff(from: f64, to: f64) -> f64 {
-    normalize_angle(to - from)
 }
 
 /// Like [`rotate`], but in the given direction (`ccw` or clockwise), even if that

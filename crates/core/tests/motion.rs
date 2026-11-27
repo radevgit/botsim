@@ -1,5 +1,5 @@
 use botsim_core::motion::{Along, EdgeGoal, advance};
-use botsim_core::spec::Limits;
+use botsim_model::spec::Limits;
 
 const DT: f64 = 0.05;
 
@@ -149,7 +149,8 @@ fn already_at_the_end() {
 }
 
 mod rotation {
-    use botsim_core::motion::{angle_diff, normalize_angle, rotate};
+    use botsim_core::motion::rotate;
+    use botsim_model::angle::{angle_diff, normalize_angle};
     use std::f64::consts::{FRAC_PI_2, PI};
 
     const DT: f64 = 0.05;
@@ -163,15 +164,6 @@ mod rotation {
             }
         }
         panic!("did not arrive");
-    }
-
-    #[test]
-    fn normalises_angles() {
-        assert!((normalize_angle(3.0 * PI) - PI).abs() < 1e-12);
-        assert!((normalize_angle(-PI) - PI).abs() < 1e-12);
-        assert!((normalize_angle(2.5 * PI) - FRAC_PI_2).abs() < 1e-12);
-        assert!((normalize_angle(-2.5 * PI) + FRAC_PI_2).abs() < 1e-12);
-        assert_eq!(normalize_angle(0.3), 0.3);
     }
 
     #[test]

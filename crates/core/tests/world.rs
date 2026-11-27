@@ -1,8 +1,8 @@
 use botsim_core::actions::ActionTimes;
-use botsim_core::graph::Graph;
 use botsim_core::robot::Reception::Accepted;
-use botsim_core::spec::RobotSpec;
 use botsim_core::world::{RobotId, World, WorldError};
+use botsim_model::graph::Graph;
+use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 use vda5050::instant_actions::InstantActions;
 use vda5050::order::Order;

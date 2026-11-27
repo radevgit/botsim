@@ -1,9 +1,9 @@
 use botsim_core::actions::ActionTimes;
 use botsim_core::drive::{Driver, Phase};
-use botsim_core::graph::Graph;
 use botsim_core::order_route::route_from_order;
-use botsim_core::spec::RobotSpec;
 use botsim_core::state_report::{Header, build_state};
+use botsim_model::graph::Graph;
+use botsim_model::spec::RobotSpec;
 use serde_json::Value;
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;

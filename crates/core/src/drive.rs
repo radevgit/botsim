@@ -12,16 +12,13 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::actions::{ActionQueue, ActionSpec, ActionTimes, TIME_EPSILON};
-use crate::graph::{EdgeIdx, Graph, MapIdx, NodeIdx, Rotation};
-use crate::motion::{Along, EdgeGoal, advance, angle_diff, normalize_angle, rotate, rotate_in};
+use crate::motion::{Along, EdgeGoal, advance, rotate, rotate_in};
 use crate::order_route::{OrderRoute, PlanEdge, PlanNode};
-use crate::orientation::{OrientationError, edge_heading};
-use crate::path::Path;
-
-/// How far (rad) a car-like robot's heading may be off the direction an edge starts
-/// in and still count as aligned (S70): about 1 degree.
-pub const THREE_WHEEL_TOLERANCE: f64 = 0.02;
-use crate::spec::{Kinematics, Limits, RobotSpec};
+use botsim_model::angle::{angle_diff, normalize_angle};
+use botsim_model::graph::{EdgeIdx, Graph, MapIdx, NodeIdx, Rotation, THREE_WHEEL_TOLERANCE};
+use botsim_model::orientation::{OrientationError, edge_heading};
+use botsim_model::path::Path;
+use botsim_model::spec::{Kinematics, Limits, RobotSpec};
 use vda5050::order::OrientationType;
 use vda5050::state::ActionStatus;
 

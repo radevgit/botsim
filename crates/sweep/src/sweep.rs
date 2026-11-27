@@ -13,11 +13,11 @@
 
 use std::f64::consts::{PI, TAU};
 
-use botsim_core::graph::{Graph, Rotation};
-use botsim_core::motion::angle_diff;
-use botsim_core::path::Path;
-use botsim_core::safety::{FIELD_MARGIN, protective_field};
-use botsim_core::spec::{Kinematics, Shape};
+use botsim_model::angle::angle_diff;
+use botsim_model::graph::{Graph, Rotation};
+use botsim_model::path::Path;
+use botsim_model::safety::{FIELD_MARGIN, protective_field};
+use botsim_model::spec::{Kinematics, Shape};
 use togo::prelude::{
     Circle, OrientedRect, Point, circle, dist_circle_orect, dist_orect_orect, overlap_circle_orect,
     overlap_orect_orect, point,
@@ -312,7 +312,7 @@ fn samples(path: &Path, spacing: f64, marks_at: impl Fn(f64, f64, f64) -> [Point
 /// The **standstill protective field** of a robot of type `t` swept along `edge`;
 /// `None` for a lift ride.
 ///
-/// The field is the one of the simulator (`botsim_core::safety::protective_field`
+/// The field is the one of the simulator (`botsim_model::safety::protective_field`
 /// at speed 0): ahead of the body in the direction of travel, `FIELD_MARGIN` long
 /// and `LATERAL_MARGIN` wider than the body on each side. An omnidirectional
 /// robot gets the field of the circle that holds its body in any heading. A

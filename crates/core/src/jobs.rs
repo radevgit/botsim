@@ -12,7 +12,7 @@
 
 use std::fmt;
 
-use crate::graph::NodeIdx;
+use botsim_model::graph::NodeIdx;
 
 /// SplitMix64: tiny, fast, good enough for scenario randomness.
 #[derive(Debug, Clone, PartialEq, Eq)]

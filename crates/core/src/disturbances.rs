@@ -16,7 +16,6 @@
 use std::fmt;
 
 use crate::jobs::Rng;
-use crate::spec::RobotSpec;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DisturbanceError {
@@ -156,15 +155,5 @@ impl Disturbances {
     /// `speed_variation`, so in `(1 - speed_variation, 1]`.
     pub fn next_speed_factor(&mut self) -> f64 {
         1.0 - self.rng.next_f64() * self.speed_variation
-    }
-}
-
-impl RobotSpec {
-    /// The same robot with its top speed multiplied by `factor` (0 < `factor` <= 1).
-    pub fn with_speed_factor(&self, factor: f64) -> RobotSpec {
-        assert!(factor > 0.0 && factor <= 1.0, "speed factor {factor}");
-        let mut s = self.clone();
-        s.limits.max_speed *= factor;
-        s
     }
 }

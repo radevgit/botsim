@@ -2,7 +2,7 @@
 
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, PI};
 
-use botsim_core::path::{Nurbs, NurbsError, Path};
+use botsim_model::path::{Nurbs, NurbsError, Path};
 
 /// A quarter of a circle of radius `r` around the origin, from (r, 0) to (0, r): the
 /// exact rational quadratic NURBS (weights 1, √2/2, 1).

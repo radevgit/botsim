@@ -64,7 +64,7 @@ pub struct RobotSpec {
     pub min_speed: f64,
     pub shape: Shape,
     /// The factsheet this spec was made from; the robot sends it as its
-    /// `factsheet` message ([`crate::world::World::factsheet`], S61).
+    /// `factsheet` message (`World::factsheet` in `botsim-core`, S61).
     pub factsheet: Factsheet,
 }
 
@@ -188,5 +188,13 @@ impl RobotSpec {
             shape: body_shape(f)?,
             factsheet: f.clone(),
         })
+    }
+
+    /// The same robot with its top speed multiplied by `factor` (0 < `factor` <= 1).
+    pub fn with_speed_factor(&self, factor: f64) -> RobotSpec {
+        assert!(factor > 0.0 && factor <= 1.0, "speed factor {factor}");
+        let mut s = self.clone();
+        s.limits.max_speed *= factor;
+        s
     }
 }

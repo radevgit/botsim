@@ -19,8 +19,8 @@ use std::time::Instant;
 
 use botsim::scenario::Scenario;
 use botsim::summary;
-use botsim_core::graph::Graph;
 use botsim_core::observer::{Observer, Snapshot};
+use botsim_model::graph::Graph;
 
 const FACTSHEET: &str = include_str!("../../../scenarios/diff_robot.factsheet.json");
 

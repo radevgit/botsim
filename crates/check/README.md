@@ -73,7 +73,7 @@ with their depth (`node_pairs`). Ids only; see the note for the viewer for the f
 
 ## How the swept outline is made
 
-`Graph::edge_path` of `botsim-core` (the LIF trajectory, a NURBS curve, sampled; or the
+`Graph::edge_path` of `botsim-model` (the LIF trajectory, a NURBS curve, sampled; or the
 straight line) is sampled every 0.25 m, curves much more finely (no corner moves more than 2 cm
 between samples); at a node the body is swept over the turns on the spot (see
 `crates/sweep/README.md`). At each sample the body outline of the factsheet
@@ -121,5 +121,5 @@ What comes out is expected for demonstration fragments, not a sign of wrong chec
 ## Rules for the code
 
 No panics on anything the input files cause: unusable files are a `LoadError`, layout
-problems are findings. Touch only this crate; `botsim-core` and `botsim-scenario` are used
+problems are findings. Touch only this crate; `botsim-model` and `botsim-scenario` are used
 read-only.
