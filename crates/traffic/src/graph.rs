@@ -604,7 +604,7 @@ mod tests {
     use crate::groups::groups;
     use crate::spots::Spots;
     use crate::testing::{SMALL, edge_pair, empty_map, layout, route};
-    use botsim_sweep::ConflictMap;
+    use botsim_space::ConflictMap;
 
     /// The events that must come after `start`, found by walking over every one.
     fn walked(graph: &OrderGraph, start: Event) -> BTreeSet<Event> {

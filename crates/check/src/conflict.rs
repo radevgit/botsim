@@ -1,6 +1,6 @@
 //! Check 5: the findings of the conflict map.
 //!
-//! The map itself (swept outlines, overlaps, clearance) is computed by `botsim-sweep`
+//! The map itself (swept outlines, overlaps, clearance) is computed by `botsim-space`
 //! and re-exported here. This module turns it into findings. For every pair of robot
 //! types and every pair of edges without a common node whose swept outlines overlap
 //! (the uncovered kind of `docs/graph_problems.md`: G5, G6, G11) there is a finding;
@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use vdma_lif::{Layout, Lif};
 
-pub use botsim_sweep::conflict::{
+pub use botsim_space::conflict::{
     CLEARANCE, Conflict, ConflictMap, JUNCTION_HOPS, MIN_OVERLAP, MapOptions, NodeConflict,
     NodeNodeConflict, NodeNodeTypePair, NodeTypePair, TypePair, compute, to_json,
 };
@@ -250,7 +250,7 @@ fn report_layout(
 mod tests {
     use super::*;
     use botsim_model::spec::Kinematics;
-    use botsim_sweep::TypeRef;
+    use botsim_space::TypeRef;
 
     /// Edges `(id, from, to)` between nodes `(id, x, y)`, all usable by ACME/X1 and ACME/Y2.
     fn lif(nodes: &[(&str, f64, f64)], edges: &[(&str, &str, &str)]) -> Lif {

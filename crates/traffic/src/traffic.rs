@@ -1224,7 +1224,7 @@ fn reroute(route: &Route, pieces: impl IntoIterator<Item = usize>) -> NotAdded {
 mod tests {
     use super::*;
     use crate::testing::{LARGE, SMALL, edge, empty_map, layout, node, route};
-    use botsim_sweep::{ConflictMap, NodeConflict, NodeTypePair};
+    use botsim_space::{ConflictMap, NodeConflict, NodeTypePair};
 
     /// The module over a layout that has what these routes use.
     fn traffic(routes: &[&[&str]], map: &ConflictMap) -> Traffic {

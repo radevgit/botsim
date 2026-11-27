@@ -38,7 +38,7 @@ use botsim_baseline::order_builder::Plan;
 use botsim_baseline::policy::{Ask, Fleet, Release, Reroute, Setup, TrafficPolicy};
 use botsim_baseline::zone_grants::Answer;
 use botsim_model::graph::NodeIdx;
-use botsim_sweep::{MapOptions, TypeRef};
+use botsim_space::{MapOptions, TypeRef};
 use botsim_traffic::{NotAdded, Piece, Report, Route, Spots, Traffic};
 
 use crate::scenario::Scenario;
@@ -104,7 +104,7 @@ impl TrafficAdapter {
                 types.push(t);
             }
         }
-        let map = botsim_sweep::compute(&lif, &types, &map_options(scenario))
+        let map = botsim_space::compute(&lif, &types, &map_options(scenario))
             .ok_or("no conflict map: the layout cannot be turned into a graph")?;
         let spots = Spots::new(&lif, &map).map_err(|e| e.to_string())?;
         Ok(TrafficAdapter {

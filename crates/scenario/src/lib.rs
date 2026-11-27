@@ -163,7 +163,7 @@ pub struct Scenario {
     pub route_wait_weight: f64,
     /// Swept-area reservation (baseline): a robot is released onto an edge only if
     /// no other robot holds an edge whose swept outline overlaps it or comes nearer
-    /// than `conflict_clearance` (the conflict map of `botsim-sweep`, per pair of
+    /// than `conflict_clearance` (the conflict map of `botsim-space`, per pair of
     /// robot types). Default `true`; `false` reserves nodes and edges only. It needs
     /// the scenario file (the layout and factsheets are read again), so a scenario
     /// from text has none.

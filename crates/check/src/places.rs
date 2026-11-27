@@ -1,4 +1,4 @@
 //! Looking up the position of layout objects for findings (the index is in
-//! `botsim-sweep`).
+//! `botsim-space`).
 
-pub use botsim_sweep::LayoutIndex;
+pub use botsim_space::LayoutIndex;

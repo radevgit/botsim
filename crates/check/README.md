@@ -59,8 +59,8 @@ junction* (a diverge or merge: a node of one edge and a node of the other are at
 protective field) is `info`, with the junction nodes as places; the rest (*parallel*)
 is `warning`. In the map, a conflict then has `junction_nodes`.
 
-The swept outlines and the conflict map are computed by the library crate `botsim-sweep`
-(`crates/sweep`); the checker turns the map into findings. `Options::clearance` (default
+The swept outlines and the conflict map are computed by the library crate `botsim-space`
+(`crates/space`); the checker turns the map into findings. `Options::clearance` (default
 0.10 m, CLI `--clearance <m>`): in the map two bodies **nearer** than this count as conflicting
 (overlap too; `depth` 0 and `distance` > 0 for a near miss). The findings keep to real overlaps
 (`min_overlap`), so the clearance changes only the map. `check_all` and `check_inputs` use
@@ -76,7 +76,7 @@ with their depth (`node_pairs`). Ids only; see the note for the viewer for the f
 `Graph::edge_path` of `botsim-model` (the LIF trajectory, a NURBS curve, sampled; or the
 straight line) is sampled every 0.25 m, curves much more finely (no corner moves more than 2 cm
 between samples); at a node the body is swept over the turns on the spot (see
-`crates/sweep/README.md`). At each sample the body outline of the factsheet
+`crates/space/README.md`). At each sample the body outline of the factsheet
 (`envelopes2d` without safety fields, else length × width) is placed at the kinematic center
 and turned to the direction of travel. An omnidirectional robot gets a circle round its
 kinematic center that holds the body in any heading (more conflicts than real). Overlap and

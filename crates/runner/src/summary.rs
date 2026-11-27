@@ -15,7 +15,7 @@ use botsim_baseline::policy::TrafficPolicy;
 use botsim_core::jobs::Job;
 use botsim_core::lift::DoorState;
 use botsim_core::world::World;
-use botsim_sweep::{MapOptions, TypeRef};
+use botsim_space::{MapOptions, TypeRef};
 use serde::Serialize;
 
 use crate::scenario::{Scenario, ScenarioError};
@@ -290,7 +290,7 @@ pub fn run(scenario: &Scenario, world: World) -> Result<Summary, ScenarioError> 
 /// measured and reported in `timing` (S39).
 ///
 /// Unless the scenario says `conflict_reservation = false`, a scenario read from a
-/// file also gets swept-area reservation: the conflict map of `botsim-sweep` (made
+/// file also gets swept-area reservation: the conflict map of `botsim-space` (made
 /// from the layout and the factsheets) goes to the controller.
 pub fn run_with(
     scenario: &Scenario,
@@ -547,7 +547,7 @@ type ConflictLists = (
     Vec<NodeNodeConflictInput>,
 );
 
-/// The conflict map of the layout for the fleet (`botsim-sweep`): edge pairs whose
+/// The conflict map of the layout for the fleet (`botsim-space`): edge pairs whose
 /// swept outlines overlap or come nearer than the scenario's `conflict_clearance`
 /// and that have no node in common (the node reservation covers the others), nodes
 /// against edges, and all pairs of nodes too close for a robot on each. Empty if the
@@ -579,7 +579,7 @@ fn conflict_input(scenario: &Scenario, scenario_file: &std::path::Path) -> Confl
         clearance: scenario.conflict_clearance,
         ..MapOptions::default()
     };
-    let Some(map) = botsim_sweep::compute(&lif, &types, &options) else {
+    let Some(map) = botsim_space::compute(&lif, &types, &options) else {
         return none;
     };
     let edges = map

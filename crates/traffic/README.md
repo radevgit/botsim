@@ -6,7 +6,7 @@ each robot's route node by node according to it.
 
 It **never plans paths** and never talks to a robot. Routes come from a dispatcher; the
 dispatcher sends what is released and, when asked, looks for another way. The crate depends
-only on [`botsim-sweep`](../sweep/README.md) and `vdma-lif`, not on the simulator.
+only on [`botsim-space`](../space/README.md) and `vdma-lif`, not on the simulator.
 
 ## What it decides
 
@@ -45,10 +45,10 @@ an error or `None`.
 ## Interface
 
 ```rust
-use botsim_sweep::{MapOptions, compute};
+use botsim_space::{MapOptions, compute};
 use botsim_traffic::{Report, Route, Spots, Traffic};
 
-// types: one botsim_sweep::TypeRef per robot type, from its factsheet
+// types: one botsim_space::TypeRef per robot type, from its factsheet
 let map = compute(&lif, &types, &MapOptions::default()).ok_or("not a graph")?;
 let mut traffic = Traffic::new(Spots::new(&lif, &map)?);
 

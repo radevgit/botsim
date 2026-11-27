@@ -127,7 +127,7 @@ pub trait TrafficPolicy: Debug {
     /// Once, before the first cycle.
     fn start(&mut self, setup: &Setup);
 
-    /// The edge pairs two robot types must not use at the same time (`botsim-sweep`).
+    /// The edge pairs two robot types must not use at the same time (`botsim-space`).
     fn conflicts(&mut self, _edges: &[ConflictInput]) {}
 
     /// The node-edge pairs; called after [`conflicts`](TrafficPolicy::conflicts).

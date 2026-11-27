@@ -705,7 +705,7 @@ baseline.
 - **Swept-area reservation (S102, setting `conflict_reservation`, default true):**
   two edges that cross, merge or run close have no node in common, so the node
   and edge reservations let two robots use them at the same time. The library
-  `botsim-sweep` (shared with the layout checker; the runner does not depend on the
+  `botsim-space` (shared with the layout checker; the runner does not depend on the
   checker, U8) makes the **conflict map**: per pair of robot types, the pairs of
   edges whose swept outlines (the factsheet body, placed at most 0.25 m, and never
   more than the body length, apart; on curves so finely that no corner moves more

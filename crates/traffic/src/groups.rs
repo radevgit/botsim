@@ -291,7 +291,7 @@ fn touching(p: usize) -> RangeInclusive<usize> {
 mod tests {
     use super::*;
     use crate::testing::{LARGE, SMALL, edge, edge_pair, empty_map, lif, node};
-    use botsim_sweep::{ConflictMap, NodeConflict, NodeTypePair};
+    use botsim_space::{ConflictMap, NodeConflict, NodeTypePair};
     use vdma_lif::Lif;
 
     fn route(type_name: &str, nodes: &[&str], edges: &[&str]) -> Route {

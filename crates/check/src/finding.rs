@@ -24,8 +24,8 @@ impl fmt::Display for Level {
 }
 
 /// A layout object a finding is about, with its position (kind, id, map, points),
-/// so a viewer can draw it without looking the id up. Defined in `botsim-sweep`.
-pub use botsim_sweep::{Place as FindingPlace, PlaceKind};
+/// so a viewer can draw it without looking the id up. Defined in `botsim-space`.
+pub use botsim_space::{Place as FindingPlace, PlaceKind};
 
 /// How many ids the text output shows per finding.
 const TEXT_IDS: usize = 10;

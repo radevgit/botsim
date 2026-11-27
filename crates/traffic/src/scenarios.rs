@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use botsim_sweep::ConflictMap;
+use botsim_space::ConflictMap;
 
 use crate::graph::{Pass, Refused};
 use crate::groups::{Route, groups};

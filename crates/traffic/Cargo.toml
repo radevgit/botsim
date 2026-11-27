@@ -9,7 +9,7 @@ repository.workspace = true
 authors = ["radevgit"]
 
 [dependencies]
-botsim-sweep = { path = "../sweep" }
+botsim-space = { path = "../space" }
 vdma-lif = "0.1.0"
 
 [dev-dependencies]

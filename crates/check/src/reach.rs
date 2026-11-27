@@ -19,8 +19,8 @@ use crate::places::LayoutIndex;
 
 const CHECK: &str = "reachability";
 
-/// A robot type of the fleet, as the check needs it (defined in `botsim-sweep`).
-pub use botsim_sweep::TypeRef;
+/// A robot type of the fleet, as the check needs it (defined in `botsim-space`).
+pub use botsim_space::TypeRef;
 
 /// Where a node is for one robot type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

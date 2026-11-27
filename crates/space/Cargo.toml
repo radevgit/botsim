@@ -1,6 +1,6 @@
 [package]
-name = "botsim-sweep"
-description = "Swept robot bodies along LIF edges and the conflict map of a layout for a mixed fleet"
+name = "botsim-space"
+description = "Space on a layout: swept robot bodies along LIF edges and the conflict map for a mixed fleet"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

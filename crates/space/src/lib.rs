@@ -1,4 +1,4 @@
-//! Swept robot bodies along LIF edges, and the conflict map of a layout for a mixed fleet.
+//! Space on a layout: swept robot bodies along LIF edges, and the conflict map for a mixed fleet.
 //!
 //! For each robot type the outline of its body is swept along each edge it may drive
 //! ([`sweep::sweep`]) and placed on each node it may stand on ([`sweep::node_bodies`]).
@@ -8,14 +8,15 @@
 //! JSON output; the library knows nothing about findings or scenarios.
 //!
 //! ```no_run
-//! use botsim_sweep::{MapOptions, TypeRef, compute};
+//! use botsim_space::{MapOptions, TypeRef, compute};
 //! # fn run(lif: &vdma_lif::Lif, types: &[TypeRef]) {
 //! let map = compute(lif, types, &MapOptions::default());
 //! # }
 //! ```
 //!
 //! [`TypeRef`] is made by the caller from a factsheet (the checker has the code).
-//! Used by `botsim-check` (findings) and the runner (reservations of the baseline).
+//! Used by `botsim-check` (findings), the runner (makes the map for both controllers) and
+//! `botsim-traffic` (which pieces of two routes cannot be used at the same time).
 
 pub mod conflict;
 pub mod places;

@@ -2,7 +2,7 @@
 //! protective field (`MapOptions::protective_field`), default options otherwise.
 //!
 //! ```sh
-//! cargo run --release -p botsim-sweep --example map_stats -- <layout.lif.json> <factsheet.json>...
+//! cargo run --release -p botsim-space --example map_stats -- <layout.lif.json> <factsheet.json>...
 //! ```
 //!
 //! Prints one line per setting: conflicts (edge-edge, node-edge), the ones of a
@@ -10,7 +10,7 @@
 
 use std::time::{Duration, Instant};
 
-use botsim_sweep::{ConflictMap, MapOptions, TypeRef, compute};
+use botsim_space::{ConflictMap, MapOptions, TypeRef, compute};
 use vda5050::factsheet::Factsheet;
 use vdma_lif::Lif;
 
@@ -68,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let map = map.ok_or("the layout cannot be turned into a graph")?;
         report(&map, protective_field, best);
         if let (false, Some(file)) = (protective_field, &dump) {
-            std::fs::write(file, botsim_sweep::to_json(&map))?;
+            std::fs::write(file, botsim_space::to_json(&map))?;
         }
         if let Some((node, edge)) = &pair {
             let found = map

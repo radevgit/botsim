@@ -23,7 +23,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap, HashMap, HashSet};
 
 use botsim_model::graph::Graph;
-use botsim_sweep::{Sweep, standing_body, sweep};
+use botsim_space::{Sweep, standing_body, sweep};
 use vdma_lif::{Layout, Lif};
 
 use crate::conflict::ConflictMap;
@@ -493,7 +493,7 @@ mod tests {
     use super::*;
     use crate::finding::PlaceKind;
     use botsim_model::spec::Kinematics;
-    use botsim_sweep::{MapOptions, compute};
+    use botsim_space::{MapOptions, compute};
 
     /// The neighbourhood of the drop-off `D001` (node N0053) of the roadmap
     /// `W_real_L`: coordinates and curves from the roadmap file. The queue comes by

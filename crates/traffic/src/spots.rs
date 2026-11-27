@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
-use botsim_sweep::ConflictMap;
+use botsim_space::ConflictMap;
 use vdma_lif::Lif;
 
 /// A node or an edge of the layout, by its LIF id.
@@ -297,7 +297,7 @@ impl Spots {
 mod tests {
     use super::*;
     use crate::testing::{LARGE, SMALL, edge, edge_pair, empty_map, lif, node};
-    use botsim_sweep::{NodeConflict, NodeNodeConflict, NodeNodeTypePair, NodeTypePair};
+    use botsim_space::{NodeConflict, NodeNodeConflict, NodeNodeTypePair, NodeTypePair};
 
     /// Two edges without a common node: E1 from A to B, E2 from C to D.
     fn layout() -> Lif {

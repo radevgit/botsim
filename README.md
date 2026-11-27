@@ -18,7 +18,7 @@ botsim/
 │   ├── scenario/      scenario file (TOML): loading, building the world
 │   ├── baseline/      bundled baseline fleet controller
 │   ├── traffic/       passing order at shared spots (--policy traffic)
-│   ├── sweep/         swept robot outlines and the conflict map
+│   ├── space/         swept robot outlines and the conflict map
 │   ├── runner/        command line and JSON summary (package botsim)
 │   ├── check/         static layout checker (checks: see its README)
 │   ├── record/        recording of a run (JSON Lines)
@@ -30,7 +30,7 @@ botsim/
 Each crate's package is `botsim-<folder>`, except the runner, which is `botsim`.
 
 Details: [run](crates/runner/README.md), [check](crates/check/README.md),
-[conflict map](crates/sweep/README.md), [viewer](crates/viewer/README.md),
+[conflict map](crates/space/README.md), [viewer](crates/viewer/README.md),
 [video](crates/export/README.md).
 
 ## Quick start

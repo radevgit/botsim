@@ -1,12 +1,13 @@
-# botsim-sweep
+# botsim-space
 
-Swept robot bodies along LIF edges and the **conflict map** of a layout for a mixed fleet.
-Library only; it knows nothing about findings or scenario files. Used by `botsim-check`
-(findings) and meant for the runner (reservations of the baseline controller) and later
-the traffic module.
+Space on a layout: swept robot bodies along LIF edges and the **conflict map** of a layout
+for a mixed fleet. Library only; it knows nothing about findings or scenario files. Used by
+`botsim-check` (findings), the runner `botsim` (makes the map for the baseline controller
+and for traffic) and `botsim-traffic` (which pieces of two routes cannot be used at the same
+time).
 
 ```rust
-use botsim_sweep::{MapOptions, TypeRef, compute};
+use botsim_space::{MapOptions, TypeRef, compute};
 
 // one TypeRef per robot type, from its VDA 5050 factsheet
 let types: Vec<TypeRef> = factsheets.iter().map(TypeRef::from_factsheet).collect::<Result<_, _>>()?;
@@ -14,7 +15,7 @@ let map = compute(&lif, &types, &MapOptions::default()).expect("layout is a grap
 // map.pairs      edge against edge, per pair of types (shares_node, junction_nodes, depth, distance)
 // map.node_pairs a robot on a node against an edge that does not touch it
 // map.node_node_pairs  two robots on two different nodes (no junction_nodes)
-let json = botsim_sweep::to_json(&map);
+let json = botsim_space::to_json(&map);
 ```
 
 - `MapOptions { sample_step: 0.25, min_overlap: 0.05, clearance: 0.10, protective_field: false }`:
@@ -51,7 +52,7 @@ field; the JSON has no such mark, and the map does not record the option.
 ## Size and time
 
 ```sh
-cargo run --release -p botsim-sweep --example map_stats -- <layout.lif.json> <factsheet.json>...
+cargo run --release -p botsim-space --example map_stats -- <layout.lif.json> <factsheet.json>...
 ```
 
 Release build, default options (2026-11-26; warehouse4 one run, the others best of three);

@@ -43,8 +43,8 @@ pub mod spacing;
 pub mod start;
 pub mod structure;
 
-/// The swept outlines live in `botsim-sweep`.
-pub use botsim_sweep::sweep;
+/// The swept outlines live in `botsim-space`.
+pub use botsim_space::sweep;
 pub use finding::{Finding, FindingPlace, Level, PlaceKind, to_json, to_text};
 pub use input::{FleetType, Inputs, LoadError, load, load_with_geometry};
 
@@ -263,7 +263,7 @@ pub fn conflict_map_json(scenario_path: &Path) -> Result<String, LoadError> {
 }
 
 /// The robot type of a fleet entry as the checks need it (`TypeRef::from_factsheet`
-/// of `botsim-sweep`); the error is a finding (the factsheet cannot be used).
+/// of `botsim-space`); the error is a finding (the factsheet cannot be used).
 pub(crate) fn type_ref(f: &FleetType) -> Result<reach::TypeRef, Finding> {
     reach::TypeRef::from_factsheet(&f.factsheet).map_err(|e| {
         Finding::new(

@@ -3,7 +3,7 @@
 //! Two edges that cross, merge or run close have no node in common, so the node
 //! and edge reservations do not stop two robots from using them at the same time.
 //! A [`ConflictTable`] lists, per pair of robot types, the pairs of edges whose swept
-//! outlines overlap (made by `botsim-sweep` from the layout and the factsheets);
+//! outlines overlap (made by `botsim-space` from the layout and the factsheets);
 //! the controller releases a robot onto an edge only if no other robot holds an edge
 //! that conflicts with it.
 

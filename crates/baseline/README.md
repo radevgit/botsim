@@ -16,7 +16,7 @@ controller.completed(), rejected(), pending(), metrics(seconds)
 Optional: `set_charging`, `set_load_weight`, `set_wait_weight`, and the conflict
 lists of the layout (`set_conflicts`, then `set_node_conflicts` and
 `set_node_node_conflicts`), which the [runner](../runner/README.md) makes with
-[botsim-sweep](../sweep/README.md).
+[botsim-space](../space/README.md).
 
 ## Two parts
 

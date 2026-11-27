@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use botsim_sweep::{Conflict, ConflictMap, TypePair};
+use botsim_space::{Conflict, ConflictMap, TypePair};
 use vdma_lif::Lif;
 
 use crate::groups::Route;
