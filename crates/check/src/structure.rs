@@ -69,9 +69,9 @@ pub fn check(lif: &Lif, fleet_types: &[String]) -> Vec<Finding> {
                     .iter()
                     .filter(|e| {
                         !e.mobile_robot_type_edge_properties.iter().any(|p| {
-                            p.mobile_robot_types.iter().any(|t| {
-                                format!("{}/{}", t.manufacturer, t.series_name) == *name
-                            })
+                            p.mobile_robot_types
+                                .iter()
+                                .any(|t| format!("{}/{}", t.manufacturer, t.series_name) == *name)
                         })
                     })
                     .map(|e| e.edge_id.as_str())

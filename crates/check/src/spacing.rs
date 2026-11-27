@@ -5,8 +5,8 @@
 //! longest robot that may drive the edge between them (plus a margin for the
 //! protective field), the bodies overlap.
 
-use vdma_lif::{Layout, Lif};
 use botsim_core::graph::Graph;
+use vdma_lif::{Layout, Lif};
 
 use crate::finding::{Finding, Level};
 use crate::places::LayoutIndex;
@@ -65,12 +65,20 @@ pub fn check(lif: &Lif, types: &[TypeRef]) -> Vec<Finding> {
 fn report_layout(layout: &Layout, graph: &Graph, tight: &[Tight], out: &mut Vec<Finding>) {
     let mine: Vec<&Tight> = tight
         .iter()
-        .filter(|t| layout.edges.iter().any(|e| e.edge_id == graph.edges[t.edge].id))
+        .filter(|t| {
+            layout
+                .edges
+                .iter()
+                .any(|e| e.edge_id == graph.edges[t.edge].id)
+        })
         .collect();
     let Some(first) = mine.first() else {
         return;
     };
-    let ids: Vec<&str> = mine.iter().map(|t| graph.edges[t.edge].id.as_str()).collect();
+    let ids: Vec<&str> = mine
+        .iter()
+        .map(|t| graph.edges[t.edge].id.as_str())
+        .collect();
     let mut defaults: Vec<&str> = Vec::new();
     for t in mine.iter().filter(|t| t.default_field) {
         if !defaults.contains(&t.robot) {
@@ -138,11 +146,19 @@ mod tests {
         assert_eq!(f[0].ids, ["E1"]);
         assert_eq!(f[0].places.len(), 1);
         assert!(f[0].text.contains("needs 3.00 m"), "{}", f[0].text);
-        assert!(!f[0].text.contains("default margin"), "factsheet field: no note");
+        assert!(
+            !f[0].text.contains("default margin"),
+            "factsheet field: no note"
+        );
         let mut d = x1(2.4);
         d.field_from_factsheet = false;
         let f = check(&lif(2.0), &[d]);
-        assert!(f[0].text.contains("ACME/X1 the factsheet has no protective field"), "{}", f[0].text);
+        assert!(
+            f[0].text
+                .contains("ACME/X1 the factsheet has no protective field"),
+            "{}",
+            f[0].text
+        );
     }
 
     #[test]

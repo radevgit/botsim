@@ -67,7 +67,10 @@ fn cycles(a: &Analysis, t: &TypeRef, max_length: f64) -> (Vec<Cycle>, bool) {
             }
             let f = outs[*pos];
             *pos += 1;
-            if f < start || !a.usable[f] || !g.can_follow(e, f, t.kinematics, &t.manufacturer, &t.series) {
+            if f < start
+                || !a.usable[f]
+                || !g.can_follow(e, f, t.kinematics, &t.manufacturer, &t.series)
+            {
                 continue;
             }
             if f == start {
@@ -102,7 +105,17 @@ pub fn check(lif: &vdma_lif::Lif, a: &Analysis, t: &TypeRef, robots: usize) -> V
     let risky: Vec<&Cycle> = all.iter().filter(|c| capacity(c) < robots).collect();
     let mut out = Vec::new();
     for layout in lif.origins.iter().flat_map(|o| &o.layouts) {
-        report_layout(layout, &a.graph, &risky, all.len(), cut, robots, t, &capacity, &mut out);
+        report_layout(
+            layout,
+            &a.graph,
+            &risky,
+            all.len(),
+            cut,
+            robots,
+            t,
+            &capacity,
+            &mut out,
+        );
     }
     out
 }
@@ -123,7 +136,11 @@ fn report_layout(
         layout.edges.iter().map(|e| e.edge_id.as_str()).collect();
     let mine: Vec<&&Cycle> = risky
         .iter()
-        .filter(|c| c.edges.iter().all(|&e| here.contains(g.edges[e].id.as_str())))
+        .filter(|c| {
+            c.edges
+                .iter()
+                .all(|&e| here.contains(g.edges[e].id.as_str()))
+        })
         .collect();
     let Some(smallest) = mine.iter().min_by_key(|c| capacity(c)) else {
         return;
@@ -138,7 +155,11 @@ fn report_layout(
         }
     }
     let idx = LayoutIndex::new(layout);
-    let note = if cut { "; the search was cut short, there may be more" } else { "" };
+    let note = if cut {
+        "; the search was cut short, there may be more"
+    } else {
+        ""
+    };
     out.push(
         Finding::new(
             Level::Warning,
@@ -168,7 +189,13 @@ mod tests {
     /// two-way road B<>E that is not a loop.
     fn lif(side: f64) -> Lif {
         let ty = r#"{"mobileRobotTypes":[{"manufacturer":"ACME","seriesName":"X1"}]}"#;
-        let pts = [("A", 0.0, 0.0), ("B", side, 0.0), ("C", side, side), ("D", 0.0, side), ("E", side * 2.0, 0.0)];
+        let pts = [
+            ("A", 0.0, 0.0),
+            ("B", side, 0.0),
+            ("C", side, side),
+            ("D", 0.0, side),
+            ("E", side * 2.0, 0.0),
+        ];
         let nodes: Vec<String> = pts
             .iter()
             .map(|(id, x, y)| {

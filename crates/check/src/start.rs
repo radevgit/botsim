@@ -28,7 +28,11 @@ pub fn check(inputs: &Inputs) -> Vec<Finding> {
         .map(LayoutIndex::new)
         .collect();
     let place = |id: &str| -> Vec<FindingPlace> {
-        indexes.iter().find_map(|i| i.node(id)).into_iter().collect()
+        indexes
+            .iter()
+            .find_map(|i| i.node(id))
+            .into_iter()
+            .collect()
     };
 
     let mut out = Vec::new();
@@ -90,7 +94,11 @@ fn check_group(
 ) {
     let g = &a.graph;
     let start_nodes = &group.start_nodes;
-    let who = format!("robot group {} (\"{}\")", group_index + 1, group.serial_prefix);
+    let who = format!(
+        "robot group {} (\"{}\")",
+        group_index + 1,
+        group.serial_prefix
+    );
     let finding = |level, text: String, node: &str| {
         Finding::new(level, CHECK, text)
             .robot(&t.name)
@@ -111,7 +119,10 @@ fn check_group(
         if !g.node_allows(ni, &t.manufacturer, &t.series) {
             out.push(finding(
                 Level::Error,
-                format!("{who}: the layout does not allow robot type {} on start node \"{node}\"", t.name),
+                format!(
+                    "{who}: the layout does not allow robot type {} on start node \"{node}\"",
+                    t.name
+                ),
                 node,
             ));
             continue;
@@ -124,9 +135,9 @@ fn check_group(
             .collect();
         let heading = start_heading(group, i, g, ni, t);
         if !outs.is_empty()
-            && !outs.iter().any(|&e| {
-                g.can_start(heading, None, e, t.kinematics, &t.manufacturer, &t.series)
-            })
+            && !outs
+                .iter()
+                .any(|&e| g.can_start(heading, None, e, t.kinematics, &t.manufacturer, &t.series))
         {
             cannot_leave.push((node, heading));
         }
@@ -285,9 +296,11 @@ start_nodes = {start_nodes}
 "#
         ))
         .expect("test scenario parses");
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/diff_robot.factsheet.json");
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/diff_robot.factsheet.json");
         let mut factsheet: Factsheet =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("factsheet file")).expect("factsheet parses");
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("factsheet file"))
+                .expect("factsheet parses");
         factsheet.manufacturer = "ACME".into();
         factsheet.type_specification.series_name = "X1".into();
         Inputs {
@@ -330,7 +343,10 @@ start_nodes = {start_nodes}
         let f = check(&inputs(r#"["N0", "N1", "NX", "N0"]"#));
         let errors: Vec<_> = f.iter().filter(|x| x.level == Level::Error).collect();
         assert_eq!(errors.len(), 2, "{f:?}"); // NX missing, N0 used twice
-        let close: Vec<_> = f.iter().filter(|x| x.text.contains("closer than")).collect();
+        let close: Vec<_> = f
+            .iter()
+            .filter(|x| x.text.contains("closer than"))
+            .collect();
         assert_eq!(close.len(), 1);
         assert_eq!(close[0].ids, ["N0", "N1"]);
     }

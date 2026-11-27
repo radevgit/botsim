@@ -209,7 +209,11 @@ mod tests {
         let empty = GeometryFile::from_json_str(r#"{"version":1,"shapes":[]}"#).expect("parses");
         let f = check(&l, &empty);
         assert_eq!(f.len(), 1);
-        assert!(f[0].text.contains("no rack or shelf on its map"), "{}", f[0].text);
+        assert!(
+            f[0].text.contains("no rack or shelf on its map"),
+            "{}",
+            f[0].text
+        );
         assert!(check(&lif(""), &geometry()).is_empty());
     }
 }

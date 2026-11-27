@@ -123,7 +123,11 @@ fn report_node_layout(
     class: Class,
     out: &mut Vec<Finding>,
 ) {
-    let nodes: HashMap<&str, ()> = layout.nodes.iter().map(|n| (n.node_id.as_str(), ())).collect();
+    let nodes: HashMap<&str, ()> = layout
+        .nodes
+        .iter()
+        .map(|n| (n.node_id.as_str(), ()))
+        .collect();
     let mine: Vec<&NodeConflict> = sel
         .iter()
         .copied()
@@ -145,7 +149,10 @@ fn report_node_layout(
     places.dedup_by(|a, b| a.id == b.id);
     places.extend(idx.edges(mine.iter().map(|c| c.edge.as_str())));
     let who = if pair.type_node == pair.type_edge {
-        format!("a robot of {} standing on a node and another one driving an edge", pair.type_node)
+        format!(
+            "a robot of {} standing on a node and another one driving an edge",
+            pair.type_node
+        )
     } else {
         format!(
             "a robot of {} standing on a node and a robot of {} driving an edge",
@@ -181,7 +188,11 @@ fn report_layout(
     class: Class,
     out: &mut Vec<Finding>,
 ) {
-    let here: HashMap<&str, ()> = layout.edges.iter().map(|e| (e.edge_id.as_str(), ())).collect();
+    let here: HashMap<&str, ()> = layout
+        .edges
+        .iter()
+        .map(|e| (e.edge_id.as_str(), ()))
+        .collect();
     let mine: Vec<&&Conflict> = open
         .iter()
         .filter(|c| here.contains_key(c.edge_a.as_str()))
@@ -303,40 +314,87 @@ mod tests {
 
     #[test]
     fn near_a_junction_is_info_and_parallel_is_a_warning() {
-        let y2 = vec![TypeRef::test_rect("ACME/Y2", Kinematics::Differential, 2.4, 1.4)];
+        let y2 = vec![TypeRef::test_rect(
+            "ACME/Y2",
+            Kinematics::Differential,
+            2.4,
+            1.4,
+        )];
         // E3 starts 1.3 m beside the start of E1 (overlap 0.1 m): they come together
         // there (junction), shallow
         let l = lif(
-            &[("A", 0.0, 0.0), ("B", 30.0, 0.0), ("D", 0.0, 1.3), ("F", 5.0, 1.3)],
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 30.0, 0.0),
+                ("D", 0.0, 1.3),
+                ("F", 5.0, 1.3),
+            ],
             &[("E1", "A", "B"), ("E3", "D", "F")],
         );
         let m = compute(&l, &y2, &overlap_only()).expect("map");
         let f = findings(&l, &m);
-        let edge_f: Vec<_> = f.iter().filter(|x| x.text.contains("pair(s) of edges")).collect();
+        let edge_f: Vec<_> = f
+            .iter()
+            .filter(|x| x.text.contains("pair(s) of edges"))
+            .collect();
         assert_eq!(edge_f.len(), 1);
         assert_eq!(edge_f[0].level, Level::Info);
-        assert!(edge_f[0].text.contains("deepest overlap 0.10 m"), "{}", edge_f[0].text);
-        assert!(edge_f[0].places.iter().any(|p| p.kind == crate::finding::PlaceKind::Node));
+        assert!(
+            edge_f[0].text.contains("deepest overlap 0.10 m"),
+            "{}",
+            edge_f[0].text
+        );
+        assert!(
+            edge_f[0]
+                .places
+                .iter()
+                .any(|p| p.kind == crate::finding::PlaceKind::Node)
+        );
         // 1.0 m beside it (overlap 0.4 m): still a junction, but deep: warning
         let l = lif(
-            &[("A", 0.0, 0.0), ("B", 30.0, 0.0), ("D", 0.0, 1.0), ("F", 5.0, 1.0)],
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 30.0, 0.0),
+                ("D", 0.0, 1.0),
+                ("F", 5.0, 1.0),
+            ],
             &[("E1", "A", "B"), ("E3", "D", "F")],
         );
         let m = compute(&l, &y2, &overlap_only()).expect("map");
         let f = findings(&l, &m);
-        let edge_f: Vec<_> = f.iter().filter(|x| x.text.contains("pair(s) of edges")).collect();
+        let edge_f: Vec<_> = f
+            .iter()
+            .filter(|x| x.text.contains("pair(s) of edges"))
+            .collect();
         assert_eq!(edge_f.len(), 1);
         assert_eq!(edge_f[0].level, Level::Warning);
-        assert!(edge_f[0].text.contains("near a junction"), "{}", edge_f[0].text);
-        assert!(edge_f[0].places.iter().any(|p| p.kind == crate::finding::PlaceKind::Node));
+        assert!(
+            edge_f[0].text.contains("near a junction"),
+            "{}",
+            edge_f[0].text
+        );
+        assert!(
+            edge_f[0]
+                .places
+                .iter()
+                .any(|p| p.kind == crate::finding::PlaceKind::Node)
+        );
         // E3 runs 1 m beside the middle of E1, its nodes 10 m or more from E1's: parallel
         let l = lif(
-            &[("A", 0.0, 0.0), ("B", 30.0, 0.0), ("D", 10.0, 1.0), ("F", 20.0, 1.0)],
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 30.0, 0.0),
+                ("D", 10.0, 1.0),
+                ("F", 20.0, 1.0),
+            ],
             &[("E1", "A", "B"), ("E3", "D", "F")],
         );
         let m = compute(&l, &y2, &overlap_only()).expect("map");
         let f = findings(&l, &m);
-        let edge_f: Vec<_> = f.iter().filter(|x| x.text.contains("pair(s) of edges")).collect();
+        let edge_f: Vec<_> = f
+            .iter()
+            .filter(|x| x.text.contains("pair(s) of edges"))
+            .collect();
         assert_eq!(edge_f.len(), 1);
         assert_eq!(edge_f[0].level, Level::Warning);
         assert!(edge_f[0].text.contains("parallel"));
@@ -347,26 +405,57 @@ mod tests {
         // E1 runs (0,0)-(10,0). Node F at (5,0.5) is the start of E3 going north:
         // a robot standing on F reaches into the swept outline of E1.
         let l = lif(
-            &[("A", 0.0, 0.0), ("B", 10.0, 0.0), ("F", 5.0, 0.5), ("G", 5.0, 10.0)],
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 10.0, 0.0),
+                ("F", 5.0, 0.5),
+                ("G", 5.0, 10.0),
+            ],
             &[("E1", "A", "B"), ("E3", "F", "G")],
         );
-        let types = vec![TypeRef::test_rect("ACME/X1", Kinematics::Differential, 1.0, 0.6)];
+        let types = vec![TypeRef::test_rect(
+            "ACME/X1",
+            Kinematics::Differential,
+            1.0,
+            0.6,
+        )];
         let m = compute(&l, &types, &overlap_only()).expect("map");
         let f = findings(&l, &m);
-        let f = f.iter().find(|x| x.text.contains("standing on a node")).expect("finding");
+        let f = f
+            .iter()
+            .find(|x| x.text.contains("standing on a node"))
+            .expect("finding");
         assert!(f.ids.contains(&"F".to_string()) && f.ids.contains(&"E1".to_string()));
-        assert!(f.places.iter().any(|p| p.kind == crate::finding::PlaceKind::Node));
-        assert!(f.places.iter().any(|p| p.kind == crate::finding::PlaceKind::Edge));
+        assert!(
+            f.places
+                .iter()
+                .any(|p| p.kind == crate::finding::PlaceKind::Node)
+        );
+        assert!(
+            f.places
+                .iter()
+                .any(|p| p.kind == crate::finding::PlaceKind::Edge)
+        );
     }
 
     #[test]
     fn near_misses_from_the_clearance_are_in_the_map_but_not_findings() {
         // X1 is 0.6 wide; E3 runs 0.65 m beside E1: a 5 cm gap, no overlap.
         let l = lif(
-            &[("A", 0.0, 0.0), ("B", 10.0, 0.0), ("D", 0.0, 0.65), ("F", 10.0, 0.65)],
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 10.0, 0.0),
+                ("D", 0.0, 0.65),
+                ("F", 10.0, 0.65),
+            ],
             &[("E1", "A", "B"), ("E3", "D", "F")],
         );
-        let x1 = vec![TypeRef::test_rect("ACME/X1", Kinematics::Differential, 1.0, 0.6)];
+        let x1 = vec![TypeRef::test_rect(
+            "ACME/X1",
+            Kinematics::Differential,
+            1.0,
+            0.6,
+        )];
         let m = compute(&l, &x1, &MapOptions::default()).expect("map");
         assert!(!m.pairs.is_empty());
         assert!(findings(&l, &m).is_empty());
@@ -377,10 +466,20 @@ mod tests {
         // Y2 is 1.4 wide: E1 and E3, 1.38 m apart, overlap by 2 cm (below 5 cm), but
         // the 10 cm clearance puts the pair in the map.
         let l = lif(
-            &[("A", 0.0, 0.0), ("B", 10.0, 0.0), ("D", 0.0, 1.38), ("F", 10.0, 1.38)],
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 10.0, 0.0),
+                ("D", 0.0, 1.38),
+                ("F", 10.0, 1.38),
+            ],
             &[("E1", "A", "B"), ("E3", "D", "F")],
         );
-        let y2 = vec![TypeRef::test_rect("ACME/Y2", Kinematics::Differential, 2.4, 1.4)];
+        let y2 = vec![TypeRef::test_rect(
+            "ACME/Y2",
+            Kinematics::Differential,
+            2.4,
+            1.4,
+        )];
         let m = compute(&l, &y2, &MapOptions::default()).expect("map");
         assert_eq!(m.pairs[0].conflicts.len(), 1);
         assert!(findings(&l, &m).is_empty());

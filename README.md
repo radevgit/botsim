@@ -74,17 +74,23 @@ at the right) and is also the scrubber: click or drag on it to jump, the line is
 
 ## Workspace
 
-- `crates/core` — simulation core (`botsim-core`): world, robots, orders, collisions, jobs, metrics
-- `crates/baseline` — the bundled baseline controller (`botsim-baseline`)
-- `crates/scenario` — the scenario file (TOML): `Scenario`, `load`, `build_world` (`botsim-scenario`); shared by the runner and the checker
-- `crates/runner` — CLI and JSON summary (package `botsim`, folder `crates/runner`); re-exports the scenario crate as `botsim::scenario`
-- `crates/check` — static layout checker, library and CLI (`botsim-check`); the list of checks is in `crates/check/README.md`
-- `crates/sweep` — swept robot bodies along the edges and the conflict map of a layout for a fleet (`botsim-sweep`); library used by the checker, for the runner and later the traffic module
-- `crates/record` — the recording of a run (JSON Lines): line types, writer, reader (`botsim-record`)
-- `crates/export` — PNG frames from a recording, for videos (`botsim-export`); also the layout generators (`examples/gen_warehouse*.rs`)
-- `crates/viewer` — replay window, layout-check overlay and usage heat map (`botsim-viewer`)
-- `docs/rules.md` — the rules the simulator and the baseline follow, with the decisions behind them
-- `scenarios/` — example scenarios
+```text
+botsim/
+├── crates/
+│   ├── core/          simulation: world, robots, orders, collisions, jobs
+│   ├── scenario/      scenario file (TOML): loading, building the world
+│   ├── baseline/      bundled baseline fleet controller
+│   ├── traffic/       passing order at shared spots (--policy traffic)
+│   ├── sweep/         swept robot outlines and the conflict map
+│   ├── runner/        command line and JSON summary (package botsim)
+│   ├── check/         static layout checker (checks: see its README)
+│   ├── record/        recording of a run (JSON Lines)
+│   ├── export/        PNG frames for videos, layout generators
+│   └── viewer/        replay window, check overlay, usage heat map
+└── scenarios/         example scenarios and layouts
+```
+
+Each crate's package is `botsim-<folder>`, except the runner, which is `botsim`.
 
 ## Licence
 

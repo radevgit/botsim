@@ -66,19 +66,34 @@ pub fn check(lif: &Lif, types: &[TypeRef]) -> Vec<Finding> {
     out
 }
 
-fn report_layout(layout: &Layout, graph: &Graph, long: &[Long], total: f64, out: &mut Vec<Finding>) {
+fn report_layout(
+    layout: &Layout,
+    graph: &Graph,
+    long: &[Long],
+    total: f64,
+    out: &mut Vec<Finding>,
+) {
     let mine: Vec<&Long> = long
         .iter()
-        .filter(|l| layout.edges.iter().any(|e| e.edge_id == graph.edges[l.edge].id))
+        .filter(|l| {
+            layout
+                .edges
+                .iter()
+                .any(|e| e.edge_id == graph.edges[l.edge].id)
+        })
         .collect();
-    let Some(longest) = mine
-        .iter()
-        .max_by(|a, b| graph.edges[a.edge].length.total_cmp(&graph.edges[b.edge].length))
-    else {
+    let Some(longest) = mine.iter().max_by(|a, b| {
+        graph.edges[a.edge]
+            .length
+            .total_cmp(&graph.edges[b.edge].length)
+    }) else {
         return;
     };
     let covered: f64 = mine.iter().map(|l| graph.edges[l.edge].length).sum();
-    let ids: Vec<&str> = mine.iter().map(|l| graph.edges[l.edge].id.as_str()).collect();
+    let ids: Vec<&str> = mine
+        .iter()
+        .map(|l| graph.edges[l.edge].id.as_str())
+        .collect();
     let idx = LayoutIndex::new(layout);
     out.push(
         Finding::new(

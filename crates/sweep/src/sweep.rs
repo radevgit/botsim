@@ -19,8 +19,8 @@ use botsim_core::path::Path;
 use botsim_core::safety::{FIELD_MARGIN, protective_field};
 use botsim_core::spec::{Kinematics, Shape};
 use togo::prelude::{
-    Circle, OrientedRect, Point, circle, dist_circle_orect, dist_orect_orect,
-    overlap_circle_orect, overlap_orect_orect, point,
+    Circle, OrientedRect, Point, circle, dist_circle_orect, dist_orect_orect, overlap_circle_orect,
+    overlap_orect_orect, point,
 };
 
 use crate::types::TypeRef;
@@ -270,11 +270,7 @@ fn marks(body: &Body) -> [Point; 4] {
 /// The distances along `path` at which an outline is placed: at most `spacing`
 /// apart, and on a curve such that no mark of the outline (`marks_at`, from the
 /// pose) moves more than [`CORNER_STEP`] where the direction changes.
-fn samples(
-    path: &Path,
-    spacing: f64,
-    marks_at: impl Fn(f64, f64, f64) -> [Point; 4],
-) -> Vec<f64> {
+fn samples(path: &Path, spacing: f64, marks_at: impl Fn(f64, f64, f64) -> [Point; 4]) -> Vec<f64> {
     let length = path.length();
     if !length.is_finite() {
         return vec![0.0];
@@ -330,7 +326,11 @@ pub fn field_sweep(graph: &Graph, edge: usize, t: &TypeRef, step: f64) -> Option
     }
     let path = graph.edge_path(edge, &t.manufacturer, &t.series);
     let longest = FIELD_MARGIN.min(t.length.max(CORNER_STEP));
-    let spacing = if step > 0.0 { step.min(longest) } else { longest };
+    let spacing = if step > 0.0 {
+        step.min(longest)
+    } else {
+        longest
+    };
     let fields = samples(&path, spacing, |x, y, h| field_at(t, x, y, h).corners())
         .into_iter()
         .map(|s| {
@@ -346,13 +346,19 @@ pub fn field_sweep(graph: &Graph, edge: usize, t: &TypeRef, step: f64) -> Option
 fn field_at(t: &TypeRef, x: f64, y: f64, heading: f64) -> OrientedRect {
     let shape = match (t.kinematics, t.shape) {
         // any heading: the field of the circle that holds the body
-        (Kinematics::Omnidirectional, Shape::Rect { cx, cy, half_length, half_width }) => {
-            Shape::Circle {
-                cx: 0.0,
-                cy: 0.0,
-                radius: (cx.abs() + half_length).hypot(cy.abs() + half_width),
-            }
-        }
+        (
+            Kinematics::Omnidirectional,
+            Shape::Rect {
+                cx,
+                cy,
+                half_length,
+                half_width,
+            },
+        ) => Shape::Circle {
+            cx: 0.0,
+            cy: 0.0,
+            radius: (cx.abs() + half_length).hypot(cy.abs() + half_width),
+        },
         (Kinematics::Omnidirectional, Shape::Circle { cx, cy, radius }) => Shape::Circle {
             cx: 0.0,
             cy: 0.0,

@@ -303,15 +303,20 @@ fn report_layout(
     let mine: Vec<&Hit> = hits
         .iter()
         .filter(|h| h.robot == robot)
-        .filter(|h| layout.edges.iter().any(|e| e.edge_id == graph.edges[h.edge].id))
+        .filter(|h| {
+            layout
+                .edges
+                .iter()
+                .any(|e| e.edge_id == graph.edges[h.edge].id)
+        })
         .collect();
-    let Some(deepest) = mine
-        .iter()
-        .max_by(|a, b| a.depth.total_cmp(&b.depth))
-    else {
+    let Some(deepest) = mine.iter().max_by(|a, b| a.depth.total_cmp(&b.depth)) else {
         return;
     };
-    let ids: Vec<&str> = mine.iter().map(|h| graph.edges[h.edge].id.as_str()).collect();
+    let ids: Vec<&str> = mine
+        .iter()
+        .map(|h| graph.edges[h.edge].id.as_str())
+        .collect();
     let idx = LayoutIndex::new(layout);
     out.push(
         Finding::new(
@@ -397,14 +402,21 @@ mod tests {
         let f = check(&lif(), &t, &wall, 0.25, 0.0);
         assert_eq!(f.len(), 1);
         // the wall crosses the middle of the body (half length 0.5): depth 0.5
-        assert!(f[0].text.contains("E1 into W[0] by 0.50 m"), "{}", f[0].text);
+        assert!(
+            f[0].text.contains("E1 into W[0] by 0.50 m"),
+            "{}",
+            f[0].text
+        );
     }
 
     #[test]
     fn omnidirectional_circle_and_unknown_map() {
         // circle radius hypot(0.5, 0.3) = 0.583: a rack 0.5 m away is hit by the circle
         let rack = geometry(&rect("R1", "rack", 3.0, 0.5, 5.0, 1.0));
-        assert_eq!(check(&lif(), &x1(Kinematics::Omnidirectional), &rack, 0.25, 0.0).len(), 1);
+        assert_eq!(
+            check(&lif(), &x1(Kinematics::Omnidirectional), &rack, 0.25, 0.0).len(),
+            1
+        );
         // a shape on a map the layout does not have: one info finding, no hit
         let other = geometry(
             r#"{"id":"R9","mapId":"ELSEWHERE","kind":"rack","shape":"polygon","vertices":[{"x":0,"y":0},{"x":1,"y":0},{"x":1,"y":1}]}"#,

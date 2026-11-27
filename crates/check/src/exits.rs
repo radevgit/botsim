@@ -70,7 +70,12 @@ mod tests {
     fn counts_nodes_with_one_exit() {
         // square A B C D, edges A>B, B>C, C>D, D>A and a diagonal B>D: only B has two exits
         let ty = r#"{"mobileRobotTypes":[{"manufacturer":"ACME","seriesName":"X1"}]}"#;
-        let pts = [("A", 0.0, 0.0), ("B", 10.0, 0.0), ("C", 10.0, 10.0), ("D", 0.0, 10.0)];
+        let pts = [
+            ("A", 0.0, 0.0),
+            ("B", 10.0, 0.0),
+            ("C", 10.0, 10.0),
+            ("D", 0.0, 10.0),
+        ];
         let nodes: Vec<String> = pts
             .iter()
             .map(|(id, x, y)| {

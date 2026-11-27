@@ -707,7 +707,9 @@ baseline.
   and edge reservations let two robots use them at the same time. The library
   `botsim-sweep` (shared with the layout checker; the runner does not depend on the
   checker, U8) makes the **conflict map**: per pair of robot types, the pairs of
-  edges whose swept outlines (factsheet body, sampled every 0.25 m) overlap or come
+  edges whose swept outlines (the factsheet body, placed at most 0.25 m, and never
+  more than the body length, apart; on curves so finely that no corner moves more
+  than 2 cm from one place to the next, `CORNER_STEP`) overlap or come
   nearer than the **clearance** (setting `conflict_clearance`, default 0.10 m; with 0
   only overlaps of 5 cm or more). The runner reads the scenario's layout and factsheets again,
   takes the pairs that have **no node in common and are near a junction** (merge or

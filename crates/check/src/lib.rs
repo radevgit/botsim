@@ -30,6 +30,7 @@ pub mod clearance;
 pub mod conflict;
 pub mod corners;
 pub mod doors;
+pub mod exit_block;
 pub mod exits;
 pub mod finding;
 pub mod input;
@@ -174,10 +175,7 @@ pub fn run_layout(
     Report::new(findings, conflict_map)
 }
 
-fn run_inner(
-    inputs: &Inputs,
-    options: &Options,
-) -> (Vec<Finding>, Option<conflict::ConflictMap>) {
+fn run_inner(inputs: &Inputs, options: &Options) -> (Vec<Finding>, Option<conflict::ConflictMap>) {
     // how many robots of each type the scenario has (group i uses fleet entry i)
     let mut robots: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for (g, f) in inputs.scenario.robots.iter().zip(&inputs.fleet) {
@@ -241,6 +239,7 @@ fn run_checks(
     };
     if let Some(m) = &map {
         out.extend(conflict::findings(lif, m));
+        out.extend(exit_block::check(lif, &types, m));
     }
     out.extend(corners::check(lif, map.as_ref()));
     if let Some(g) = geometry {

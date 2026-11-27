@@ -29,8 +29,20 @@ pub fn check(inputs: &Inputs, types: &[TypeRef]) -> Vec<Finding> {
         .flat_map(|o| &o.layouts)
         .map(LayoutIndex::new)
         .collect();
-    let edge_places = |id: &str| indexes.iter().find_map(|i| i.edge(id)).into_iter().collect::<Vec<_>>();
-    let node_places = |id: &str| indexes.iter().find_map(|i| i.node(id)).into_iter().collect::<Vec<_>>();
+    let edge_places = |id: &str| {
+        indexes
+            .iter()
+            .find_map(|i| i.edge(id))
+            .into_iter()
+            .collect::<Vec<_>>()
+    };
+    let node_places = |id: &str| {
+        indexes
+            .iter()
+            .find_map(|i| i.node(id))
+            .into_iter()
+            .collect::<Vec<_>>()
+    };
     let mut out = Vec::new();
 
     for door in &inputs.scenario.doors {
@@ -143,9 +155,11 @@ start_nodes = ["A"]
 "#
         ))
         .expect("test scenario parses");
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/diff_robot.factsheet.json");
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/diff_robot.factsheet.json");
         let mut factsheet: Factsheet =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("factsheet file")).expect("factsheet parses");
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("factsheet file"))
+                .expect("factsheet parses");
         factsheet.manufacturer = "ACME".into();
         factsheet.type_specification.series_name = "X1".into();
         Inputs {
@@ -161,7 +175,10 @@ start_nodes = ["A"]
     }
 
     fn types(i: &Inputs) -> Vec<TypeRef> {
-        i.fleet.iter().map(|f| crate::type_ref(f).expect("type")).collect()
+        i.fleet
+            .iter()
+            .map(|f| crate::type_ref(f).expect("type"))
+            .collect()
     }
 
     #[test]

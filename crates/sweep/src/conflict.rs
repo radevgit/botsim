@@ -600,10 +600,20 @@ mod tests {
 
     #[test]
     fn near_a_junction_has_junction_nodes_and_parallel_has_none() {
-        let y2 = vec![TypeRef::test_rect("ACME/Y2", Kinematics::Differential, 2.4, 1.4)];
+        let y2 = vec![TypeRef::test_rect(
+            "ACME/Y2",
+            Kinematics::Differential,
+            2.4,
+            1.4,
+        )];
         // E3 starts 1 m beside the start of E1: they come together there (junction)
         let l = lif(
-            &[("A", 0.0, 0.0), ("B", 30.0, 0.0), ("D", 0.0, 1.0), ("F", 5.0, 1.0)],
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 30.0, 0.0),
+                ("D", 0.0, 1.0),
+                ("F", 5.0, 1.0),
+            ],
             &[("E1", "A", "B"), ("E3", "D", "F")],
         );
         let m = compute(&l, &y2, &overlap_only(0.0)).expect("map");
@@ -611,7 +621,12 @@ mod tests {
         assert_eq!(c.junction_nodes, Some(["A".to_string(), "D".to_string()]));
         // E3 runs 1 m beside the middle of E1, its nodes 10 m or more from E1's: parallel
         let l = lif(
-            &[("A", 0.0, 0.0), ("B", 30.0, 0.0), ("D", 10.0, 1.0), ("F", 20.0, 1.0)],
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 30.0, 0.0),
+                ("D", 10.0, 1.0),
+                ("F", 20.0, 1.0),
+            ],
             &[("E1", "A", "B"), ("E3", "D", "F")],
         );
         let m = compute(&l, &y2, &overlap_only(0.0)).expect("map");
@@ -624,16 +639,33 @@ mod tests {
         // a robot standing on F (heading north, 1.0 x 0.6) reaches down to y = 0, into
         // the swept outline of E1 (y -0.3..0.3). E3 touches F, so it is not listed.
         let l = lif(
-            &[("A", 0.0, 0.0), ("B", 10.0, 0.0), ("F", 5.0, 0.5), ("G", 5.0, 10.0)],
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 10.0, 0.0),
+                ("F", 5.0, 0.5),
+                ("G", 5.0, 10.0),
+            ],
             &[("E1", "A", "B"), ("E3", "F", "G")],
         );
-        let types = vec![TypeRef::test_rect("ACME/X1", Kinematics::Differential, 1.0, 0.6)];
+        let types = vec![TypeRef::test_rect(
+            "ACME/X1",
+            Kinematics::Differential,
+            1.0,
+            0.6,
+        )];
         let m = compute(&l, &types, &overlap_only(0.0)).expect("map");
         assert_eq!(m.node_pairs.len(), 1);
         let p = &m.node_pairs[0];
-        assert_eq!((p.type_node.as_str(), p.type_edge.as_str()), ("ACME/X1", "ACME/X1"));
+        assert_eq!(
+            (p.type_node.as_str(), p.type_edge.as_str()),
+            ("ACME/X1", "ACME/X1")
+        );
         assert!(p.conflicts.iter().all(|c| c.edge != "E3" || c.node != "F"));
-        let hit = p.conflicts.iter().find(|c| c.node == "F" && c.edge == "E1").expect("F against E1");
+        let hit = p
+            .conflicts
+            .iter()
+            .find(|c| c.node == "F" && c.edge == "E1")
+            .expect("F against E1");
         assert!(hit.depth > 0.25 && hit.depth <= 0.3 + 1e-9, "{}", hit.depth);
     }
 
@@ -642,18 +674,42 @@ mod tests {
         // Y2 bodies are 1.4 wide: E1 and E3 (1.0 m apart) overlap by 0.4 m. X1 (0.6 wide)
         // with Y2 (1.4): 1.0 m apart = exactly touching, depth 0.
         let l = lif(
-            &[("A", 0.0, 0.0), ("B", 10.0, 0.0), ("D", 0.0, 1.0), ("F", 10.0, 1.0)],
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 10.0, 0.0),
+                ("D", 0.0, 1.0),
+                ("F", 10.0, 1.0),
+            ],
             &[("E1", "A", "B"), ("E3", "D", "F")],
         );
         let all = compute(&l, &two_types(), &overlap_only(0.0)).expect("map");
-        let yy = all.pairs.iter().find(|p| p.type_a == "ACME/Y2" && p.type_b == "ACME/Y2");
+        let yy = all
+            .pairs
+            .iter()
+            .find(|p| p.type_a == "ACME/Y2" && p.type_b == "ACME/Y2");
         assert!((yy.expect("Y2/Y2").conflicts[0].depth - 0.4).abs() < 1e-9);
         let cut = compute(&l, &two_types(), &overlap_only(0.05)).expect("map");
         // the touching X1/Y2 pair is gone, the 0.4 m one stays
-        assert!(cut.pairs.iter().all(|p| p.conflicts.iter().all(|c| c.depth >= 0.05)));
-        assert!(cut.pairs.iter().any(|p| p.type_a == "ACME/Y2" && p.type_b == "ACME/Y2"));
-        assert!(!cut.pairs.iter().any(|p| p.type_a == "ACME/X1" && p.type_b == "ACME/Y2"));
-        assert!(all.pairs.iter().any(|p| p.type_a == "ACME/X1" && p.type_b == "ACME/Y2"));
+        assert!(
+            cut.pairs
+                .iter()
+                .all(|p| p.conflicts.iter().all(|c| c.depth >= 0.05))
+        );
+        assert!(
+            cut.pairs
+                .iter()
+                .any(|p| p.type_a == "ACME/Y2" && p.type_b == "ACME/Y2")
+        );
+        assert!(
+            !cut.pairs
+                .iter()
+                .any(|p| p.type_a == "ACME/X1" && p.type_b == "ACME/Y2")
+        );
+        assert!(
+            all.pairs
+                .iter()
+                .any(|p| p.type_a == "ACME/X1" && p.type_b == "ACME/Y2")
+        );
     }
 
     #[test]
@@ -661,7 +717,12 @@ mod tests {
         // E1 ends at B, E2 starts at C, 0.8 m further on: no common node. X1 is
         // 1.0 long (0.2 m overlap end to end), G is far away.
         let l = lif(
-            &[("A", 0.0, 0.0), ("B", 10.0, 0.0), ("C", 10.8, 0.0), ("G", 30.0, 0.0)],
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 10.0, 0.0),
+                ("C", 10.8, 0.0),
+                ("G", 30.0, 0.0),
+            ],
             &[("E1", "A", "B"), ("E2", "C", "G")],
         );
         let m = compute(&l, &two_types(), &overlap_only(0.05)).expect("map");
@@ -693,10 +754,20 @@ mod tests {
     fn clearance_adds_the_near_misses() {
         // X1 bodies are 0.6 wide; E3 runs 0.65 m beside E1: a 0.05 m gap, no overlap.
         let l = lif(
-            &[("A", 0.0, 0.0), ("B", 10.0, 0.0), ("D", 0.0, 0.65), ("F", 10.0, 0.65)],
+            &[
+                ("A", 0.0, 0.0),
+                ("B", 10.0, 0.0),
+                ("D", 0.0, 0.65),
+                ("F", 10.0, 0.65),
+            ],
             &[("E1", "A", "B"), ("E3", "D", "F")],
         );
-        let x1 = vec![TypeRef::test_rect("ACME/X1", Kinematics::Differential, 1.0, 0.6)];
+        let x1 = vec![TypeRef::test_rect(
+            "ACME/X1",
+            Kinematics::Differential,
+            1.0,
+            0.6,
+        )];
         let none = compute(&l, &x1, &overlap_only(0.05)).expect("map");
         assert!(none.pairs.is_empty() && none.node_pairs.is_empty());
         let m = compute(
@@ -806,10 +877,18 @@ mod tests {
         assert!(n_off.iter().all(|c| n_on.contains(c)));
         // what was added is by the field, what was there before is not
         for c in &e_on {
-            assert_eq!(on.by_field(c.depth, c.distance), !e_off.contains(c), "{c:?}");
+            assert_eq!(
+                on.by_field(c.depth, c.distance),
+                !e_off.contains(c),
+                "{c:?}"
+            );
         }
         for c in &n_on {
-            assert_eq!(on.by_field(c.depth, c.distance), !n_off.contains(c), "{c:?}");
+            assert_eq!(
+                on.by_field(c.depth, c.distance),
+                !n_off.contains(c),
+                "{c:?}"
+            );
         }
         assert!(n_on.len() > n_off.len());
     }
@@ -821,10 +900,20 @@ mod tests {
         let at = |gap: f64| {
             let x = 10.5 + gap + 0.3;
             let l = lif(
-                &[("A", 0.0, 0.0), ("B", 10.0, 0.0), ("F", x, 0.0), ("G", x, 10.0)],
+                &[
+                    ("A", 0.0, 0.0),
+                    ("B", 10.0, 0.0),
+                    ("F", x, 0.0),
+                    ("G", x, 10.0),
+                ],
                 &[("E1", "A", "B"), ("E3", "F", "G")],
             );
-            let x1 = vec![TypeRef::test_rect("ACME/X1", Kinematics::Differential, 1.0, 0.6)];
+            let x1 = vec![TypeRef::test_rect(
+                "ACME/X1",
+                Kinematics::Differential,
+                1.0,
+                0.6,
+            )];
             let m = compute(&l, &x1, &with_field(MapOptions::default())).expect("map");
             node_conflict(&m, "F", "E1").map(|c| c.distance)
         };

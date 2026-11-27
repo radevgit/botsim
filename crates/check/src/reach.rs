@@ -76,7 +76,9 @@ pub fn analyze(lif: &Lif, t: &TypeRef) -> Result<Analysis, Finding> {
         Finding::new(
             Level::Error,
             CHECK,
-            format!("the layout cannot be turned into a graph, so reachability is not checked: {e}"),
+            format!(
+                "the layout cannot be turned into a graph, so reachability is not checked: {e}"
+            ),
         )
         .robot(&t.name)
     })?;
@@ -205,7 +207,13 @@ fn report_turns(
 }
 
 /// The findings of one layout.
-fn report_layout(layout: &Layout, graph: &Graph, place: &[Place], t: &TypeRef, out: &mut Vec<Finding>) {
+fn report_layout(
+    layout: &Layout,
+    graph: &Graph,
+    place: &[Place],
+    t: &TypeRef,
+    out: &mut Vec<Finding>,
+) {
     let idx = LayoutIndex::new(layout);
     let finding = |level, text: String, ids: Vec<&str>, places: Vec<FindingPlace>| {
         Finding::new(level, CHECK, text)

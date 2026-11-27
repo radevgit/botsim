@@ -28,7 +28,6 @@ pub use conflict::{
 };
 pub use places::{LayoutIndex, Place, PlaceKind};
 pub use sweep::{
-    Body, CORNER_STEP, Contact, SAMPLE_STEP, Sweep, field_sweep, node_bodies, standing_body,
-    sweep,
+    Body, CORNER_STEP, Contact, SAMPLE_STEP, Sweep, field_sweep, node_bodies, standing_body, sweep,
 };
 pub use types::TypeRef;

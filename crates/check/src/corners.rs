@@ -145,7 +145,10 @@ fn report_layout(
     let mut ids = node_ids.clone();
     ids.extend(arc_ids.iter().copied());
     let (level, kind) = if overlaps {
-        (Level::Warning, "a robot standing there overlaps the swept outline of the arc")
+        (
+            Level::Warning,
+            "a robot standing there overlaps the swept outline of the arc",
+        )
     } else {
         (Level::Info, "no overlap with the arc's swept outline found")
     };
@@ -204,8 +207,12 @@ mod tests {
             1.0,
             0.6,
         );
-        crate::conflict::compute(l, &[t], &crate::conflict::MapOptions::overlap_only(0.25, 0.0))
-            .expect("map")
+        crate::conflict::compute(
+            l,
+            &[t],
+            &crate::conflict::MapOptions::overlap_only(0.25, 0.0),
+        )
+        .expect("map")
     }
 
     #[test]
@@ -237,6 +244,10 @@ mod tests {
         // (8,2) is 2.83 m from the corner and 0.35 m from the arc's middle (7.5, 2.5): overlap
         let w: Vec<_> = f.iter().filter(|x| x.level == Level::Warning).collect();
         assert_eq!(w.len(), 1, "{f:?}");
-        assert!(w[0].text.contains("overlaps the swept outline"), "{}", w[0].text);
+        assert!(
+            w[0].text.contains("overlaps the swept outline"),
+            "{}",
+            w[0].text
+        );
     }
 }
