@@ -2,7 +2,7 @@
 //! Those of robots are compact data with VDA 5050 3.0.1 meaning.
 //!
 //! These types are used inside the program and are never sent to a robot; the
-//! translation to and from VDA 5050 messages is not here.
+//! translation to and from VDA 5050 messages is not here but in `botsim-vda`.
 //!
 //! - Layout nodes, edges and maps are the numbers of the layout graph
 //!   ([`botsim_model::graph`]); a robot is a
@@ -16,7 +16,7 @@
 //! - To and from robots: only what VDA 5050 can express, and of that what botsim
 //!   writes or reads. Doors and lifts are outside VDA 5050.
 //!
-//! No crate uses these types yet.
+//! Only `botsim-vda` uses these types yet.
 //!
 //! Depends on no botsim crate but `botsim-model`.
 

@@ -31,11 +31,12 @@ use vda5050::state::{ActionStatus, State};
 use crate::actions::ActionTimes;
 use crate::battery::Battery;
 use crate::drive::{DriveError, Driver, Glance, Phase, Pose};
-use crate::errors::{ErrorType, RobotError};
+use crate::errors::RobotError;
 use crate::order_route::route_from_order;
 use crate::state_report::{Header, InstantActionState, build_state};
 use crate::zone_requests::{ZoneRequestTiming, ZoneRequester};
 use crate::zones::Zones;
+use botsim_model::errors::ErrorType;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::spec::RobotSpec;
 
@@ -482,7 +483,7 @@ impl Robot {
                 let lease = r
                     .lease_expiry
                     .as_deref()
-                    .and_then(crate::world::unix_ms_from_iso8601);
+                    .and_then(botsim_model::time::unix_ms_from_iso8601);
                 zr.respond(&r.request_id, r.grant_type, lease);
             }
         }

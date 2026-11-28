@@ -119,7 +119,7 @@ fn a_global_orientation_is_valid_for_omnidirectional_robots_only() {
     let mut w = world("DIFFERENTIAL");
     match w.send_order(&order(bc)).unwrap() {
         Reception::Rejected(t) => {
-            assert_eq!(t, botsim_core::errors::ErrorType::OrientationUnreachable)
+            assert_eq!(t, botsim_model::errors::ErrorType::OrientationUnreachable)
         }
         other => panic!("{other:?}"),
     }

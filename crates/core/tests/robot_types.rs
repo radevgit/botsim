@@ -2,9 +2,9 @@
 //! or an edge, and the speed limit of an edge for a type.
 
 use botsim_core::actions::ActionTimes;
-use botsim_core::errors::ErrorType;
 use botsim_core::robot::Reception;
 use botsim_core::world::{World, WorldError};
+use botsim_model::errors::ErrorType;
 use botsim_model::graph::{Graph, GraphError};
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;

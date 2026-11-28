@@ -5,9 +5,9 @@
 
 use botsim_baseline::controller::Controller;
 use botsim_core::actions::ActionTimes;
-use botsim_core::errors::ErrorType;
 use botsim_core::jobs::Job;
 use botsim_core::world::World;
+use botsim_model::errors::ErrorType;
 use botsim_model::graph::Graph;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;

@@ -1,7 +1,7 @@
 use botsim_core::actions::ActionTimes;
-use botsim_core::errors::ErrorType::*;
 use botsim_core::robot::{Reception::Accepted, Reception::Rejected, Robot};
 use botsim_core::state_report::Header;
+use botsim_model::errors::ErrorType::*;
 use botsim_model::graph::Graph;
 use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;

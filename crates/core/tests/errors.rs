@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
 use botsim_core::drive::{DriveError, Driver, RouteEdge};
-use botsim_core::errors::{ErrorType, RobotError};
+use botsim_core::errors::RobotError;
 use botsim_core::order_route::OrderError;
 use botsim_core::state_report::{Header, build_state};
+use botsim_model::errors::ErrorType;
 use botsim_model::graph::Graph;
 use botsim_model::orientation::OrientationError;
 use botsim_model::spec::RobotSpec;

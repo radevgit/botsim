@@ -14,3 +14,5 @@ depends on no other botsim crate, reads no files and uses no network.
 | `safety` | the protective field ahead of a moving robot |
 | `robot` | who a robot is: its VDA 5050 identity (`RobotId`) and the small number that stands for it (`RobotNo`) |
 | `angle` | normalising and subtracting angles |
+| `errors` | the predefined VDA 5050 error types (`ErrorType`): names and levels |
+| `time` | VDA 5050 timestamps (ISO 8601 UTC) from and to milliseconds since 1970 |

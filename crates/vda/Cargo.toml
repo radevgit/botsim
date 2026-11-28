@@ -1,0 +1,19 @@
+[package]
+name = "botsim-vda"
+description = "Translation between botsim's compact robot messages and VDA 5050 3.0.1 messages"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors = ["radevgit"]
+
+[dependencies]
+botsim-link = { path = "../link" }
+botsim-model = { path = "../model" }
+serde_json = "1.0.154"
+vda5050 = "0.1.0"
+
+[dev-dependencies]
+jsonschema = "0.61.2"
+vdma-lif = "0.1.0"

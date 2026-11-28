@@ -3,9 +3,9 @@
 //! it accepts is one the graph says it can follow, and the other way round.
 
 use botsim_core::actions::ActionTimes;
-use botsim_core::errors::ErrorType;
 use botsim_core::robot::Reception;
 use botsim_core::world::World;
+use botsim_model::errors::ErrorType;
 use botsim_model::graph::Graph;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::{Kinematics, RobotSpec};

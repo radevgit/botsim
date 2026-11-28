@@ -1,10 +1,10 @@
 use botsim_core::actions::ActionTimes;
 use botsim_core::door::{Door, DoorError, DoorSpec};
 use botsim_core::drive::Phase;
-use botsim_core::errors::ErrorType;
 use botsim_core::lift::DoorState;
 use botsim_core::robot::Reception;
 use botsim_core::world::{World, WorldError};
+use botsim_model::errors::ErrorType;
 use botsim_model::graph::Graph;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;

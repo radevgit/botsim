@@ -48,12 +48,12 @@
 
 use std::collections::VecDeque;
 
-use botsim_core::errors::ErrorType;
 use botsim_core::jobs::Job;
 use botsim_core::metrics::{Metrics, is_waiting, summarize};
 use botsim_core::robot::Reception;
 use botsim_core::waiting::{HeldBack, WaitReason};
 use botsim_core::world::World;
+use botsim_model::errors::ErrorType;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::robot::RobotId;
 use botsim_model::spec::{Kinematics, Shape};

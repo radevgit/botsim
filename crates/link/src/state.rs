@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use botsim_model::errors::ErrorType;
 use botsim_model::graph::{EdgeIdx, MapIdx, NodeIdx};
 
 use crate::ids::{ActionId, ActionType, OrderId, RequestId, ZoneId, ZoneSetId};
@@ -247,37 +248,10 @@ pub struct Error {
     pub hint: Option<Arc<str>>,
 }
 
-/// VDA 5050 `errorType`: the predefined types, and any other by its text.
+/// VDA 5050 `errorType`: a predefined type, or any other by its text.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ErrorKind {
-    UnsupportedParameter,
-    NoOrderToCancel,
-    ValidationFailure,
-    InvalidOrderAction,
-    InvalidInstantAction,
-    OutdatedOrderUpdate,
-    SameOrderUpdateId,
-    OrderUpdateFollowingCancel,
-    OutsideOfCorridor,
-    InsufficientMemory,
-    DuplicateMap,
-    BlockedZoneViolation,
-    DuplicateZoneSet,
-    ZoneReleaseLossHandling,
-    ZoneReleaseLost,
-    CorridorReleaseLossHandling,
-    CorridorReleaseLost,
-    ZoneActionConflict,
-    NodeUnreachable,
-    LocalizationError,
-    NoRouteToTarget,
-    OtherOrderActive,
-    StartNodeOutOfRange,
-    MobileRobotNotAvailable,
-    UnknownMapId,
-    OrientationUnreachable,
-    InstantActionStatesFull,
-    ZoneActionStatesFull,
+    Predefined(ErrorType),
     /// A type that is not predefined, for example `BATTERY_EMPTY`.
     Other(Arc<str>),
 }

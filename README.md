@@ -15,6 +15,7 @@ botsim/
 ├── crates/
 │   ├── model/         layout graph, robot types, path and safety geometry
 │   ├── link/          compact messages: fleet server, robots, doors, lifts
+│   ├── vda/           translation between link and VDA 5050 messages
 │   ├── core/          simulation: world, robots, orders, collisions, jobs
 │   ├── scenario/      scenario file (TOML): loading, building the world
 │   ├── baseline/      bundled baseline fleet controller
