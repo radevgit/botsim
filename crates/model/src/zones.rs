@@ -24,7 +24,7 @@ use vda5050::zone_set::{Vertex, Zone, ZoneKind, ZoneReleaseLossBehavior, ZoneSet
 use crate::graph::{Graph, MapIdx};
 
 /// VDA 5050 `releaseLossBehavior` of a release zone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LossBehavior {
     Stop,
     Continue,

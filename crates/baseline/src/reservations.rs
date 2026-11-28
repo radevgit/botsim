@@ -4,21 +4,21 @@
 //! rules reserve them when they release them to a robot and give them back when
 //! the robot has driven on. Nothing here knows about routes or messages.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::reservation::Reservation;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct Reservations {
     nodes: Vec<Option<usize>>,
     edges: Vec<Option<usize>>,
     /// Nodes that a robot took over from another robot that is stuck behind it
     /// (S77): the robot that held the node before. It gets the node back when the
     /// taker lets go of it.
-    displaced: HashMap<NodeIdx, usize>,
+    displaced: BTreeMap<NodeIdx, usize>,
     /// The same for edges.
-    displaced_edges: HashMap<EdgeIdx, usize>,
+    displaced_edges: BTreeMap<EdgeIdx, usize>,
 }
 
 impl Reservations {
@@ -27,8 +27,8 @@ impl Reservations {
         Reservations {
             nodes: vec![None; graph.nodes.len()],
             edges: vec![None; graph.edges.len()],
-            displaced: HashMap::new(),
-            displaced_edges: HashMap::new(),
+            displaced: BTreeMap::new(),
+            displaced_edges: BTreeMap::new(),
         }
     }
 

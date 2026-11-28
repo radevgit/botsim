@@ -18,7 +18,7 @@ use crate::angle::{angle_diff, normalize_angle};
 use crate::spec::Kinematics;
 
 /// What an edge orientation is relative to (VDA 5050 `orientationType`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OrientationType {
     /// The map.
     Global,

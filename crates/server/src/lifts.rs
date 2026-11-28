@@ -40,6 +40,7 @@
 //! somewhere else while idle (the cabin stays where the last ride ended).
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use botsim_link::device::{DeviceHeader, FromLift, LiftCommand, LiftNo, ToLift};
 use botsim_link::message::Millis;
@@ -70,7 +71,7 @@ pub struct LiftStop {
     pub waiting: Option<NodeIdx>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Stage {
     Calling,
     Riding,
@@ -78,7 +79,7 @@ enum Stage {
 }
 
 /// The robot that owns a lift, and where it is in the ride.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 struct Owner {
     robot: usize,
     /// Plan index of the ride edge.
@@ -175,6 +176,20 @@ impl LiftDesk {
             rides,
             waiting,
         }
+    }
+
+    /// What changes from cycle to cycle, for [`crate::checksum`].
+    pub(crate) fn hash_state(&self, h: &mut impl Hasher) {
+        let LiftDesk {
+            // (fixed by the setup)
+            lifts: _,
+            rides: _,
+            waiting: _,
+            owners,
+            seqs,
+        } = self;
+        owners.hash(h);
+        seqs.hash(h);
     }
 
     /// Every ride with the waiting node of its entrance (`None` if the stop has

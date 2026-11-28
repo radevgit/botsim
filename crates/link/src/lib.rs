@@ -15,6 +15,9 @@
 //!   or an id is usable is for whoever reads a message to check.
 //! - To and from robots: only what VDA 5050 can express, and of that what botsim
 //!   writes or reads. Doors and lifts are outside VDA 5050.
+//! - Every message implements [`Hash`](std::hash::Hash), by the bits of its
+//!   numbers: it serves to compare what two runs of one build took and sent, not to
+//!   key a map (−0.0 and 0.0 are equal but hash differently).
 //!
 //! The fleet server's controller (`botsim-server`) and the simulator
 //! (`botsim-sim`) speak them; the command line crate (`botsim`) passes them between

@@ -17,7 +17,8 @@
 //! Why one robot at a time and the zone covering the lift approach: see the
 //! design rule in `docs/rules.md` §7d.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
+use std::hash::{Hash, Hasher};
 
 use botsim_link::ids::RequestId;
 use botsim_link::response::Grant;
@@ -37,7 +38,7 @@ pub struct RobotView {
     pub new: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Entry {
     robot: usize,
     request: RequestId,
@@ -51,9 +52,27 @@ pub struct ZoneGrants {
     queue: Vec<Entry>,
     granted: Vec<Entry>,
     /// Requests that were told QUEUED already.
-    told_queued: HashSet<(usize, RequestId)>,
+    told_queued: BTreeSet<(usize, RequestId)>,
     /// `(waiting robot, robot that keeps a zone from it)`, as of the last decision.
     kept_from: Vec<(usize, usize)>,
+}
+
+/// By what changes from cycle to cycle, not the zones: to compare two runs of one
+/// build.
+impl Hash for ZoneGrants {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let ZoneGrants {
+            zones: _,
+            queue,
+            granted,
+            told_queued,
+            kept_from,
+        } = self;
+        queue.hash(h);
+        granted.hash(h);
+        told_queued.hash(h);
+        kept_from.hash(h);
+    }
 }
 
 impl ZoneGrants {
@@ -62,7 +81,7 @@ impl ZoneGrants {
             zones,
             queue: Vec::new(),
             granted: Vec::new(),
-            told_queued: HashSet::new(),
+            told_queued: BTreeSet::new(),
             kept_from: Vec::new(),
         }
     }

@@ -2,7 +2,7 @@
 //! and the error level the standard prescribes for each.
 
 /// VDA 5050 `errorLevel`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorLevel {
     Warning,
     Urgent,

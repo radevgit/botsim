@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::ops::RangeInclusive;
 
 use crate::spots::{Piece, Spots};
@@ -38,6 +39,19 @@ impl PartialEq for Route {
 }
 
 impl Eq for Route {}
+
+impl Hash for Route {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let Route {
+            type_name,
+            pieces,
+            // (looked up from the two above, only when they are wanted)
+            numbers: _,
+        } = self;
+        type_name.hash(h);
+        pieces.hash(h);
+    }
+}
 
 /// The type and the pieces of a route as the numbers the spots have for them.
 #[derive(Debug, Clone)]

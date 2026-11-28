@@ -12,7 +12,7 @@ use botsim_space::ConflictMap;
 use vdma_lif::Lif;
 
 /// A node or an edge of the layout, by its LIF id.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Piece {
     Node(String),
     Edge(String),

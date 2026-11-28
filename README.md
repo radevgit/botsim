@@ -30,6 +30,7 @@ botsim/
 │   │                  simulator (package botsim)
 │   ├── check/         static layout checker (checks: see its README)
 │   ├── record/        recording of a run (JSON Lines)
+│   ├── replay/        recording of the fleet server's inputs, and replay
 │   ├── export/        PNG frames for videos, layout generators
 │   └── viewer/        replay window, check overlay, usage heat map
 └── scenarios/         example scenarios and layouts

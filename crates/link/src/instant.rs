@@ -4,14 +4,14 @@ use crate::ids::{ActionId, ActionType, OrderId, ZoneSetId};
 
 /// One instant action. Its VDA 5050 `blockingType` is always `NONE`, the only one
 /// the standard allows here.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InstantAction {
     pub id: ActionId,
     pub kind: InstantKind,
 }
 
 /// The instant actions botsim knows, with their parameters.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InstantKind {
     /// `cancelOrder`, with the parameter `orderId` if it is given.
     CancelOrder { order_id: Option<OrderId> },

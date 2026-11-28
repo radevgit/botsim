@@ -9,6 +9,8 @@
 //! are the base, the rest is the horizon. So the start node is always released, and
 //! an edge is released together with the node it ends at.
 
+use std::hash::{Hash, Hasher};
+
 use botsim_model::graph::{EdgeIdx, NodeIdx};
 
 /// VDA 5050 `orientationType`: what an edge orientation is relative to.
@@ -28,7 +30,7 @@ use crate::shape::ShapeError;
 ///
 /// It does not look at the layout: whether the edges exist and connect the nodes is
 /// for the reader to check.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Order {
     order_id: OrderId,
     update_id: u32,
@@ -50,8 +52,23 @@ pub struct Leg {
     pub orientation_type: Option<OrientationType>,
 }
 
+impl Hash for Leg {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let Leg {
+            edge,
+            end,
+            orientation,
+            orientation_type,
+        } = self;
+        edge.hash(h);
+        end.hash(h);
+        orientation.map(f64::to_bits).hash(h);
+        orientation_type.hash(h);
+    }
+}
+
 /// An action at a node of an order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NodeAction {
     /// The node's number in the order (0 is the start node).
     pub node: u32,
@@ -59,7 +76,7 @@ pub struct NodeAction {
 }
 
 /// An action of an order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Action {
     pub id: ActionId,
     pub kind: ActionType,
@@ -67,7 +84,7 @@ pub struct Action {
 }
 
 /// VDA 5050 `blockingType`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Blocking {
     None,
     Soft,

@@ -19,12 +19,13 @@
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::ops::RangeInclusive;
 
 use crate::groups::Route;
 
 /// One piece of one robot's route.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Pass {
     /// The number [`OrderGraph::add_robot`] gave.
     pub robot: usize,
@@ -33,7 +34,7 @@ pub struct Pass {
 }
 
 /// `first` is over before `then` begins.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Before {
     pub first: Pass,
     pub then: Pass,
@@ -109,13 +110,13 @@ impl fmt::Display for Refused {
 
 impl Error for Refused {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Moment {
     Released(usize),
     Reached(usize),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct Event {
     robot: usize,
     moment: Moment,
@@ -126,7 +127,7 @@ struct Event {
 type ByAwaited = (Event, Event, Before);
 
 /// How long a robot's route is and how far it is, as node indices.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash)]
 struct Progress {
     last: usize,
     reached: usize,
@@ -200,6 +201,19 @@ pub struct OrderGraph {
     waiting: BTreeSet<ByAwaited>,
     /// The same orders once more, to find those of one robot that waits.
     waiters: BTreeSet<ByWaiter>,
+}
+
+impl Hash for OrderGraph {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let OrderGraph {
+            robots,
+            waiting,
+            // (the orders of `waiting`, filed another way)
+            waiters: _,
+        } = self;
+        robots.hash(h);
+        waiting.hash(h);
+    }
 }
 
 impl OrderGraph {

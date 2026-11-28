@@ -54,8 +54,20 @@ Optional: `set_charging`, `set_load_weight`, `set_wait_weight`.
   often than the cycles run is released only in the cycles with its report.
 - A time that does not advance or goes back counts no time; a jump counts in
   full. A robot's waiting counts the time since its report before.
+- **A report further along the route than what has been released:** in that cycle
+  the rules' `release` is not asked for the robot, no lift or door is claimed for
+  it and nothing of its route is released. Zone answers, go-first and a job added to
+  a parking trip are not held back by this.
 
 The details are in the documentation of the `cycle` module.
+
+## Recording and replay
+
+Everything the controller decides on is what it is made from, and the time and the
+inbox of each cycle. [botsim-replay](../replay/README.md) writes these to a file
+and plays them back. To compare the two runs, `checksum::of_outbox` hashes what a
+cycle gave back and `Controller::state_checksum` the state it left; traffic rules
+and dispatchers add their own state with their `checksum` method.
 
 ## Parts
 

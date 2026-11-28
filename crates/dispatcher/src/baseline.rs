@@ -20,7 +20,8 @@
 //! ever, and a robot whose type or node numbers do not fit the [`Site`] is given
 //! nothing.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::job::Job;
@@ -33,7 +34,7 @@ use crate::{
 };
 
 /// What the dispatcher remembers of a robot.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Hash)]
 struct Memory {
     /// It stands on a charger and charging was started: it gets no jobs.
     charging: bool,
@@ -65,13 +66,13 @@ pub struct BaselineDispatcher {
     robots: Vec<Memory>,
     /// (job, robot type) pairs whose drop cannot be reached from their pickup
     /// by that type (the job waits for ever for such a robot).
-    unserviceable: HashSet<(u64, usize)>,
+    unserviceable: BTreeSet<(u64, usize)>,
     /// Sending robots to chargers; `None` (default) is off.
     charge_policy: Option<ChargePolicy>,
     /// The nodes of the stations of type `charger`.
     charger_nodes: Vec<NodeIdx>,
     /// Charger node → the robot that is on its way there.
-    charger_targets: HashMap<NodeIdx, usize>,
+    charger_targets: BTreeMap<NodeIdx, usize>,
     /// Trips to a charger started so far (also the id of the stand-in jobs).
     charge_trips: usize,
     /// Seconds that free robots below the low limit have waited for a charger (all
@@ -80,7 +81,7 @@ pub struct BaselineDispatcher {
     /// The parking places: the nodes of the stations of type `parking` (U13).
     parking_nodes: Vec<NodeIdx>,
     /// Parking place → the robot that is on its way there.
-    parking_targets: HashMap<NodeIdx, usize>,
+    parking_targets: BTreeMap<NodeIdx, usize>,
     /// Trips to a parking place started so far (also the id of the stand-in jobs).
     park_trips: usize,
     /// How often a robot without a job got no parking place.
@@ -552,6 +553,43 @@ impl Dispatcher for BaselineDispatcher {
             charge_trips: self.charge_trips,
             charge_wait_seconds: self.charge_wait_seconds,
         }
+    }
+
+    fn checksum(&self, mut hasher: &mut dyn Hasher) {
+        let BaselineDispatcher {
+            pending,
+            robots,
+            unserviceable,
+            charge_policy,
+            // (the layout's stations)
+            charger_nodes: _,
+            charger_targets,
+            charge_trips,
+            charge_wait_seconds,
+            parking_nodes: _,
+            parking_targets,
+            park_trips,
+            no_free_parking,
+        } = self;
+        let h = &mut hasher;
+        pending.hash(h);
+        robots.hash(h);
+        unserviceable.hash(h);
+        charge_policy
+            .map(
+                |ChargePolicy {
+                     low,
+                     high,
+                     critical,
+                 }| { [low, high, critical].map(f64::to_bits) },
+            )
+            .hash(h);
+        charger_targets.hash(h);
+        charge_trips.hash(h);
+        charge_wait_seconds.to_bits().hash(h);
+        parking_targets.hash(h);
+        park_trips.hash(h);
+        no_free_parking.hash(h);
     }
 }
 

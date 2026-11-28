@@ -4,7 +4,7 @@ use crate::ids::RequestId;
 use crate::message::Millis;
 
 /// The answer to one request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Response {
     pub request: RequestId,
     pub grant: Grant,
@@ -13,7 +13,7 @@ pub struct Response {
 }
 
 /// VDA 5050 `grantType`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Grant {
     Granted,
     Queued,

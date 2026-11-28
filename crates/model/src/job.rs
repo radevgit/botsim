@@ -3,7 +3,7 @@
 use crate::graph::NodeIdx;
 use crate::time::Millis;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Job {
     pub id: u64,
     pub pickup: NodeIdx,

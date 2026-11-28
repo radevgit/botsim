@@ -50,13 +50,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use crate::graph::{BadProgress, Before, OrderGraph, Pass, Refused};
 use crate::groups::{Against, Route, UnknownName, group_where, groups_where};
 use crate::spots::{Piece, Spots};
 
 /// "Cannot place this route": what another route should keep clear of.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Reroute {
     /// Pieces of the refused route, without what the robot already holds, in order
     /// and each once.
@@ -211,10 +212,42 @@ pub struct Traffic {
 
 /// What a robot has been asked to keep clear of for rings since it came to the node
 /// it stands on.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 struct Asked {
     at: Piece,
     nodes: Vec<Piece>,
+}
+
+/// By what changes: the order graph, the routes and what is kept of attempts, not
+/// the spots. Two runs of one build can be compared by it.
+impl Hash for Traffic {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let Traffic {
+            // (fixed when the module is made)
+            spots: _,
+            graph,
+            routes,
+            refused,
+            refused_by,
+            wanted,
+            changes,
+            failed_take,
+            failed_give,
+            asked,
+            // (a count of the tests)
+            #[cfg(test)]
+                skipped: _,
+        } = self;
+        graph.hash(h);
+        routes.hash(h);
+        refused.hash(h);
+        refused_by.hash(h);
+        wanted.hash(h);
+        changes.hash(h);
+        failed_take.hash(h);
+        failed_give.hash(h);
+        asked.hash(h);
+    }
 }
 
 /// Why a route cannot be placed.

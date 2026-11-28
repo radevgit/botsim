@@ -63,6 +63,7 @@ pub fn with_controller<P: TrafficPolicy>(
         lifts,
         route: Some(Box::new(route)),
         inbox: Inbox::default(),
+        recorder: None,
     }
 }
 

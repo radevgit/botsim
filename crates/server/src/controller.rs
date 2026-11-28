@@ -60,6 +60,7 @@
 //! which the caller chooses when it makes the controller.
 
 use std::collections::{HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use botsim_dispatcher::baseline::BaselineDispatcher;
@@ -71,6 +72,7 @@ use botsim_link::message::{FromRobot, Header, Millis, ToRobot, ToRobotBody};
 use botsim_link::response::Response;
 use botsim_link::state::{ActionStatus, Error, ErrorKind, RequestStatus, State};
 use botsim_link::zone_set::ZoneSet;
+use botsim_model::checksum::Checksum;
 use botsim_model::errors::ErrorType;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::job::Job;
@@ -81,6 +83,7 @@ use botsim_router::load::{self, Load};
 use botsim_router::route::{Arrival, Mover, plan_path};
 use botsim_router::types::TypeRouting;
 
+use crate::checksum::History;
 use crate::cycle::{Config, Inbox, Known, Message, Outbox, robot_no};
 use crate::doors::DoorDesk;
 use crate::lifts::{LiftDesk, LiftRobot};
@@ -109,8 +112,25 @@ pub struct Completed {
     pub waiting_seconds: f64,
 }
 
+impl Hash for Completed {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let Completed {
+            job,
+            robot,
+            assigned,
+            finished,
+            waiting_seconds,
+        } = self;
+        job.hash(h);
+        robot.hash(h);
+        assigned.hash(h);
+        finished.hash(h);
+        waiting_seconds.to_bits().hash(h);
+    }
+}
+
 /// A job a robot refused (it stays out of the queue).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Rejected {
     pub job: Job,
     pub robot: RobotId,
@@ -149,6 +169,39 @@ struct Work {
     cancelling: Option<Cancelling>,
 }
 
+impl Hash for Work {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let Work {
+            job,
+            plan,
+            order_id,
+            update_id,
+            released_through,
+            assigned,
+            waiting_seconds,
+            purpose,
+            unconfirmed,
+            cancelling,
+        } = self;
+        job.hash(h);
+        plan.hash(h);
+        order_id.hash(h);
+        update_id.hash(h);
+        released_through.hash(h);
+        assigned.hash(h);
+        waiting_seconds.to_bits().hash(h);
+        // (the purpose is the dispatcher's type, which has no `Hash`)
+        let purpose: u8 = match purpose {
+            Purpose::Job => 0,
+            Purpose::Charge => 1,
+            Purpose::Park => 2,
+        };
+        purpose.hash(h);
+        unconfirmed.hash(h);
+        cancelling.hash(h);
+    }
+}
+
 impl Work {
     /// The robot's states have not shown the order yet (S58): the controller does
     /// not know whether it was accepted.
@@ -180,7 +233,7 @@ impl Work {
 }
 
 /// An order or update on its way: what to take back if the robot refuses it.
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 struct Sent {
     update_id: u32,
     /// The released node index before this message.
@@ -197,7 +250,7 @@ struct Sent {
 }
 
 /// A refused update: the order is being cancelled.
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 struct Cancelling {
     reason: ErrorType,
     /// The id of the `cancelOrder` action.
@@ -232,6 +285,37 @@ struct Slot {
     elapsed: f64,
 }
 
+impl Hash for Slot {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let Slot {
+            // (fixed by the setup)
+            id: _,
+            no,
+            type_idx: _,
+            work,
+            series: _,
+            header_id,
+            response_header_id,
+            zone_set_sent,
+            enable_sent,
+            zone_set_header_id,
+            instant_header_id,
+            heard,
+            elapsed,
+        } = self;
+        no.hash(h);
+        work.hash(h);
+        header_id.hash(h);
+        response_header_id.hash(h);
+        zone_set_sent.hash(h);
+        enable_sent.hash(h);
+        zone_set_header_id.hash(h);
+        instant_header_id.hash(h);
+        heard.hash(h);
+        elapsed.to_bits().hash(h);
+    }
+}
+
 impl Slot {
     /// A message to this robot, as the `seq`-th of its kind.
     fn message(&self, seq: u32, time: Millis, body: ToRobotBody) -> Message {
@@ -252,8 +336,8 @@ pub struct Controller<P: TrafficPolicy> {
     /// Which robot gets which task; it holds the jobs not yet given out.
     dispatcher: Box<dyn Dispatcher>,
     robots: Vec<Slot>,
-    completed: Vec<Completed>,
-    rejected: Vec<Rejected>,
+    completed: History<Completed>,
+    rejected: History<Rejected>,
     /// The latest time a cycle was given (at the start [`Config::start`]).
     clock: Millis,
     /// Until every robot has reported: the newest report of those that have; then
@@ -376,8 +460,8 @@ impl<P: TrafficPolicy> Controller<P> {
             graph: graph.clone(),
             dispatcher,
             robots,
-            completed: Vec::new(),
-            rejected: Vec::new(),
+            completed: History::default(),
+            rejected: History::default(),
             clock: config.start,
             first,
             known: Vec::new(),
@@ -484,7 +568,7 @@ impl<P: TrafficPolicy> Controller<P> {
     /// Throughput and waiting of the jobs done so far (see
     /// [`crate::metrics`]); `elapsed_seconds` is the simulated time.
     pub fn metrics(&self, elapsed_seconds: f64) -> Metrics {
-        let waits: Vec<f64> = self.completed.iter().map(|c| c.waiting_seconds).collect();
+        let waits: Vec<f64> = self.completed().iter().map(|c| c.waiting_seconds).collect();
         summarize(&waits, elapsed_seconds)
     }
 
@@ -494,11 +578,59 @@ impl<P: TrafficPolicy> Controller<P> {
     }
 
     pub fn completed(&self) -> &[Completed] {
-        &self.completed
+        self.completed.entries()
     }
 
     pub fn rejected(&self) -> &[Rejected] {
-        &self.rejected
+        self.rejected.entries()
+    }
+
+    /// The checksum of everything the controller keeps that can change, the
+    /// dispatcher's and the traffic rules' parts included (see
+    /// [`crate::checksum`]). It is computed at each call.
+    pub fn state_checksum(&self) -> u64 {
+        let Controller {
+            // (fixed by the setup, as are the other parts left out here)
+            graph: _,
+            dispatcher,
+            robots,
+            completed,
+            rejected,
+            clock,
+            first,
+            known,
+            policy,
+            zoned: _,
+            zone_set: _,
+            lifts,
+            doors,
+            node_grid: _,
+            types: _,
+            rides: _,
+            reroutes,
+            load_weight,
+            wait_weight,
+            node_wait,
+        } = self;
+        let mut sum = Checksum::new();
+        clock.hash(&mut sum);
+        first.hash(&mut sum);
+        known.hash(&mut sum);
+        robots.hash(&mut sum);
+        completed.hash(&mut sum);
+        rejected.hash(&mut sum);
+        reroutes.hash(&mut sum);
+        load_weight.to_bits().hash(&mut sum);
+        wait_weight.to_bits().hash(&mut sum);
+        node_wait.len().hash(&mut sum);
+        for waiting in node_wait {
+            waiting.to_bits().hash(&mut sum);
+        }
+        lifts.hash_state(&mut sum);
+        doors.hash_state(&mut sum);
+        dispatcher.checksum(&mut sum);
+        policy.checksum(&mut sum);
+        sum.finish()
     }
 
     /// Number of robots working on a job (a trip to a charger counts, a trip to a
@@ -842,8 +974,15 @@ impl<P: TrafficPolicy> Controller<P> {
             work.waiting_seconds += elapsed;
         }
 
-        // ask the policy how far the route may be released now
         let from = work.released_through;
+        // A report further along than what is released does not fit what was sent:
+        // release() is not asked, no lift or door claimed, no route changed and
+        // nothing of the route released. What the robot holds stays held.
+        if at > from {
+            return;
+        }
+
+        // ask the policy how far the route may be released now
         let wanted = work.plan.released_through(at, self.policy.window());
         // a ride in the window needs its lift (S47)
         let wanted = self.lifts.window(i, &work.plan, at, from, wanted);
@@ -1131,7 +1270,7 @@ struct Orders<'a, P: TrafficPolicy> {
     policy: &'a mut P,
     lifts: &'a mut LiftDesk,
     doors: &'a mut DoorDesk,
-    rejected: &'a mut Vec<Rejected>,
+    rejected: &'a mut History<Rejected>,
     /// The controller's clock.
     now: Millis,
     /// The time of the cycle, for the messages.

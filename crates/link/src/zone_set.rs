@@ -4,6 +4,7 @@
 //! Nothing is checked here: whether the polygons and numbers make sense is for the
 //! reader to check.
 
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use botsim_model::graph::MapIdx;
@@ -15,7 +16,7 @@ pub use botsim_model::zones::LossBehavior;
 use crate::ids::{ActionType, ZoneId, ZoneSetId};
 use crate::order::Blocking;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct ZoneSet {
     pub id: ZoneSetId,
     pub map: MapIdx,
@@ -70,8 +71,64 @@ pub enum ZoneKind {
     },
 }
 
+impl Hash for Zone {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let Zone {
+            id,
+            descriptor,
+            vertices,
+            kind,
+        } = self;
+        id.hash(h);
+        descriptor.hash(h);
+        vertices.len().hash(h);
+        for (x, y) in vertices {
+            x.to_bits().hash(h);
+            y.to_bits().hash(h);
+        }
+        kind.hash(h);
+    }
+}
+
+impl Hash for ZoneKind {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        std::mem::discriminant(self).hash(h);
+        match self {
+            ZoneKind::Blocked | ZoneKind::LineGuided | ZoneKind::CoordinatedReplanning => {}
+            ZoneKind::Release { loss } => loss.hash(h),
+            ZoneKind::SpeedLimit { maximum_speed } => maximum_speed.to_bits().hash(h),
+            ZoneKind::Action {
+                entry,
+                during,
+                exit,
+            } => {
+                entry.hash(h);
+                during.hash(h);
+                exit.hash(h);
+            }
+            ZoneKind::Priority { factor } | ZoneKind::Penalty { factor } => {
+                factor.to_bits().hash(h);
+            }
+            ZoneKind::Directed {
+                direction,
+                limitation,
+            } => {
+                direction.to_bits().hash(h);
+                limitation.hash(h);
+            }
+            ZoneKind::Bidirected {
+                direction,
+                limitation,
+            } => {
+                direction.to_bits().hash(h);
+                limitation.hash(h);
+            }
+        }
+    }
+}
+
 /// VDA 5050 `directedLimitation`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Directed {
     Soft,
     Restricted,
@@ -79,14 +136,14 @@ pub enum Directed {
 }
 
 /// VDA 5050 `bidirectedLimitation`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Bidirected {
     Soft,
     Restricted,
 }
 
 /// An action of an action zone. It has no id.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct ZoneAction {
     pub kind: ActionType,
     pub descriptor: Option<Arc<str>>,

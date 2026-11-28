@@ -21,7 +21,8 @@
 //! These rules are frozen (brief U10): only bug fixes; they are the reference other
 //! policies are measured against.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use botsim_link::state::State;
 use botsim_model::collision::{Body, overlap, place};
@@ -82,7 +83,7 @@ pub struct BaselinePolicy {
     /// another robot holds (go-first, S77); cleared when it has been released. The
     /// edge skips every conflict test but one: a robot standing on a node too close
     /// to the edge's end node still keeps it off (S183).
-    waived: HashMap<usize, EdgeIdx>,
+    waived: BTreeMap<usize, EdgeIdx>,
     /// The node each robot stands on (by its reported position), seen at the start of
     /// the cycle; `None` between nodes.
     standing: Vec<Option<NodeIdx>>,
@@ -112,7 +113,7 @@ impl BaselinePolicy {
             robot_types: Vec::new(),
             reservations: Reservations::new(graph),
             conflicts: None,
-            waived: HashMap::new(),
+            waived: BTreeMap::new(),
             standing: Vec::new(),
             blocked_seconds: Vec::new(),
             still_seconds: Vec::new(),
@@ -687,6 +688,37 @@ impl TrafficPolicy for BaselinePolicy {
         self.zone_grants
             .as_ref()
             .map_or_else(Vec::new, |g| g.blockers(robot))
+    }
+
+    fn checksum(&self, mut hasher: &mut dyn Hasher) {
+        let BaselinePolicy {
+            // (fixed by the setup, as are the fleet and the conflicts)
+            graph: _,
+            node_grid: _,
+            type_names: _,
+            robots: _,
+            robot_types: _,
+            reservations,
+            conflicts: _,
+            waived,
+            standing,
+            blocked_seconds,
+            still_seconds,
+            zone_grants,
+            give_ways,
+        } = self;
+        let h = &mut hasher;
+        reservations.hash(h);
+        waived.hash(h);
+        standing.hash(h);
+        for seconds in [blocked_seconds, still_seconds] {
+            seconds.len().hash(h);
+            for s in seconds {
+                s.to_bits().hash(h);
+            }
+        }
+        zone_grants.hash(h);
+        give_ways.hash(h);
     }
 
     // the first of: who holds the next node, who holds the edge to it, who holds an

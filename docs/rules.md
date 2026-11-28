@@ -126,6 +126,19 @@ each lift and door by its number.
     state of the lift that names it.
 - The rule is strict: a real robot that stands still may report only every 30 s,
   and is released only in the cycles with its report.
+- **A report beyond the release:** a report further along the route than what has
+  been released to the robot does not fit what was sent. In that cycle the traffic
+  rules are not asked how far the robot's route may go, no lift or door is claimed
+  for it, its route is not changed and nothing of its route is released; what the
+  robot holds stays held. The rest of the cycle still sees the robot: a zone request
+  of it can be answered, go-first can still take a node or edge over for it, and on
+  a trip to a parking place it can still be given a job.
+- **Recording and replay:** the controller decides on nothing but what it is made
+  from, the time and the inbox of each cycle. `botsim --record-inputs` writes these
+  to a file with two checksums per cycle (the outbox, the state left), and
+  `botsim --replay` runs the same cycles from that file alone and names the first
+  that differs ([botsim-replay](../crates/replay/README.md)). Same results are
+  promised only for the same build on the same kind of machine.
 - **Time:** the controller's clock is the latest time it has been given. A time
   that does not advance or goes back counts nothing; a jump counts in full.
   Timeouts are in seconds. A robot's waiting (the metric, the baseline's wait

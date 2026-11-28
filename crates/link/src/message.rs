@@ -12,7 +12,7 @@ use crate::state::State;
 use crate::zone_set::ZoneSet;
 
 /// What every message to or from a robot carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Header {
     /// The robot the message goes to or comes from.
     pub robot: RobotNo,
@@ -24,14 +24,14 @@ pub struct Header {
 }
 
 /// A message to a robot.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct ToRobot {
     pub header: Header,
     pub body: ToRobotBody,
 }
 
 /// What a message to a robot says.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub enum ToRobotBody {
     /// An order or an order update.
     Order(Order),
@@ -43,7 +43,7 @@ pub enum ToRobotBody {
 }
 
 /// A message from a robot: its state report.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct FromRobot {
     pub header: Header,
     pub state: State,

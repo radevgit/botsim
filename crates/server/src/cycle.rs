@@ -56,6 +56,23 @@
 //!   neither is the door.
 //! - Why it is held back, and the route load average, go by the kept report.
 //!
+//! # A report beyond the release
+//!
+//! A report that is further along its route than what has been released to the
+//! robot does not fit what was sent. In that cycle the rules'
+//! [`release`](crate::policy::TrafficPolicy::release) is not asked for the robot,
+//! no lift or door is claimed for it, its route is not changed and nothing of its
+//! route is released; what the robot holds stays held. The calls over the whole
+//! fleet still see it: a zone request of it can be answered, the rules can still
+//! take a node or edge over for it, and on a trip to a parking place it can still
+//! be given a job.
+//!
+//! # Recording and replay
+//!
+//! A controller decides on nothing but what it is made from, the time and the
+//! [`Inbox`] of each cycle, so `botsim-replay` writes those down and makes the same
+//! decisions again; [`crate::checksum`] tells whether it did.
+//!
 //! # Time
 //!
 //! The time of a cycle is in whole milliseconds since 1970. The controller's
@@ -154,7 +171,7 @@ pub struct Inbox {
 }
 
 /// The newest report of a robot, as the traffic rules see it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Known {
     pub report: FromRobot,
     /// It arrived in this cycle (see the module text).
@@ -162,7 +179,7 @@ pub struct Known {
 }
 
 /// One message to send.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub enum Message {
     /// To the robot its header names.
     Robot(ToRobot),
@@ -173,7 +190,7 @@ pub enum Message {
 }
 
 /// What a cycle gives back.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Hash)]
 pub struct Outbox {
     /// To be sent in this order.
     pub messages: Vec<Message>,

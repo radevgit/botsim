@@ -16,8 +16,10 @@ macro_rules! text_id {
                 $name(text.into())
             }
 
+            /// The text, which is all there is to an id.
             pub fn as_str(&self) -> &str {
-                &self.0
+                let $name(text) = self;
+                text
             }
         }
 

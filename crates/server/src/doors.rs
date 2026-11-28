@@ -28,6 +28,7 @@
 //! lift without a lay-by).
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use botsim_link::device::{DeviceHeader, DoorCommand, DoorNo, ToDoor};
 use botsim_link::message::Millis;
@@ -45,7 +46,7 @@ pub struct Door {
 }
 
 /// The robot that owns a door.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 struct Owner {
     robot: usize,
     /// Plan index of the guarded edge.
@@ -75,6 +76,18 @@ impl DoorDesk {
             seqs: vec![0; doors.len()],
             door_of,
         }
+    }
+
+    /// What changes from cycle to cycle, for [`crate::checksum`].
+    pub(crate) fn hash_state(&self, h: &mut impl Hasher) {
+        let DoorDesk {
+            // (fixed by the setup)
+            door_of: _,
+            owners,
+            seqs,
+        } = self;
+        owners.hash(h);
+        seqs.hash(h);
     }
 
     /// How far the order of `robot` may be released: `wanted` is the last node

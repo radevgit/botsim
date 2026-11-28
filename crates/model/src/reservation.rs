@@ -3,7 +3,7 @@
 use crate::graph::{EdgeIdx, NodeIdx};
 
 /// The nodes and edges a controller has reserved for a robot.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Reservation {
     /// Index of the robot in the order the robots were added.
     pub robot: usize,

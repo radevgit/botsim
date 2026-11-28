@@ -17,7 +17,7 @@ pub fn stands_waiting(driving: bool, field_violation: bool, acting: bool) -> boo
 }
 
 /// Why a robot waits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum WaitReason {
     /// The next piece of its route is not released to it.
     Release,
@@ -32,7 +32,7 @@ pub enum WaitReason {
 }
 
 /// What the controller says about a robot it holds back.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HeldBack {
     pub reason: WaitReason,
     /// The robots that cause it (indices in the order they were added to the

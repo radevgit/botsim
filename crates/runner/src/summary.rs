@@ -13,6 +13,7 @@
 use botsim_dispatcher::ChargePolicy;
 use botsim_model::job::Job;
 use botsim_model::time::Millis;
+use botsim_replay::{Call, Dispatch, Recorder, Rules, Setup, apply};
 use botsim_server::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
 use botsim_server::policy::TrafficPolicy;
 use botsim_sim::lift::DoorState;
@@ -20,7 +21,7 @@ use botsim_sim::world::World;
 use botsim_space::{MapOptions, TypeRef};
 use serde::Serialize;
 
-use crate::connect::{self, Connected};
+use crate::connect::{self, Connected, Output};
 use crate::scenario::{Scenario, ScenarioError};
 use crate::waiting_summary::{WaitingSummary, waiting_summary};
 
@@ -307,7 +308,10 @@ pub fn run_with(
     world: World,
     measure_time: bool,
 ) -> Result<Summary, ScenarioError> {
-    run_controller(scenario, world, measure_time, connect::controller)
+    run_controller(scenario, world, measure_time, |w| {
+        set_up(scenario, connect::controller(w))
+    })
+    .map(|(summary, _)| summary)
 }
 
 /// Like [`run`], with the traffic rules of `policy` instead of the baseline's: the
@@ -322,41 +326,105 @@ pub fn run_with_policy(
     world: World,
     policy: Box<dyn TrafficPolicy>,
 ) -> Result<Summary, ScenarioError> {
-    run_controller(scenario, world, false, |w| connect::with_policy(w, policy))
+    run_controller(scenario, world, false, |w| {
+        set_up(scenario, connect::with_policy(w, policy))
+    })
+    .map(|(summary, _)| summary)
 }
 
-/// The run itself; `make` builds the controller for the world.
+/// What a run needs to record the controller's inputs ([`run_recorded`]).
+#[derive(Debug)]
+pub struct InputRecording {
+    /// The text of the scenario's layout file
+    /// ([`layout_text`](crate::traffic_setup::layout_text)).
+    pub lif: String,
+    /// The traffic rules of the run; [`rules`](crate::traffic_setup::rules) makes
+    /// the traffic module's.
+    pub rules: Rules,
+    /// Where the recording is written (best buffered).
+    pub output: Box<dyn Output>,
+}
+
+/// Like [`run_with`] with the rules of `recording`, and the controller's inputs
+/// are written to its output (see [`botsim_replay`]): the setup, and the time and
+/// the inbox of every cycle with the checksums. The summary is the same as without.
+///
+/// The second value says whether the recording was written whole; a failure to
+/// write does not stop the run. An error if the scenario has no `[jobs]` section
+/// (no controller runs), or if the recording cannot be started.
+pub fn run_recorded(
+    scenario: &Scenario,
+    world: World,
+    measure_time: bool,
+    recording: InputRecording,
+) -> Result<(Summary, Result<(), botsim_replay::Error>), String> {
+    if scenario.jobs.is_none() {
+        return Err("a scenario without [jobs] has no controller to record".into());
+    }
+    let InputRecording { lif, rules, output } = recording;
+    let setup = Setup {
+        lif,
+        config: connect::config(&world),
+        rules,
+        dispatch: Dispatch::Baseline,
+        calls: set_up_calls(scenario),
+    };
+    let recorder = Recorder::new(output, &setup).map_err(|e| e.to_string())?;
+    // (made from what was written down, as a replay makes it)
+    let controller = botsim_replay::controller(&setup).map_err(|e| e.to_string())?;
+    let mut connected = connect::with_controller(&world, |_| controller);
+    connected.record(recorder);
+    let (summary, controller) =
+        run_controller(scenario, world, measure_time, |_| connected).map_err(|e| e.to_string())?;
+    let written = controller
+        .and_then(|mut connected| connected.finish_recording())
+        .unwrap_or(Ok(()));
+    Ok((summary, written))
+}
+
+/// The set-up calls the scenario makes on its controller, in their order.
+fn set_up_calls(scenario: &Scenario) -> Vec<Call> {
+    let mut calls = vec![
+        Call::LoadWeight(scenario.route_load_weight),
+        Call::WaitWeight(scenario.route_wait_weight),
+    ];
+    // robots with a low battery go to a charger (only with chargers in the world)
+    if scenario.charger_power_w.is_some() {
+        calls.push(Call::Charging(ChargePolicy {
+            low: scenario.charge_low,
+            high: 80.0_f64.max(scenario.charge_low),
+            critical: 10.0,
+        }));
+    }
+    if scenario.conflict_reservation
+        && let Some(path) = &scenario.source
+    {
+        let (edges, nodes, node_nodes) = conflict_input(scenario, path);
+        calls.push(Call::Conflicts(edges));
+        calls.push(Call::NodeConflicts(nodes));
+        calls.push(Call::NodeNodeConflicts(node_nodes));
+    }
+    calls
+}
+
+/// `connected` with the scenario's set-up calls made on its controller.
+fn set_up<P: TrafficPolicy>(scenario: &Scenario, mut connected: Connected<P>) -> Connected<P> {
+    apply(&mut connected.controller, &set_up_calls(scenario));
+    connected
+}
+
+/// The run itself; `make` builds the controller for the world, ready for its first
+/// cycle. The controller is returned with the summary.
 fn run_controller<P: TrafficPolicy>(
     scenario: &Scenario,
     mut world: World,
     measure_time: bool,
     make: impl FnOnce(&World) -> Connected<P>,
-) -> Result<Summary, ScenarioError> {
+) -> Result<(Summary, Option<Connected<P>>), ScenarioError> {
     let ticks = ticks_for(scenario.duration, scenario.time_step);
     let mut generator = scenario.job_generator(world.graph())?;
     // (a controller only with jobs)
-    let mut controller = generator.is_some().then(|| {
-        let mut c = make(&world);
-        c.set_load_weight(scenario.route_load_weight);
-        c.set_wait_weight(scenario.route_wait_weight);
-        // robots with a low battery go to a charger (only with chargers in the world)
-        if scenario.charger_power_w.is_some() {
-            c.set_charging(ChargePolicy {
-                low: scenario.charge_low,
-                high: 80.0_f64.max(scenario.charge_low),
-                critical: 10.0,
-            });
-        }
-        if scenario.conflict_reservation
-            && let Some(path) = &scenario.source
-        {
-            let (edges, nodes, node_nodes) = conflict_input(scenario, path);
-            c.policy_mut().conflicts(&edges);
-            c.policy_mut().node_conflicts(&nodes);
-            c.policy_mut().node_node_conflicts(&node_nodes);
-        }
-        c
-    });
+    let mut controller = generator.is_some().then(|| make(&world));
     let mut created = 0;
     let mut clock = StepClock::default();
     let mut stopped_at_first_deadlock = false;
@@ -478,7 +546,7 @@ fn run_controller<P: TrafficPolicy>(
             duration_seconds: seconds(d.ended_tick.unwrap_or(world.tick()) - d.first_seen_tick, dt),
         })
         .collect();
-    Ok(Summary {
+    let summary = Summary {
         timing: measure_time.then(|| clock.report()),
         scenario: scenario.name.clone(),
         deadlock_count: deadlocks.len(),
@@ -551,7 +619,8 @@ fn run_controller<P: TrafficPolicy>(
         ticks: world.tick(),
         stopped_at_first_deadlock,
         robots,
-    })
+    };
+    Ok((summary, controller))
 }
 
 /// What the baseline reads of the conflict map: edge pairs, node-edge pairs and

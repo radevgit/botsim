@@ -19,7 +19,8 @@
 //!    refused addition of a job to a parking trip;
 //! 1. [`cycle_start`](TrafficPolicy::cycle_start) with all robots;
 //! 2. robot by robot: [`release`](TrafficPolicy::release) for a robot that has a
-//!    route and can take an update (or [`route_finished`](TrafficPolicy::route_finished)
+//!    route, can take an update and reports no further along it than what is
+//!    released (or [`route_finished`](TrafficPolicy::route_finished)
 //!    / [`route_dropped`](TrafficPolicy::route_dropped) when its route ends); after a
 //!    new plan for it, [`route_changed`](TrafficPolicy::route_changed);
 //! 3. [`after_releases`](TrafficPolicy::after_releases);
@@ -42,6 +43,7 @@
 
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::hash::Hasher;
 
 use botsim_link::ids::RequestId;
 use botsim_link::message::Millis;
@@ -114,7 +116,8 @@ pub struct Ask<'a> {
     pub state: &'a State,
     /// The whole route.
     pub route: &'a Plan,
-    /// Index in `route` of the last node the robot has reached.
+    /// Index in `route` of the last node the robot has reached; at most
+    /// [`released_through`](Ask::released_through).
     pub at: usize,
     /// Index of the last node released so far.
     pub released_through: usize,
@@ -233,6 +236,13 @@ pub trait TrafficPolicy: Debug {
     fn zone_blockers(&self, _robot: usize) -> Vec<usize> {
         Vec::new()
     }
+
+    /// Write everything the policy keeps that can change from cycle to cycle into
+    /// `hasher`, in an order that does not depend on chance (no iteration over a
+    /// hashed collection), so that a replay can tell where two runs part (see
+    /// [`crate::checksum`]). It must not change anything. Rules that write nothing
+    /// are seen only by what they make the controller send.
+    fn checksum(&self, _hasher: &mut dyn Hasher) {}
 }
 
 /// A boxed policy is a policy, so that one can be chosen at run time
@@ -294,5 +304,8 @@ impl<T: TrafficPolicy + ?Sized> TrafficPolicy for Box<T> {
     }
     fn zone_blockers(&self, robot: usize) -> Vec<usize> {
         (**self).zone_blockers(robot)
+    }
+    fn checksum(&self, hasher: &mut dyn Hasher) {
+        (**self).checksum(hasher);
     }
 }

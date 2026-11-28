@@ -34,6 +34,7 @@
 //! `edge_holder`) and the reservations for a watcher.
 
 use std::collections::{BTreeMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use botsim_link::ids::OrderId;
 use botsim_model::graph::NodeIdx;
@@ -61,7 +62,7 @@ pub struct TrafficAdapter {
 }
 
 /// What the adapter knows of a robot of the module.
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 struct Robot {
     /// Its number in the module.
     number: usize,
@@ -283,6 +284,21 @@ impl TrafficPolicy for TrafficAdapter {
 
     fn zone_answers(&mut self, _fleet: &Fleet) -> Vec<ZoneAnswer> {
         Vec::new()
+    }
+
+    fn checksum(&self, mut hasher: &mut dyn Hasher) {
+        let TrafficAdapter {
+            traffic,
+            // (fixed by the setup)
+            nodes: _,
+            edges: _,
+            node_by_id: _,
+            edge_by_id: _,
+            types: _,
+            robots,
+        } = self;
+        traffic.hash(&mut hasher);
+        robots.hash(&mut hasher);
     }
 
     fn blocker(&self, robot: usize, _route: &Plan, _released_through: usize) -> Option<usize> {

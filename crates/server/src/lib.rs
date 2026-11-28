@@ -8,6 +8,7 @@
 //! cycle by cycle, the reports of the robots and lifts as data, and gives back the
 //! messages to send (see [`cycle`]), all of them [`botsim_link`]'s.
 
+pub mod checksum;
 pub mod conflicts;
 pub mod controller;
 pub mod cycle;

@@ -1,6 +1,7 @@
 //! The state report of a robot: its own account of where it is, what it still has
 //! ahead and how it is doing (VDA 5050 `state`).
 
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use botsim_model::errors::ErrorType;
@@ -74,7 +75,7 @@ impl State {
 /// - there is nothing ahead without a last node;
 /// - no more entries are released than there are;
 /// - every `sequenceId` fits in 32 bits.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Route {
     last_node: Option<LastNode>,
     ahead: Vec<Ahead>,
@@ -82,7 +83,7 @@ pub struct Route {
 }
 
 /// The last node reached, or the node the robot stands on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LastNode {
     pub node: NodeIdx,
     /// Half its `sequenceId`.
@@ -90,7 +91,7 @@ pub struct LastNode {
 }
 
 /// An edge still ahead and the node it ends at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Ahead {
     pub edge: EdgeIdx,
     pub node: NodeIdx,
@@ -127,6 +128,18 @@ impl Route {
             ahead,
             released,
         })
+    }
+
+    /// Everything a route is made of: `(last node, ahead, released)`, as
+    /// [`Route::new`] takes them. For whoever writes a route down: a new part must
+    /// show here, and so at every such place.
+    pub fn parts(&self) -> (Option<LastNode>, &[Ahead], u32) {
+        let Route {
+            last_node,
+            ahead,
+            released,
+        } = self;
+        (*last_node, ahead, *released)
     }
 
     /// `None`: the robot reports no last node.
@@ -183,8 +196,73 @@ pub struct Velocity {
     pub omega: f64,
 }
 
+impl Hash for State {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let State {
+            order_id,
+            update_id,
+            route,
+            position,
+            velocity,
+            driving,
+            field_violation,
+            emergency_stop,
+            operating_mode,
+            charge,
+            charging,
+            actions,
+            instant_actions,
+            zone_requests,
+            zone_sets,
+            errors,
+        } = self;
+        order_id.hash(h);
+        update_id.hash(h);
+        route.hash(h);
+        position.hash(h);
+        velocity.hash(h);
+        driving.hash(h);
+        field_violation.hash(h);
+        emergency_stop.hash(h);
+        operating_mode.hash(h);
+        charge.to_bits().hash(h);
+        charging.hash(h);
+        actions.hash(h);
+        instant_actions.hash(h);
+        zone_requests.hash(h);
+        zone_sets.hash(h);
+        errors.hash(h);
+    }
+}
+
+impl Hash for Position {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let Position {
+            map,
+            x,
+            y,
+            theta,
+            localized,
+        } = self;
+        map.hash(h);
+        for value in [x, y, theta] {
+            value.to_bits().hash(h);
+        }
+        localized.hash(h);
+    }
+}
+
+impl Hash for Velocity {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let Velocity { vx, vy, omega } = self;
+        for value in [vx, vy, omega] {
+            value.to_bits().hash(h);
+        }
+    }
+}
+
 /// VDA 5050 `activeEmergencyStop`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EmergencyStop {
     Manual,
     Remote,
@@ -192,7 +270,7 @@ pub enum EmergencyStop {
 }
 
 /// VDA 5050 `operatingMode`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OperatingMode {
     Startup,
     Automatic,
@@ -204,7 +282,7 @@ pub enum OperatingMode {
 }
 
 /// An action and how far it is.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ActionState {
     pub id: ActionId,
     /// `None`: the robot does not say.
@@ -213,7 +291,7 @@ pub struct ActionState {
 }
 
 /// VDA 5050 `actionStatus`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActionStatus {
     Waiting,
     Initializing,
@@ -225,7 +303,7 @@ pub enum ActionStatus {
 }
 
 /// A request of the robot about a zone.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ZoneRequest {
     pub id: RequestId,
     pub kind: ZoneRequestType,
@@ -235,14 +313,14 @@ pub struct ZoneRequest {
 }
 
 /// VDA 5050 `requestType` of a zone request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ZoneRequestType {
     Access,
     Replanning,
 }
 
 /// VDA 5050 `requestStatus`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RequestStatus {
     Requested,
     Queued,
@@ -252,7 +330,7 @@ pub enum RequestStatus {
 }
 
 /// A zone set stored on the robot.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ZoneSetInfo {
     pub id: ZoneSetId,
     pub map: MapIdx,
@@ -260,7 +338,7 @@ pub struct ZoneSetInfo {
 }
 
 /// An error the robot reports.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Error {
     pub kind: ErrorKind,
     pub level: ErrorLevel,

@@ -14,7 +14,9 @@ cargo run --release -p botsim -- scenarios/ring_jobs.toml
 ```
 botsim [--policy baseline|traffic] [--timing]
        [--record <file.jsonl> [--record-interval <seconds>] [--geometry <geometry.json>]]
+       [--record-inputs <file>]
        <scenario.toml>
+botsim --replay <file>
 ```
 
 | Option | |
@@ -24,8 +26,41 @@ botsim [--policy baseline|traffic] [--timing]
 | `--record <file>` | also write a recording (JSON Lines) for the [viewer](../viewer/README.md) and the [PNG exporter](../export/README.md); the summary is the same with or without it |
 | `--record-interval <s>` | simulated seconds between snapshots (default 0.1) |
 | `--geometry <file>` | add walls, racks and shelves to the recording |
+| `--record-inputs <file>` | also record everything the fleet server decides on, to be replayed ([botsim-replay](../replay/README.md)); the summary is the same with or without it. Needs a scenario with `[jobs]` |
+| `--replay <file>` | alone: replay such a file, with no other file, and print JSON |
 
-Exit code: 0 done, 1 error (message on stderr), 2 wrong command line.
+Exit code: 0 done, 1 error (message on stderr), 2 wrong command line; of a replay
+also 3, it differs from what was recorded.
+
+## Replay
+
+```sh
+cargo run --release -p botsim -- --record-inputs run.inputs scenarios/ring_jobs.toml
+cargo run --release -p botsim -- --replay run.inputs
+```
+
+```json
+{
+  "recorded_with": "0.2.0",
+  "replayed_with": "0.2.0",
+  "cycles": 36001,
+  "same": true,
+  "complete": true
+}
+```
+
+| Field | |
+|---|---|
+| `cycles` | cycles run and compared |
+| `same` | every one of them gave what was recorded |
+| `complete` | the whole file was replayed: it could be read to its end and nothing differed |
+| `first_difference` | only if one differs: `cycle` (from 1), `time_ms`, and whether the `messages` and the `state` differ. The replay stops there |
+
+A file that is cut off or damaged further on is replayed up to the break; the JSON
+is printed, then the error (exit 1). A file that is no recording, or in another
+format, gives the error alone. A file of another botsim version is replayed, with a
+note on stderr. The same result is promised only for the same build on the same
+kind of machine.
 
 ## Example scenarios
 
@@ -51,7 +86,11 @@ connect::step(&mut controller, &mut world, new_jobs)
                                                 one cycle, with World::step
 connect::collect(&mut controller, &mut world)   in a step without a cycle
 connect::config(&world)                         the site and fleet as the controller gets them
+controller.record(recorder)                     write down what the controller is given
+controller.finish_recording()                   end that file
 ```
+
+`summary::run_recorded` runs a scenario with such a recording.
 
 The functions give a `Connected` controller: it is used as the controller itself.
 

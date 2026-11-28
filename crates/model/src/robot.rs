@@ -50,6 +50,14 @@ impl RobotNo {
         self.generation
     }
 
+    /// Everything the number is made of: `(slot, generation)`, as
+    /// [`RobotNo::new`] takes them. For whoever writes a number down: a new part
+    /// must show here, and so at every such place.
+    pub const fn parts(self) -> (u32, u32) {
+        let RobotNo { slot, generation } = self;
+        (slot, generation)
+    }
+
     /// The number for the next robot in the same slot; `None` if the slot has no
     /// generation left. It must not be used again then.
     pub const fn next_generation(self) -> Option<RobotNo> {

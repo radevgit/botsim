@@ -13,6 +13,8 @@ botsim-dispatcher = { path = "../dispatcher" }
 botsim-link = { path = "../link" }
 botsim-model = { path = "../model" }
 botsim-record = { path = "../record" }
+# (recording the server's inputs, and replaying them)
+botsim-replay = { path = "../replay" }
 botsim-scenario = { path = "../scenario" }
 botsim-server = { path = "../server" }
 botsim-sim = { path = "../sim" }

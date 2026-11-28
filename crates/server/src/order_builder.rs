@@ -38,7 +38,7 @@ pub const PICK: &str = "pick";
 pub const DROP: &str = "drop";
 
 /// A whole route: `nodes.len() == edges.len() + 1`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Plan {
     pub nodes: Vec<NodeIdx>,
     pub edges: Vec<EdgeIdx>,

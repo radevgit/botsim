@@ -17,7 +17,7 @@ pub struct LiftNo(pub u32);
 
 /// What every message to or from a door or a lift carries; `D` is [`DoorNo`] or
 /// [`LiftNo`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeviceHeader<D> {
     /// The device the message goes to or comes from.
     pub device: D,
@@ -28,13 +28,13 @@ pub struct DeviceHeader<D> {
 }
 
 /// A command to a door.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ToDoor {
     pub header: DeviceHeader<DoorNo>,
     pub command: DoorCommand,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DoorCommand {
     /// The server wants the door open.
     Open,
@@ -43,14 +43,14 @@ pub enum DoorCommand {
 }
 
 /// The state of a door.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FromDoor {
     pub header: DeviceHeader<DoorNo>,
     pub door: DoorPhase,
 }
 
 /// How far a door is open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DoorPhase {
     Closed,
     Opening,
@@ -59,13 +59,13 @@ pub enum DoorPhase {
 }
 
 /// A command to a lift.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ToLift {
     pub header: DeviceHeader<LiftNo>,
     pub command: LiftCommand,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LiftCommand {
     /// Bring the cabin to the floor of map `map` and open the cabin door
     /// `car_door` (its place in the lift's list of cabin doors, from 0).
@@ -75,7 +75,7 @@ pub enum LiftCommand {
 }
 
 /// The state of a lift.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FromLift {
     pub header: DeviceHeader<LiftNo>,
     /// The map of the floor the cabin is at, or of the one it left while it moves.

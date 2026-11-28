@@ -24,6 +24,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::hash::Hasher;
 
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::job::Job;
@@ -244,4 +245,11 @@ pub trait Dispatcher: Debug {
 
     /// The figures so far.
     fn counts(&self) -> Counts;
+
+    /// Write everything the dispatcher keeps that can change from cycle to cycle
+    /// into `hasher`, in an order that does not depend on chance (no iteration over
+    /// a hashed collection), so that a replay can tell where two runs part. It must
+    /// not change anything. A dispatcher that writes nothing is seen only by what it
+    /// makes the controller do.
+    fn checksum(&self, _hasher: &mut dyn Hasher) {}
 }
