@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use botsim::scenario::Scenario;
+use botsim_model::time::Millis;
 
 fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios")
@@ -24,7 +25,7 @@ fn used_nodes(jobs: &str) -> BTreeSet<String> {
     let mut g = s.job_generator(w.graph()).unwrap().unwrap();
     let mut used = BTreeSet::new();
     for t in 0..400_000 {
-        if let Some(j) = g.step(t) {
+        if let Some(j) = g.step(Millis(t)) {
             used.insert(w.graph().nodes[j.pickup].id.clone());
             used.insert(w.graph().nodes[j.drop].id.clone());
         }
@@ -92,7 +93,7 @@ fn pairs(jobs: &str) -> BTreeSet<(String, String)> {
     let mut g = s.job_generator(w.graph()).unwrap().unwrap();
     let id = |n: usize| w.graph().nodes[n].id.clone();
     (0..400_000)
-        .filter_map(|t| g.step(t))
+        .filter_map(|t| g.step(Millis(t)))
         .map(|j| (id(j.pickup), id(j.drop)))
         .collect()
 }

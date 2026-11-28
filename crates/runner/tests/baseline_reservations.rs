@@ -5,6 +5,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::jobs::JobGenerator;
 use botsim_sim::world::World;
@@ -55,7 +56,7 @@ fn job(g: &Graph, id: u64, pickup: &str, drop: &str) -> Job {
         id,
         pickup: g.node_idx(pickup).unwrap(),
         drop: g.node_idx(drop).unwrap(),
-        created_tick: 0,
+        created: Millis(0),
     }
 }
 
@@ -174,8 +175,8 @@ fn robots_that_wait_for_a_moving_robot_or_do_a_job_are_no_deadlock() {
     let mut gen_ = JobGenerator::new(11, &nodes, 240.0, DT).unwrap();
     let mut w = world(g, &["N0", "N1", "N2"]);
     let mut c = connect::controller(&w);
-    for t in 0..60_000u64 {
-        let new: Vec<Job> = gen_.step(t).into_iter().collect();
+    for _ in 0..60_000u64 {
+        let new: Vec<Job> = gen_.step(Millis(w.now_ms())).into_iter().collect();
         connect::step(&mut c, &mut w, new);
         w.step();
     }
@@ -192,8 +193,8 @@ fn many_generated_jobs_on_a_ring_with_three_robots_never_collide() {
         let mut gen_ = JobGenerator::new(11, &nodes, 240.0, DT).unwrap();
         let mut w = world(g, &["N0", "N1", "N2"]);
         let mut c = connect::controller(&w);
-        for t in 0..60_000u64 {
-            let new: Vec<Job> = gen_.step(t).into_iter().collect();
+        for _ in 0..60_000u64 {
+            let new: Vec<Job> = gen_.step(Millis(w.now_ms())).into_iter().collect();
             connect::step(&mut c, &mut w, new);
             w.step();
         }

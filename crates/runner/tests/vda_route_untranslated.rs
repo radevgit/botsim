@@ -45,7 +45,7 @@ fn job(w: &World) -> Job {
         id: 1,
         pickup: node("N1"),
         drop: node("N2"),
-        created_tick: 0,
+        created: Millis(0),
     }
 }
 

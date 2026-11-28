@@ -29,6 +29,11 @@
 //!   ride) the door stays open until the robot has driven away from the node, or
 //!   its job is done; then the controller releases the door and the lift is free
 //!   for the next robot.
+//! - **A silent robot** (no new report, see [`crate::cycle`]) keeps its lift,
+//!   and nothing goes on: the lift is not sent on or let go; before the robot has
+//!   been seen in the cabin it is only called to the entrance again. So a ride
+//!   starts only in a cycle with a new report of the robot and a state of the
+//!   lift that names it.
 //!
 //! Not yet: several robots in a cabin, choosing the lift (a ride is the one
 //! layout edge), giving the lift back if a robot never comes, a lift going
@@ -112,6 +117,9 @@ pub struct LiftRobot {
     pub at: Option<usize>,
     /// The layout node the robot stands on, if any.
     pub node: Option<NodeIdx>,
+    /// Its report arrived in this cycle. Without a new one the desk takes no step
+    /// for a lift the robot owns.
+    pub new: bool,
 }
 
 #[derive(Debug)]
@@ -264,8 +272,10 @@ impl LiftDesk {
 
     /// One control cycle at `time`: call, release and send the cabins of the lifts
     /// that have an owner. `states` are what the lifts report (see
-    /// [`Input::lifts`](crate::cycle::Input::lifts)), `robots[i]` is robot `i`; the
-    /// commands to the lifts go to `out`.
+    /// [`Inbox::lifts`](crate::cycle::Inbox::lifts); of several of one lift the
+    /// newest counts), `robots[i]` is robot `i`; the commands to the lifts go to
+    /// `out`. For an owner without a new report the lift is only called again to
+    /// the entrance while the robot has not been seen in it.
     pub fn update(
         &mut self,
         states: &[FromLift],
@@ -307,6 +317,14 @@ impl LiftDesk {
                 car_door: s.car_door,
             };
 
+            if !r.new {
+                // when in doubt, stand still: the lift stays the robot's, and
+                // nothing goes on
+                if o.stage == Stage::Calling {
+                    send(call(stop_a));
+                }
+                continue;
+            }
             let Some(at) = r.at else {
                 // the job is over: the door is let go and the lift is free
                 send(LiftCommand::Release);
@@ -314,10 +332,11 @@ impl LiftDesk {
                 continue;
             };
             if o.stage == Stage::Calling {
+                // (the newest: of equal headers the later one)
                 let rider = states
                     .iter()
-                    .rev()
-                    .find(|s| s.header.device == device)
+                    .filter(|s| s.header.device == device)
+                    .max_by_key(|s| (s.header.time, s.header.seq))
                     .and_then(|s| s.occupant);
                 if rider == Some(robot_no(o.robot)) {
                     send(LiftCommand::Release);

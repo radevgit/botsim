@@ -5,6 +5,7 @@ use botsim::connect;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_model::waiting::WaitReason;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::waiting::Place;
@@ -55,7 +56,7 @@ fn the_second_robot_at_a_corridor_waits_for_the_first() {
         id,
         pickup,
         drop,
-        created_tick: 0,
+        created: Millis(0),
     };
     let mut jobs = Some(vec![job(1, a, e), job(2, d, f_node)]);
     let mut c = connect::controller(&w);

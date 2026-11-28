@@ -9,10 +9,8 @@ use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::{Kinematics, Shape};
 use botsim_server::controller::Controller;
-use botsim_server::cycle::{Config, FleetRobot, Input, Message, Output, Time, robot_no};
+use botsim_server::cycle::{Config, FleetRobot, Inbox, Message, Outbox, robot_no};
 use botsim_server::policy::TrafficPolicy;
-
-const DT: f64 = 0.05;
 
 /// The site `graph` with two robots of the type ACME/X1.
 pub fn config(graph: Graph) -> Config {
@@ -34,8 +32,7 @@ pub fn config(graph: Graph) -> Config {
         zone_set: None,
         lifts: Vec::new(),
         doors: Vec::new(),
-        step_seconds: DT,
-        start_tick: 0,
+        start: Millis(0),
     }
 }
 
@@ -105,21 +102,17 @@ pub fn cycle<P: TrafficPolicy>(
     tick: u64,
     states: &[FromRobot],
     jobs: impl IntoIterator<Item = Job>,
-) -> Output {
-    let input = Input {
-        time: Time {
-            tick,
-            unix_ms: 50 * tick as i64,
-        },
-        states,
-        lifts: &[],
-        watched: false,
+) -> Outbox {
+    let inbox = Inbox {
+        robots: states.to_vec(),
+        jobs: jobs.into_iter().collect(),
+        ..Inbox::default()
     };
-    c.step(&input, jobs)
+    c.step(Millis(50 * tick as i64), inbox)
 }
 
 /// The orders sent: the robot, the update id and the released nodes.
-pub fn orders(out: &Output) -> Vec<(u32, u32, Vec<NodeIdx>)> {
+pub fn orders(out: &Outbox) -> Vec<(u32, u32, Vec<NodeIdx>)> {
     out.messages
         .iter()
         .filter_map(|m| {
@@ -143,6 +136,6 @@ pub fn job(id: u64, pickup: NodeIdx, drop: NodeIdx) -> Job {
         id,
         pickup,
         drop,
-        created_tick: 0,
+        created: Millis(0),
     }
 }

@@ -70,7 +70,7 @@ fn job(g: &Graph, pickup: &str, drop: &str) -> Job {
         id: 1,
         pickup: g.node_idx(pickup).unwrap(),
         drop: g.node_idx(drop).unwrap(),
-        created_tick: 0,
+        created: Millis(0),
     }
 }
 

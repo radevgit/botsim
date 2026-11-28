@@ -6,6 +6,7 @@ use botsim::connect;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_model::waiting::WaitReason;
 use botsim_server::conflicts::{ConflictInput, NodeConflictInput};
 use botsim_sim::actions::ActionTimes;
@@ -57,7 +58,7 @@ fn a_cycle_through_a_node_edge_wait_is_reported_as_a_deadlock() {
         id,
         pickup,
         drop,
-        created_tick: 0,
+        created: Millis(0),
     };
     let mut jobs = Some(vec![job(1, x, s), job(2, s, y)]);
     for _ in 0..(40.0 / DT) as usize {

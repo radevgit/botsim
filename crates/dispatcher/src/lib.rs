@@ -27,6 +27,7 @@ use std::fmt::Debug;
 
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::job::Job;
+use botsim_model::time::Millis;
 use botsim_router::types::TypeRouting;
 
 pub mod baseline;
@@ -61,6 +62,10 @@ pub struct Robot {
     /// zone set is enabled, if the site has one).
     pub ready: bool,
     pub work: Work,
+    /// Seconds of its own time that this cycle counts: since the cycle that took
+    /// its report before (see `botsim-server`). It is what a time spent waiting
+    /// adds up.
+    pub elapsed: f64,
 }
 
 /// What a robot is doing, as far as the dispatcher is concerned.
@@ -87,8 +92,9 @@ pub enum Work {
 /// When a cycle takes place.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cycle {
-    /// The controller's clock in steps (a new job of a trip gets it).
-    pub tick: u64,
+    /// The controller's clock, which does not go back (a new job of a trip gets
+    /// it).
+    pub now: Millis,
     /// Seconds since the cycle before.
     pub elapsed: f64,
 }

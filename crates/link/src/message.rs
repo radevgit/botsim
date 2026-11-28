@@ -3,16 +3,13 @@
 use std::sync::Arc;
 
 use botsim_model::robot::RobotNo;
+pub use botsim_model::time::Millis;
 
 use crate::instant::InstantAction;
 use crate::order::Order;
 use crate::response::Response;
 use crate::state::State;
 use crate::zone_set::ZoneSet;
-
-/// A time in whole milliseconds since 1970-01-01T00:00:00Z.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Millis(pub i64);
 
 /// What every message to or from a robot carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

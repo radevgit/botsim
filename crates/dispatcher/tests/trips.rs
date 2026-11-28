@@ -1,6 +1,7 @@
 //! Trips to chargers and to parking places.
 
 use botsim_dispatcher::{ChargePolicy, Dispatcher, Purpose, Robot, Work};
+use botsim_model::time::Millis;
 
 mod common;
 use common::*;
@@ -27,7 +28,7 @@ fn a_charger_goes_to_the_nearest_low_robot_first() {
     let task = &rig.script.given[0].1;
     // the stand-in job: from the robot's node to the charger, numbered by trips
     assert_eq!((task.job.id, task.job.pickup, task.job.drop), (0, D, E));
-    assert_eq!(task.job.created_tick, 1);
+    assert_eq!(task.job.created, Millis(1000));
     let counts = rig.dispatcher.counts();
     assert_eq!(counts.charge_trips, 1);
     assert_eq!(counts.charge_wait_seconds, 1.0, "robot 0 waited a second");

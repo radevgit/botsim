@@ -7,6 +7,7 @@ use botsim::connect;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_server::conflicts::{ConflictInput, NodeNodeConflictInput};
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
@@ -79,7 +80,7 @@ fn run(node_node_conflicts: bool) -> (usize, usize) {
         id,
         pickup,
         drop,
-        created_tick: 0,
+        created: Millis(0),
     };
     let mut jobs = Some(vec![job(1, a, b), job(2, c, d)]);
     for _ in 0..(120.0 / DT) as usize {

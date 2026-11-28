@@ -6,6 +6,7 @@ use botsim::connect;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_server::conflicts::ConflictInput;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
@@ -68,13 +69,13 @@ fn run(conflicts: bool) -> (usize, usize) {
             id: 1,
             pickup: a,
             drop: b,
-            created_tick: 0,
+            created: Millis(0),
         },
         Job {
             id: 2,
             pickup: c,
             drop: d,
-            created_tick: 0,
+            created: Millis(0),
         },
     ];
     let mut jobs = Some(jobs);

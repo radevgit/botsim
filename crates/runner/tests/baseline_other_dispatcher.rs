@@ -13,6 +13,7 @@ use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 use vda5050::factsheet::Factsheet;
@@ -64,7 +65,7 @@ fn task(purpose: Purpose, from: NodeIdx, edges: Vec<EdgeIdx>, pickup_at: usize) 
             id: 7,
             pickup: from + pickup_at,
             drop: from + edges.len(),
-            created_tick: 0,
+            created: Millis(0),
         },
         purpose,
         from,
@@ -176,7 +177,7 @@ fn another_dispatcher_can_ask_the_impossible_without_effect() {
         id: 1,
         pickup: A,
         drop: B,
-        created_tick: 0,
+        created: Millis(0),
     };
     connect::step(&mut ctl, &mut w, [new_job]);
     for _ in 0..(60.0 / DT) as usize {

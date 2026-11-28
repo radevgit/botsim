@@ -10,6 +10,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::{Kinematics, RobotSpec};
+use botsim_model::time::Millis;
 use botsim_server::controller::NODE_TOLERANCE;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::door::DoorSpec;
@@ -114,7 +115,7 @@ fn job(w: &World, id: u64, pickup: &str, drop: &str) -> Job {
         id,
         pickup: node(pickup),
         drop: node(drop),
-        created_tick: 0,
+        created: Millis(0),
     }
 }
 

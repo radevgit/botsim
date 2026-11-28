@@ -112,11 +112,12 @@ impl TrafficPolicy for OneAtATime {
 
     fn zone_answers(&mut self, fleet: &Fleet) -> Vec<ZoneAnswer> {
         let stated: Vec<(usize, RequestId, ZoneId)> = fleet
-            .states
+            .robots
             .iter()
             .enumerate()
             .flat_map(|(robot, s)| {
-                s.state
+                s.report
+                    .state
                     .zone_requests
                     .iter()
                     .flatten()

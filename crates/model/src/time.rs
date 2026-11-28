@@ -1,6 +1,24 @@
 //! Time: VDA 5050 writes ISO 8601 UTC timestamps; inside the program a time is a
 //! number of milliseconds since the Unix epoch (1970-01-01T00:00:00Z).
 
+/// A time in whole milliseconds since 1970-01-01T00:00:00Z.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Millis(pub i64);
+
+impl Millis {
+    /// The seconds that have passed from `earlier` to this time; 0 if this time
+    /// is not later.
+    pub fn seconds_since(self, earlier: Millis) -> f64 {
+        self.millis_since(earlier) as f64 / 1000.0
+    }
+
+    /// The milliseconds that have passed from `earlier` to this time; 0 if this
+    /// time is not later.
+    pub fn millis_since(self, earlier: Millis) -> i64 {
+        self.0.saturating_sub(earlier.0).max(0)
+    }
+}
+
 /// Milliseconds since the Unix epoch for a UTC calendar time (month 1–12, day
 /// 1–31; the caller checks the ranges).
 pub fn unix_ms_from_utc(year: i64, month: i64, day: i64, hour: i64, min: i64, sec: i64) -> i64 {

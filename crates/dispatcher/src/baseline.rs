@@ -24,6 +24,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::job::Job;
+use botsim_model::time::Millis;
 use botsim_router::lift::route_through_waiting;
 use botsim_router::route::{Arrival, distances_to};
 
@@ -139,7 +140,7 @@ impl BaselineDispatcher {
                 break;
             };
             let (i, node) = free[k];
-            if self.start_charge(site, &robots[i], i, node, charger, cycle.tick, control) {
+            if self.start_charge(site, &robots[i], i, node, charger, cycle.now, control) {
                 free.remove(k);
             } else {
                 skipped.push(i);
@@ -149,7 +150,7 @@ impl BaselineDispatcher {
         // critical limit they take no more jobs
         for &(i, _) in free.iter() {
             if robots[i].charge < policy.low {
-                self.charge_wait_seconds += cycle.elapsed;
+                self.charge_wait_seconds += robots[i].elapsed;
             }
         }
         free.retain(|&(i, _)| robots[i].charge >= policy.critical);
@@ -165,7 +166,7 @@ impl BaselineDispatcher {
         i: usize,
         node: NodeIdx,
         charger: NodeIdx,
-        tick: u64,
+        now: Millis,
         control: &mut dyn Control,
     ) -> bool {
         // already on the charger: just start
@@ -185,7 +186,7 @@ impl BaselineDispatcher {
             id: self.charge_trips as u64,
             pickup: node,
             drop: charger,
-            created_tick: tick,
+            created: now,
         };
         self.charge_trips += 1;
         self.charger_targets.insert(charger, i);
@@ -370,7 +371,7 @@ impl BaselineDispatcher {
         site: &Site,
         robots: &[Robot],
         idle: &[(usize, NodeIdx)],
-        tick: u64,
+        now: Millis,
         control: &mut dyn Control,
     ) {
         if self.parking_nodes.is_empty() {
@@ -423,7 +424,7 @@ impl BaselineDispatcher {
                 id: self.park_trips as u64,
                 pickup: node,
                 drop: place,
-                created_tick: tick,
+                created: now,
             };
             self.park_trips += 1;
             self.parking_targets.insert(place, i);
@@ -540,7 +541,7 @@ impl Dispatcher for BaselineDispatcher {
             .filter(|c| !c.parking)
             .map(|c| (c.robot, c.from))
             .collect();
-        self.park(site, robots, &idle, cycle.tick, control);
+        self.park(site, robots, &idle, cycle.now, control);
     }
 
     fn counts(&self) -> Counts {

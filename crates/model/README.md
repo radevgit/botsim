@@ -21,4 +21,4 @@ depends on no other botsim crate, reads no files and uses no network.
 | `reservation` | what a controller has reserved for a robot (`Reservation`) |
 | `protocol` | the VDA 5050 version in the message headers |
 | `errors` | the predefined VDA 5050 error types (`ErrorType`): names and levels (`ErrorLevel`) |
-| `time` | VDA 5050 timestamps (ISO 8601 UTC) from and to milliseconds since 1970 |
+| `time` | a time in whole milliseconds since 1970 (`Millis`); VDA 5050 timestamps (ISO 8601 UTC) from and to it |

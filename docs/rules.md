@@ -59,6 +59,8 @@ LIF 2.0 (layouts).
 
 ## 1b. The controller's messages (VDA 5050 meaning)
 
+(How the controller takes them in, cycle by cycle: §1c.)
+
 The controller sees the robots only through these messages (S61 lists what is
 and is not a message yet). Inside the program the controller and the simulated
 robots speak their compact form, `botsim-link`: it has the meaning of VDA 5050
@@ -70,8 +72,8 @@ The translator `botsim-vda` makes VDA 5050 messages of them and reads those. A
 robot through that translation and back; it tests the translation without real
 robots and is used by the tests only (`botsim::vda_route`). What the translator
 refuses of a message to a robot then shows in that robot's errors, like the
-robot's own refusals; a state it refuses whole counts as one that cannot be had,
-and then the controller only takes the new jobs in that cycle.
+robot's own refusals; a state it refuses whole counts as one that has not
+arrived, so the controller has no new report of that robot (§1c).
 
 A message with numbers that name nothing (a node, edge or map outside the layout,
 a robot, lift or door that is not there) is refused by the robot or the
@@ -90,6 +92,50 @@ simulator; it never stops the program.
 Lift and door commands are not VDA 5050; they have their own ports (§7f, §7h).
 The commands to lifts and doors and their states are `botsim-link`'s too and name
 each lift and door by its number.
+
+## 1c. The server's cycle: reports, silent robots, time
+
+- The controller works in **cycles**. It reads no clock: each cycle is given the
+  time, in whole milliseconds, and an **inbox** with what has arrived since the
+  cycle before (robot state reports, lift states, new jobs), and gives back an
+  **outbox** (the messages, why each robot is held back, the reservations for a
+  watcher). In `botsim`'s runs there is one cycle in every step.
+- **Newest report:** an inbox may hold none or several reports of a robot or
+  lift, in any order. Of a robot's, the one with the latest time in its header
+  counts, of equal times the higher sequence number, of equal headers the later in
+  the list. A robot has a **new report** in a cycle if the inbox holds one that is
+  not older than the one the controller kept; the very same one again counts. **A
+  robot whose clock goes back is held back** until its time has passed that of the
+  kept report. Of a lift's states the newest in the inbox counts; none is kept.
+  Reports of robots or lifts the site does not have are not looked at.
+- **Before every robot of the fleet has reported once**, nothing new goes to
+  anyone: no task, release, order, instant action, zone set, answer or device
+  command, because the controller cannot know where a robot it has not heard
+  stands. Reports and jobs are taken.
+- **A silent robot** (none new in a cycle, after that) holds back only itself:
+  - nothing is sent to it, and its kept report is not looked at again for
+    refusals, an arrival, a release, another route or waiting;
+  - what it holds stays held: its nodes and edges (it still claims the node of its
+    kept report when it has no route), its zone grants and place in the queue, its
+    lift and door. No zone is granted to it, and go-first neither lets it go first
+    nor takes anything from it;
+  - the dispatcher sees it as not ready, one with a task as busy;
+  - a lift it owns is not sent on or let go (while the robot has not been seen in
+    the cabin it is only called to the entrance again); its door is asked open as
+    before. A ride starts only in a cycle with a new report of the robot and a
+    state of the lift that names it.
+- The rule is strict: a real robot that stands still may report only every 30 s,
+  and is released only in the cycles with its report.
+- **Time:** the controller's clock is the latest time it has been given. A time
+  that does not advance or goes back counts nothing; a jump counts in full.
+  Timeouts are in seconds. A robot's waiting (the metric, the baseline's wait
+  timeouts, the wait for a charger) counts the time since the cycle with its report
+  before, so a robot that reports rarely is timed correctly, and after a long
+  silence the whole of it counts if the new report shows it waiting. A wait is
+  seen only in cycles.
+- The simulator's time step need not be a whole number of milliseconds; the time
+  between two cycles then differs from the step by up to 1 ms, and waiting figures
+  and the cycle in which a timeout ends can differ slightly.
 
 ## 2. Robot motion
 
@@ -1067,7 +1113,8 @@ gets); the command line chooses with `--policy`.
 - **Metrics** in the summary's `battery` section: `charge_trips` (trips sent) and
   `waiting_for_charger_seconds` (free robots below the low limit, counted per
   dispatch cycle in which they got no charger, all robots together; a robot that gets
-  a job in that cycle is counted for that cycle).
+  a job in that cycle is counted for that cycle; the time counted is the robot's,
+  §1c).
 
 ## 10. Metrics
 

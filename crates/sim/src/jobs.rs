@@ -14,6 +14,7 @@ use std::fmt;
 
 use botsim_model::graph::NodeIdx;
 use botsim_model::job::Job;
+use botsim_model::time::Millis;
 
 /// SplitMix64: tiny, fast, good enough for scenario randomness.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,8 +188,9 @@ impl JobGenerator {
         })
     }
 
-    /// Call once per step: a new job, or none.
-    pub fn step(&mut self, tick: u64) -> Option<Job> {
+    /// Call once per step, with the time of the step: a new job (which appeared
+    /// at `now`), or none.
+    pub fn step(&mut self, now: Millis) -> Option<Job> {
         if self.rng.next_f64() >= self.p_step {
             return None;
         }
@@ -221,7 +223,7 @@ impl JobGenerator {
             id: self.next_id,
             pickup,
             drop,
-            created_tick: tick,
+            created: now,
         };
         self.next_id += 1;
         Some(job)

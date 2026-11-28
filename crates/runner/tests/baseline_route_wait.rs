@@ -8,6 +8,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 use vda5050::factsheet::Factsheet;
@@ -73,17 +74,17 @@ fn second_robot_takes_the_lower_lane(wait_weight: f64) -> bool {
     w.set_safety_stop(true);
     let mut ctl = connect::controller(&w);
     ctl.set_wait_weight(wait_weight);
-    let job = |id, pickup, created_tick| Job {
+    let job = |id, pickup, created| Job {
         id,
         pickup,
         drop: b,
-        created_tick,
+        created: Millis(created),
     };
     let mut took_l = false;
     for tick in 0..(120.0 / DT) as u64 {
         let new = match tick {
             0 => vec![job(1, a, 0)],
-            1200 => vec![job(2, c, 1200)],
+            1200 => vec![job(2, c, 60_000)],
             _ => Vec::new(),
         };
         connect::step(&mut ctl, &mut w, new);

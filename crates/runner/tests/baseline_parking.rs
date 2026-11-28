@@ -7,6 +7,7 @@ use botsim_model::graph::{Graph, GraphStation};
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 use vda5050::factsheet::Factsheet;
@@ -108,7 +109,7 @@ fn an_idle_robot_goes_to_a_parking_place_leaves_it_for_a_job_and_comes_back() {
         id: 1,
         pickup: d,
         drop: a,
-        created_tick: w.tick(),
+        created: Millis(w.now_ms()),
     };
     connect::step(&mut ctl, &mut w, [job]);
     assert_eq!(ctl.busy(), 1, "it left the place at once");
@@ -146,7 +147,7 @@ fn job(w: &World, pickup: &str, drop: &str) -> Job {
         id: 1,
         pickup: node(pickup),
         drop: node(drop),
-        created_tick: w.tick(),
+        created: Millis(w.now_ms()),
     }
 }
 

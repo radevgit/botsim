@@ -7,6 +7,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 use vda5050::factsheet::Factsheet;
@@ -94,7 +95,7 @@ fn job(g: &Graph, id: u64, pickup: &str, drop: &str) -> Job {
         id,
         pickup: g.node_idx(pickup).unwrap(),
         drop: g.node_idx(drop).unwrap(),
-        created_tick: 0,
+        created: Millis(0),
     }
 }
 
@@ -169,7 +170,7 @@ fn the_same_run_gives_the_same_result() {
         run(&mut w, &mut c, jobs, 120.0);
         c.completed()
             .iter()
-            .map(|d| (d.job.id, d.robot.serial_number.clone(), d.finished_tick))
+            .map(|d| (d.job.id, d.robot.serial_number.clone(), d.finished))
             .collect::<Vec<_>>()
     };
     assert_eq!(once(), once());

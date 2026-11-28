@@ -1,4 +1,5 @@
 use botsim_model::job::Job;
+use botsim_model::time::Millis;
 use botsim_sim::jobs::{JobError, JobGenerator, Rng};
 
 const DT: f64 = 0.05;
@@ -6,7 +7,9 @@ const HOUR_TICKS: u64 = 72_000; // one hour at 50 ms
 
 /// All jobs of `ticks` steps.
 fn run(g: &mut JobGenerator, ticks: u64) -> Vec<Job> {
-    (1..=ticks).filter_map(|t| g.step(t)).collect()
+    (1..=ticks)
+        .filter_map(|t| g.step(Millis(50 * t as i64)))
+        .collect()
 }
 
 #[test]
@@ -73,11 +76,8 @@ fn jobs_have_two_different_listed_nodes_and_running_ids() {
         pairs.insert((j.pickup, j.drop));
     }
     assert_eq!(pairs.len(), 6, "all ordered pairs of 3 nodes occur");
-    // created_tick is the tick of the step, in increasing order
-    assert!(
-        jobs.windows(2)
-            .all(|w| w[0].created_tick < w[1].created_tick)
-    );
+    // `created` is the time given to the step, in increasing order
+    assert!(jobs.windows(2).all(|w| w[0].created < w[1].created));
 }
 
 #[test]

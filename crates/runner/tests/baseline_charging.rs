@@ -99,6 +99,7 @@ fn a_free_robot_below_the_low_limit_drives_to_the_charger_and_charges() {
 #[test]
 fn at_the_upper_limit_charging_stops_and_the_robot_takes_jobs_again() {
     use botsim_model::job::Job;
+    use botsim_model::time::Millis;
     let (mut w, mut ctl) = setup(&[10.0], None);
     // 1 % per second: 80 % after 70 s
     run(&mut w, &mut ctl, 60.0);
@@ -113,7 +114,7 @@ fn at_the_upper_limit_charging_stops_and_the_robot_takes_jobs_again() {
         id: 1,
         pickup: c,
         drop: c,
-        created_tick: w.tick(),
+        created: Millis(w.now_ms()),
     };
     connect::step(&mut ctl, &mut w, [job]);
     run(&mut w, &mut ctl, 30.0);
@@ -126,6 +127,7 @@ fn at_the_upper_limit_charging_stops_and_the_robot_takes_jobs_again() {
 /// a job A → B at once.
 fn job_with_the_charger_taken(r1_percent: f64) -> (World, Controller) {
     use botsim_model::job::Job;
+    use botsim_model::time::Millis;
     let (mut w, mut ctl) = setup(&[r1_percent, 10.0], Some("C"));
     let (a, b) = (
         w.graph().node_idx("A").unwrap(),
@@ -135,7 +137,7 @@ fn job_with_the_charger_taken(r1_percent: f64) -> (World, Controller) {
         id: 1,
         pickup: a,
         drop: b,
-        created_tick: 0,
+        created: Millis(0),
     };
     connect::step(&mut ctl, &mut w, [job]);
     run(&mut w, &mut ctl, 30.0);

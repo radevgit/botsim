@@ -8,9 +8,14 @@
 //! doors and the lifts only with messages, like any real controller. The messages
 //! are those of [`botsim_link`], which for robots have the meaning of VDA 5050. It
 //! is given the site once ([`Config`]) and runs in cycles: each call of
-//! [`Controller::step`] takes what has arrived and gives back the messages to send
-//! (see [`crate::cycle`]). In a simulation it runs once per step, after the robots
-//! have moved.
+//! [`Controller::step`] takes the time and what has arrived since the cycle before,
+//! and gives back the messages to send. It reads no clock, and cycles may come at
+//! any interval; see [`crate::cycle`], also for a robot that does not report and
+//! for the start, before every robot has. In `botsim`'s simulations it runs once
+//! per step, after the robots have moved.
+//!
+//! What the text below says of a robot and its state goes by the newest report of
+//! it, and happens only in a cycle with a new one.
 //!
 //! **Refusals** show only in the state reports. The controller takes each order
 //! and update as accepted when it sends it, and notes what to take back. A state
@@ -76,7 +81,7 @@ use botsim_router::load::{self, Load};
 use botsim_router::route::{Arrival, Mover, plan_path};
 use botsim_router::types::TypeRouting;
 
-use crate::cycle::{Config, Input, Message, Output, robot_no};
+use crate::cycle::{Config, Inbox, Known, Message, Outbox, robot_no};
 use crate::doors::DoorDesk;
 use crate::lifts::{LiftDesk, LiftRobot};
 use crate::metrics::{Metrics, summarize};
@@ -96,8 +101,10 @@ pub const NODE_TOLERANCE: f64 = 0.1;
 pub struct Completed {
     pub job: Job,
     pub robot: RobotId,
-    pub assigned_tick: u64,
-    pub finished_tick: u64,
+    /// The controller's clock at the cycle that gave the robot the job.
+    pub assigned: Millis,
+    /// The clock at the cycle that saw it done.
+    pub finished: Millis,
     /// Time the robot stood still with this job, not doing an action.
     pub waiting_seconds: f64,
 }
@@ -127,7 +134,7 @@ struct Work {
     update_id: u32,
     /// Plan index of the last released node.
     released_through: usize,
-    assigned_tick: u64,
+    assigned: Millis,
     waiting_seconds: f64,
     /// A transport job, or a trip the dispatcher sends the robot on. The `job` of
     /// a trip is a stand-in (the robot's node and the goal), the route has no
@@ -218,6 +225,11 @@ struct Slot {
     /// message (each topic counts for itself).
     zone_set_header_id: u32,
     instant_header_id: u32,
+    /// The clock at the last cycle with a new report of the robot.
+    heard: Option<Millis>,
+    /// With a new report: the seconds that cycle counts for the robot, since the
+    /// one before it that had a new report (the first: since the cycle before).
+    elapsed: f64,
 }
 
 impl Slot {
@@ -242,10 +254,13 @@ pub struct Controller<P: TrafficPolicy> {
     robots: Vec<Slot>,
     completed: Vec<Completed>,
     rejected: Vec<Rejected>,
-    /// The tick of the previous control cycle.
-    last_tick: u64,
-    /// The seconds between two ticks.
-    step_seconds: f64,
+    /// The latest time a cycle was given (at the start [`Config::start`]).
+    clock: Millis,
+    /// Until every robot has reported: the newest report of those that have; then
+    /// empty.
+    first: Vec<Option<Known>>,
+    /// From then on: the newest report of every robot.
+    known: Vec<Known>,
     /// Who may go now.
     policy: P,
     /// The site has zones: a robot is ready for tasks only with its zone set
@@ -324,6 +339,8 @@ impl<P: TrafficPolicy> Controller<P> {
                     enable_sent: false,
                     zone_set_header_id: 0,
                     instant_header_id: 0,
+                    heard: None,
+                    elapsed: 0.0,
                 }
             })
             .collect();
@@ -354,14 +371,16 @@ impl<P: TrafficPolicy> Controller<P> {
         dispatcher.start(graph, robots.len());
         let lifts = LiftDesk::new(graph, &config.lifts);
         let rides = lifts.waiting_nodes().clone();
+        let first = vec![None; robots.len()];
         Controller {
             graph: graph.clone(),
             dispatcher,
             robots,
             completed: Vec::new(),
             rejected: Vec::new(),
-            last_tick: config.start_tick,
-            step_seconds: config.step_seconds,
+            clock: config.start,
+            first,
+            known: Vec::new(),
             policy,
             zoned: zones.is_some(),
             zone_set: zones.and(config.zone_set.clone()),
@@ -377,7 +396,7 @@ impl<P: TrafficPolicy> Controller<P> {
         }
     }
 
-    /// The robots, in the order of the states [`Controller::step`] takes.
+    /// The robots, in the order of their numbers.
     pub fn robots(&self) -> impl Iterator<Item = &RobotId> {
         self.robots.iter().map(|s| &s.id)
     }
@@ -491,34 +510,95 @@ impl<P: TrafficPolicy> Controller<P> {
             .count()
     }
 
-    /// One control cycle: take the new jobs, read every robot's state, move
-    /// the release windows on, finish jobs, and assign waiting jobs.
-    pub fn step(&mut self, input: &Input, new_jobs: impl IntoIterator<Item = Job>) -> Output {
-        for job in new_jobs {
+    /// One control cycle at the time `now`, with what has arrived since the one
+    /// before: take the new jobs and reports, move the release windows on, finish
+    /// jobs, and assign waiting jobs. Before every robot has reported, only the
+    /// jobs and reports are taken (see [`crate::cycle`]).
+    pub fn step(&mut self, now: Millis, inbox: Inbox) -> Outbox {
+        for job in inbox.jobs {
             self.dispatcher.add_job(job);
         }
-        let tick = input.time.tick;
-        // time since the last cycle: a robot seen waiting now is counted as
-        // waiting for all of it
-        let elapsed = tick.saturating_sub(self.last_tick) as f64 * self.step_seconds;
-        self.last_tick = tick;
-
-        // (without a report of every robot, in the fleet's order, this cycle does
-        // nothing)
-        let states = input.states;
-        let in_place = || {
-            let reports = states.iter().zip(&self.robots);
-            reports
-                .into_iter()
-                .all(|(r, slot)| r.header.robot == slot.no)
-        };
-        if states.len() != self.robots.len() || !in_place() {
-            return Output::default();
+        // the time since the last cycle; none if the time has not gone on
+        let elapsed = now.seconds_since(self.clock);
+        self.clock = self.clock.max(now);
+        self.take_reports(inbox.robots, elapsed);
+        if !self.first.is_empty() {
+            return Outbox {
+                messages: Vec::new(),
+                held_back: vec![None; self.robots.len()],
+                reservations: inbox.watched.then(|| self.policy.reservations()),
+            };
         }
-        let time = input.time.millis();
+        // (taken out for the cycle, which changes the rest of the controller)
+        let known = std::mem::take(&mut self.known);
+        let messages = self.cycle(&known, &inbox.lifts, now, elapsed);
+        let out = Outbox {
+            messages,
+            // why each robot is held back, and by whom (who waits for whom:
+            // deadlocks)
+            held_back: self.held_back(&known),
+            // what is reserved (only if someone watches)
+            reservations: inbox.watched.then(|| self.policy.reservations()),
+        };
+        self.known = known;
+        out
+    }
+
+    /// Keep the newest report of each robot, mark those that got a new one in this
+    /// cycle, and note the time each counts (`elapsed`: since the cycle before).
+    fn take_reports(&mut self, reports: Vec<FromRobot>, elapsed: f64) {
+        for known in self.first.iter_mut().flatten().chain(&mut self.known) {
+            known.new = false;
+        }
+        for report in reports {
+            let no = report.header.robot;
+            let i = usize::try_from(no.slot()).unwrap_or(usize::MAX);
+            // (a robot the fleet does not have)
+            if self.robots.get(i).is_none_or(|slot| slot.no != no) {
+                continue;
+            }
+            let new = Known { report, new: true };
+            if let Some(kept) = self.first.get_mut(i) {
+                if kept
+                    .as_ref()
+                    .is_none_or(|k| not_older(&new.report, &k.report))
+                {
+                    *kept = Some(new);
+                }
+            } else if let Some(kept) = self.known.get_mut(i)
+                && not_older(&new.report, &kept.report)
+            {
+                *kept = new;
+            }
+        }
+        let current = self.first.iter().map(Option::as_ref);
+        let current = current.chain(self.known.iter().map(Some));
+        let clock = self.clock;
+        for (slot, known) in self.robots.iter_mut().zip(current) {
+            if known.is_some_and(|k| k.new) {
+                slot.elapsed = slot.heard.map_or(elapsed, |t| clock.seconds_since(t));
+                slot.heard = Some(clock);
+            }
+        }
+        if self.first.iter().all(Option::is_some) {
+            // (every robot has reported; with no robot there is nothing to move)
+            let first = std::mem::take(&mut self.first);
+            self.known.extend(first.into_iter().flatten());
+        }
+    }
+
+    /// A cycle of a fleet whose every robot has reported. `known` and the other
+    /// lists are in the order of the robots; the messages carry the time `now`.
+    fn cycle(
+        &mut self,
+        known: &[Known],
+        lifts: &[FromLift],
+        now: Millis,
+        elapsed: f64,
+    ) -> Vec<Message> {
         let mut out = Vec::new();
 
-        self.learn_refusals(states, time, &mut out);
+        self.learn_refusals(known, now, &mut out);
 
         // the waiting average of the nodes (only needed for the route cost)
         if self.wait_weight > 0.0 {
@@ -526,10 +606,11 @@ impl<P: TrafficPolicy> Controller<P> {
             for w in &mut self.node_wait {
                 *w *= keep;
             }
-            for (i, report) in states.iter().enumerate() {
+            for (i, known) in known.iter().enumerate() {
+                let state = &known.report.state;
                 if self.robots[i].work.is_some()
-                    && report.state.is_waiting()
-                    && let Some(n) = self.node_of(&report.state)
+                    && state.is_waiting()
+                    && let Some(n) = self.node_of(state)
                 {
                     self.node_wait[n] += 1.0 - keep;
                 }
@@ -538,57 +619,55 @@ impl<P: TrafficPolicy> Controller<P> {
 
         // the policy sees everyone's progress before the releases
         self.policy.cycle_start(&Fleet {
-            tick,
+            now: self.clock,
             elapsed,
-            states,
+            robots: known,
             routes: &route_views(&self.robots),
         });
-        for (i, report) in states.iter().enumerate() {
-            self.update_work(i, &report.state, (tick, elapsed), time, &mut out);
+        for (i, known) in known.iter().enumerate() {
+            if known.new {
+                self.update_work(i, &known.report.state, now, &mut out);
+            }
         }
         // a charging robot that has reached the upper limit stops charging and is
         // free for jobs again
-        for (i, report) in states.iter().enumerate() {
-            if self.dispatcher.stop_charging(i, report.state.charge) {
+        for (i, known) in known.iter().enumerate() {
+            if known.new && self.dispatcher.stop_charging(i, known.report.state.charge) {
                 let slot = &mut self.robots[i];
                 let id = ActionId::new(format!("stop-charge-{}", slot.instant_header_id));
-                send_instant(&mut out, time, slot, InstantKind::StopCharging, id);
+                send_instant(&mut out, now, slot, InstantKind::StopCharging, id);
             }
         }
         self.policy.after_releases(&Fleet {
-            tick,
+            now: self.clock,
             elapsed,
-            states,
+            robots: known,
             routes: &route_views(&self.robots),
         });
-        self.update_lifts(input.lifts, states, time, &mut out);
+        self.update_lifts(lifts, known, now, &mut out);
         // the policy hears of every robot without a job and where it stands
-        for (i, report) in states.iter().enumerate() {
+        for (i, known) in known.iter().enumerate() {
             if self.robots[i].work.is_none()
-                && let Some(n) = self.node_of(&report.state)
+                && let Some(n) = self.node_of(&known.report.state)
             {
                 self.policy.idle(i, n);
             }
         }
-        self.update_zone_sets(states, time, &mut out);
-        self.answer_zone_requests(states, (tick, elapsed), time, &mut out);
-        self.dispatch(states, (tick, elapsed), time, &mut out);
-        Output {
-            messages: out,
-            // why each robot is held back, and by whom (who waits for whom:
-            // deadlocks)
-            held_back: Some(self.held_back(states)),
-            // what is reserved (only if someone watches)
-            reservations: input.watched.then(|| self.policy.reservations()),
-        }
+        self.update_zone_sets(known, now, &mut out);
+        self.answer_zone_requests(known, elapsed, now, &mut out);
+        self.dispatch(known, elapsed, now, &mut out);
+        out
     }
 
     /// Take off what the states show as accepted, and act on what they show as
     /// refused: a new order is given up at once; for an update, the release and
     /// the route it brought are taken back and the order is cancelled (S70).
-    fn learn_refusals(&mut self, states: &[FromRobot], time: Millis, out: &mut Vec<Message>) {
-        for (i, (slot, report)) in self.robots.iter_mut().zip(states).enumerate() {
-            let state = &report.state;
+    fn learn_refusals(&mut self, known: &[Known], time: Millis, out: &mut Vec<Message>) {
+        for (i, (slot, known)) in self.robots.iter_mut().zip(known).enumerate() {
+            if !known.new {
+                continue;
+            }
+            let state = &known.report.state;
             let Some(work) = slot.work.as_mut() else {
                 continue;
             };
@@ -645,13 +724,13 @@ impl<P: TrafficPolicy> Controller<P> {
     ///   the robots the policy names.
     /// - At the end of its released route, with more to go: the lift or door another
     ///   robot owns, else the release, with the policy's holder.
-    fn held_back(&self, states: &[FromRobot]) -> Vec<Option<HeldBack>> {
+    fn held_back(&self, known: &[Known]) -> Vec<Option<HeldBack>> {
         self.robots
             .iter()
-            .zip(states)
+            .zip(known)
             .enumerate()
-            .map(|(i, (slot, report))| {
-                let state = &report.state;
+            .map(|(i, (slot, known))| {
+                let state = &known.report.state;
                 let work = slot.work.as_ref()?;
                 if work.cancelling.is_some()
                     || state.order_id.as_ref() != Some(&work.order_id)
@@ -687,15 +766,9 @@ impl<P: TrafficPolicy> Controller<P> {
     }
 
     /// Release more of the route, or finish the job, for robot `i`.
-    fn update_work(
-        &mut self,
-        i: usize,
-        state: &State,
-        (tick, elapsed): (u64, f64),
-        time: Millis,
-        out: &mut Vec<Message>,
-    ) {
+    fn update_work(&mut self, i: usize, state: &State, time: Millis, out: &mut Vec<Message>) {
         let slot = &mut self.robots[i];
+        let elapsed = slot.elapsed;
         let Some(work) = slot.work.as_mut() else {
             return;
         };
@@ -757,8 +830,8 @@ impl<P: TrafficPolicy> Controller<P> {
             self.completed.push(Completed {
                 job: work.job,
                 robot: slot.id.clone(),
-                assigned_tick: work.assigned_tick,
-                finished_tick: tick,
+                assigned: work.assigned,
+                finished: self.clock,
                 waiting_seconds: work.waiting_seconds,
             });
             return;
@@ -861,28 +934,31 @@ impl<P: TrafficPolicy> Controller<P> {
     fn update_lifts(
         &mut self,
         lifts: &[FromLift],
-        states: &[FromRobot],
+        known: &[Known],
         time: Millis,
         out: &mut Vec<Message>,
     ) {
-        let nodes: Vec<Option<NodeIdx>> = states.iter().map(|s| self.node_of(&s.state)).collect();
-        let ats = self.plan_positions(states);
+        let ats = self.plan_positions(known);
         let robots: Vec<LiftRobot> = ats
             .iter()
-            .zip(nodes)
-            .map(|(&at, node)| LiftRobot { at, node })
+            .zip(known)
+            .map(|(&at, known)| LiftRobot {
+                at,
+                node: self.node_of(&known.report.state),
+                new: known.new,
+            })
             .collect();
         self.lifts.update(lifts, &robots, time, out);
-        self.doors.update(&ats, time, out);
+        self.doors.update(&ats, known, time, out);
     }
 
     /// The plan index of each robot's last node; `None` for a robot without a job.
-    fn plan_positions(&self, states: &[FromRobot]) -> Vec<Option<usize>> {
+    fn plan_positions(&self, known: &[Known]) -> Vec<Option<usize>> {
         self.robots
             .iter()
-            .zip(states)
-            .map(|(slot, report)| {
-                let state = &report.state;
+            .zip(known)
+            .map(|(slot, known)| {
+                let state = &known.report.state;
                 slot.work
                     .as_ref()
                     .filter(|w| state.order_id.as_ref() == Some(&w.order_id))
@@ -913,12 +989,15 @@ impl<P: TrafficPolicy> Controller<P> {
     /// the robot's state shows it (disabled), send the `enableZoneSet` instant
     /// action. Each is sent once; the controller reads the answer from the state
     /// (which may be old, with a message delay).
-    fn update_zone_sets(&mut self, states: &[FromRobot], time: Millis, out: &mut Vec<Message>) {
+    fn update_zone_sets(&mut self, known: &[Known], time: Millis, out: &mut Vec<Message>) {
         let Some(zs) = self.zone_set.clone() else {
             return;
         };
-        for (i, report) in states.iter().enumerate() {
-            let enabled = self.zone_set_enabled(&report.state);
+        for (i, known) in known.iter().enumerate() {
+            if !known.new {
+                continue;
+            }
+            let enabled = self.zone_set_enabled(&known.report.state);
             let slot = &mut self.robots[i];
             if enabled.is_none() && !slot.zone_set_sent {
                 let body = ToRobotBody::ZoneSet(zs.clone());
@@ -939,15 +1018,15 @@ impl<P: TrafficPolicy> Controller<P> {
     /// Send the policy's answers to the RELEASE zone requests the robots state.
     fn answer_zone_requests(
         &mut self,
-        states: &[FromRobot],
-        (tick, elapsed): (u64, f64),
+        known: &[Known],
+        elapsed: f64,
         time: Millis,
         out: &mut Vec<Message>,
     ) {
         let answers = self.policy.zone_answers(&Fleet {
-            tick,
+            now: self.clock,
             elapsed,
-            states,
+            robots: known,
             routes: &route_views(&self.robots),
         });
         // one `responses` message per robot
@@ -972,17 +1051,11 @@ impl<P: TrafficPolicy> Controller<P> {
 
     /// Let the dispatcher give out tasks: waiting jobs, and trips to chargers and
     /// parking places. It acts through [`Orders`].
-    fn dispatch(
-        &mut self,
-        states: &[FromRobot],
-        (tick, elapsed): (u64, f64),
-        time: Millis,
-        out: &mut Vec<Message>,
-    ) {
-        let robots: Vec<botsim_dispatcher::Robot> = states
+    fn dispatch(&mut self, known: &[Known], elapsed: f64, time: Millis, out: &mut Vec<Message>) {
+        let robots: Vec<botsim_dispatcher::Robot> = known
             .iter()
             .enumerate()
-            .map(|(i, report)| self.dispatch_view(i, &report.state))
+            .map(|(i, known)| self.dispatch_view(i, known))
             .collect();
         let site = Site {
             graph: &self.graph,
@@ -999,21 +1072,26 @@ impl<P: TrafficPolicy> Controller<P> {
             lifts: &mut self.lifts,
             doors: &mut self.doors,
             rejected: &mut self.rejected,
-            tick,
+            now: self.clock,
             time,
             out,
-            states,
+            known,
         };
-        self.dispatcher
-            .dispatch(&site, &robots, Cycle { tick, elapsed }, &mut orders);
+        let cycle = Cycle {
+            now: self.clock,
+            elapsed,
+        };
+        self.dispatcher.dispatch(&site, &robots, cycle, &mut orders);
     }
 
-    /// Robot `i` as the dispatcher sees it.
-    fn dispatch_view(&self, i: usize, state: &State) -> botsim_dispatcher::Robot {
+    /// Robot `i` as the dispatcher sees it. Without a new report it is not ready,
+    /// and one with a task is busy.
+    fn dispatch_view(&self, i: usize, known: &Known) -> botsim_dispatcher::Robot {
         let slot = &self.robots[i];
+        let state = &known.report.state;
         let work = match &slot.work {
             None => botsim_dispatcher::Work::None,
-            Some(w) if takes_extension(w, i, state, &self.lifts, &self.doors) => {
+            Some(w) if known.new && takes_extension(w, i, state, &self.lifts, &self.doors) => {
                 let at = state.last_step() as usize;
                 let rt = w.released_through;
                 botsim_dispatcher::Work::Parking {
@@ -1029,8 +1107,9 @@ impl<P: TrafficPolicy> Controller<P> {
             node: self.node_of(state),
             heading: state.position.as_ref().map(|p| p.theta),
             charge: state.charge,
-            ready: self.zones_ready(state),
+            ready: known.new && self.zones_ready(state),
             work,
+            elapsed: if known.new { slot.elapsed } else { 0.0 },
         }
     }
 
@@ -1053,11 +1132,13 @@ struct Orders<'a, P: TrafficPolicy> {
     lifts: &'a mut LiftDesk,
     doors: &'a mut DoorDesk,
     rejected: &'a mut Vec<Rejected>,
-    tick: u64,
+    /// The controller's clock.
+    now: Millis,
+    /// The time of the cycle, for the messages.
     time: Millis,
     /// The messages of the cycle.
     out: &'a mut Vec<Message>,
-    states: &'a [FromRobot],
+    known: &'a [Known],
 }
 
 impl<P: TrafficPolicy> Orders<'_, P> {
@@ -1098,7 +1179,7 @@ impl<P: TrafficPolicy> Orders<'_, P> {
         let wanted = self.doors.window(i, &plan, 0, 0, wanted);
         let answer = self.policy.place(&Ask {
             robot: i,
-            state: &self.states[i].state,
+            state: &self.known[i].report.state,
             route: &plan,
             at: 0,
             released_through: 0,
@@ -1144,7 +1225,7 @@ impl<P: TrafficPolicy> Orders<'_, P> {
         match msg {
             Some(msg) => {
                 self.out.push(Message::Robot(msg));
-                let state = &self.states[i].state;
+                let state = &self.known[i].report.state;
                 let order = sent(self.graph, state, 0, 0, false, plan.edges.clone());
                 slot.work = Some(Work {
                     job,
@@ -1152,7 +1233,7 @@ impl<P: TrafficPolicy> Orders<'_, P> {
                     order_id,
                     update_id: 0,
                     released_through,
-                    assigned_tick: self.tick,
+                    assigned: self.now,
                     waiting_seconds: 0.0,
                     purpose,
                     unconfirmed: VecDeque::from([order]),
@@ -1197,11 +1278,12 @@ impl<P: TrafficPolicy> Control for Orders<'_, P> {
     }
 
     fn give(&mut self, i: usize, task: Task) -> Answer {
-        let (Some(slot), Some(state)) = (self.robots.get(i), self.states.get(i)) else {
+        let (Some(slot), Some(known)) = (self.robots.get(i), self.known.get(i)) else {
             return Answer::Invalid;
         };
-        let here = node_of(self.node_grid, &state.state);
-        if slot.work.is_some() || !here.is_some_and(|n| self.connects(n, &task)) {
+        let here = node_of(self.node_grid, &known.report.state);
+        // (nothing new for a robot without a new report)
+        if !known.new || slot.work.is_some() || !here.is_some_and(|n| self.connects(n, &task)) {
             return Answer::Invalid;
         }
         let (job, purpose) = (task.job, task.purpose);
@@ -1215,13 +1297,14 @@ impl<P: TrafficPolicy> Control for Orders<'_, P> {
     /// as before, then the job. Nothing more is released here; that happens in the
     /// next cycle.
     fn extend(&mut self, i: usize, task: Task) -> Answer {
-        let (Some(slot), Some(state)) = (self.robots.get(i), self.states.get(i)) else {
+        let (Some(slot), Some(known)) = (self.robots.get(i), self.known.get(i)) else {
             return Answer::Invalid;
         };
         let from = slot
             .work
             .as_ref()
-            .filter(|w| takes_extension(w, i, &state.state, self.lifts, self.doors))
+            .filter(|_| known.new)
+            .filter(|w| takes_extension(w, i, &known.report.state, self.lifts, self.doors))
             .and_then(|w| w.plan.nodes.get(w.released_through));
         // (a robot does not run the actions of the node an update starts at, so the
         // pickup must lie beyond it)
@@ -1242,7 +1325,7 @@ impl<P: TrafficPolicy> Control for Orders<'_, P> {
         let plan = work.plan.continued(work.released_through, then);
         work.job = job;
         work.purpose = Purpose::Job;
-        work.assigned_tick = self.tick;
+        work.assigned = self.now;
         work.waiting_seconds = 0.0;
         work.update_id += 1;
         let header = OrderHeader {
@@ -1263,7 +1346,7 @@ impl<P: TrafficPolicy> Control for Orders<'_, P> {
                 self.out.push(Message::Robot(msg));
                 let mut update = sent(
                     self.graph,
-                    &self.states[i].state,
+                    &self.known[i].report.state,
                     work.update_id,
                     from,
                     false,
@@ -1284,11 +1367,18 @@ impl<P: TrafficPolicy> Control for Orders<'_, P> {
     }
 
     fn charge_here(&mut self, i: usize, trip: usize) {
-        if let Some(slot) = self.robots.get_mut(i).filter(|s| s.work.is_none()) {
+        let new = self.known.get(i).is_some_and(|k| k.new);
+        if let Some(slot) = self.robots.get_mut(i).filter(|s| new && s.work.is_none()) {
             let id = ActionId::new(format!("charge-here-{trip}"));
             send_instant(self.out, self.time, slot, InstantKind::StartCharging, id);
         }
     }
+}
+
+/// Is `report` at least as new as `kept`, another report of the same robot? By
+/// the time in the header, then its sequence number.
+fn not_older(report: &FromRobot, kept: &FromRobot) -> bool {
+    (report.header.time, report.header.seq) >= (kept.header.time, kept.header.seq)
 }
 
 /// The layout node a robot stands on, from its reported position.

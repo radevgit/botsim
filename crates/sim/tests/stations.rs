@@ -1,11 +1,12 @@
 //! Jobs between places (S60).
+use botsim_model::time::Millis;
 use botsim_sim::jobs::{JobError, JobGenerator};
 
 const DT: f64 = 0.05;
 
 fn jobs(mut g: JobGenerator, steps: u64) -> Vec<(usize, usize)> {
     (0..steps)
-        .filter_map(|t| g.step(t))
+        .filter_map(|t| g.step(Millis(50 * t as i64)))
         .map(|j| (j.pickup, j.drop))
         .collect()
 }

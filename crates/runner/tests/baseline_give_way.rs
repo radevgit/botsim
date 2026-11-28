@@ -10,6 +10,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 use vda5050::factsheet::Factsheet;
@@ -75,13 +76,13 @@ fn run(seconds: f64) -> (World, Controller) {
             id: 1,
             pickup: s,
             drop: q,
-            created_tick: 0,
+            created: Millis(0),
         },
         Job {
             id: 2,
             pickup: p,
             drop: r,
-            created_tick: 0,
+            created: Millis(0),
         },
     ];
     let mut c = connect::controller(&w);
@@ -153,7 +154,7 @@ fn a_robot_heading_across_the_curve_of_a_stopped_robot_goes_first() {
         id,
         pickup,
         drop,
-        created_tick: 0,
+        created: Millis(0),
     };
     let mut jobs = Some(vec![job(1, s, r), job(2, p, t)]);
     let mut c = connect::controller(&w);

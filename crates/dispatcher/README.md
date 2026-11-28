@@ -19,7 +19,10 @@ bundled one's place (`Controller::with_dispatcher` in `botsim-server`).
 
 - The dispatcher gets plain data: what stays the same (`Site`: the layout, what
   each robot type may drive, the lift rides) and every robot as it stands
-  (`Robot`).
+  (`Robot`). A robot whose report did not arrive for this cycle is not ready (with
+  a task: busy) and takes none.
+- Time is given in milliseconds (`Cycle::now`) and seconds counted (`Cycle::elapsed`
+  for the cycle, `Robot::elapsed` for a robot).
 - A task (`Task`) is a route with its purpose: a job, a trip to a charger, or a
   trip to a parking place.
 - Dispatching is serial: a task is carried out before the call returns, so the next

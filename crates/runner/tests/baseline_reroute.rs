@@ -8,6 +8,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 use vda5050::factsheet::Factsheet;
@@ -81,7 +82,7 @@ fn job(g: &Graph, id: u64, pickup: &str, drop: &str) -> Job {
         id,
         pickup: g.node_idx(pickup).unwrap(),
         drop: g.node_idx(drop).unwrap(),
-        created_tick: 0,
+        created: Millis(0),
     }
 }
 
@@ -94,7 +95,7 @@ fn run(w: &mut World, c: &mut Controller, jobs: Vec<Job>, seconds: f64) -> Vec<(
     }
     c.completed()
         .iter()
-        .map(|d| (d.job.id, d.finished_tick as f64 * DT))
+        .map(|d| (d.job.id, d.finished.0 as f64 / 1000.0))
         .collect()
 }
 

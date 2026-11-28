@@ -9,6 +9,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_server::lifts::LiftDesk;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::lift::{DoorState, LiftSpec, LiftStop};
@@ -87,7 +88,7 @@ fn job(g: &Graph, id: u64, pickup: &str, drop: &str) -> Job {
         id,
         pickup: g.node_idx(pickup).unwrap(),
         drop: g.node_idx(drop).unwrap(),
-        created_tick: 0,
+        created: Millis(0),
     }
 }
 
@@ -232,7 +233,7 @@ fn the_same_run_gives_the_same_result() {
             w.step();
         }
         for d in c.completed() {
-            done.push((d.job.id, d.finished_tick, d.waiting_seconds.to_bits()));
+            done.push((d.job.id, d.finished, d.waiting_seconds.to_bits()));
         }
         done
     };

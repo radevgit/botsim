@@ -6,6 +6,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 use vda5050::factsheet::Factsheet;
@@ -42,7 +43,7 @@ fn run(pass_through: bool, delay: u64) -> (u64, usize, Vec<f64>) {
         id: 1,
         pickup: n0,
         drop: g.node_idx("N7").unwrap(),
-        created_tick: 0,
+        created: Millis(0),
     };
     let mut w = World::new(g, DT, 0).unwrap();
     let id = RobotId::new("ACME", "R-1");
@@ -70,7 +71,7 @@ fn run(pass_through: bool, delay: u64) -> (u64, usize, Vec<f64>) {
     }
     assert_eq!(c.completed().len(), 1, "{:?}", c.rejected());
     (
-        c.completed()[0].finished_tick,
+        c.completed()[0].finished.0 as u64 / 50,
         w.collisions().len(),
         top_between,
     )

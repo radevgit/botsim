@@ -6,28 +6,30 @@ messages of [botsim-link](../link/README.md), which for robots have the meaning 
 VDA 5050; real VDA 5050 messages come from the translator,
 [botsim-vda](../vda/README.md).
 
-Library only. It knows no simulator and no scenario file, reads no files and uses
-no network: it is given data and gives back messages.
+Library only. It knows no simulator and no scenario file, reads no files and no
+clock and uses no network: it is given data and gives back messages.
 
 ## Using it
 
 ```text
 Controller::with_policy(&config, rules)        a controller with these traffic rules
 Controller::with_dispatcher(&config, rules, d) and another dispatcher
-controller.step(&input, new_jobs)              one cycle; returns the messages to send
+controller.step(now, inbox)                    one cycle; returns the outbox
 controller.completed(), rejected(), pending(), metrics(seconds)
 ```
 
 `config` (`cycle::Config`) holds the layout, the robots with their identity and
 type from their factsheets (`FleetRobot::from_factsheet`), the zones and the zone
-set to send for them, the lifts and the doors. Robots, lifts and doors are named
-in the messages by their places in these lists; the order of the robots also
-decides ties.
+set to send for them, the lifts, the doors and the time the controller starts.
+Robots, lifts and doors are named in the messages by their places in these lists;
+the order of the robots also decides ties.
 
-`input` (`cycle::Input`) holds the time, every robot's state report, in the fleet's
-order, and the states of the lifts (who is in them). The result (`cycle::Output`)
-holds the messages to robots, doors and lifts in the order to send them, why each
-robot is held back, and the reservations if somebody watches.
+`now` is a time in whole milliseconds since 1970. `inbox` (`cycle::Inbox`) holds
+what has arrived since the cycle before: robot state reports and lift states, in
+any order, none or several of one robot or lift, and new jobs. The result
+(`cycle::Outbox`) holds the messages to robots, doors and lifts in the order to
+send them, why each robot is held back, and the reservations if somebody watches.
+Cycles may come at any interval.
 
 To run it against the simulator use the [command line crate](../runner/README.md)
 `botsim`, which connects the two.
@@ -36,6 +38,24 @@ A refusal of an order shows only in the robot's state; see the
 [rules](../../docs/rules.md), §1a.
 
 Optional: `set_charging`, `set_load_weight`, `set_wait_weight`.
+
+## Reports, silent robots and time
+
+- Of several reports of a robot the **newest** counts: the latest time in its
+  header, of equal times the higher sequence number, of equal headers the later in
+  the list. A report older than the one kept is not looked at; the same one again
+  counts as arrived. So **a robot whose clock goes back is held back** until its
+  time has passed that of the kept report.
+- **Until every robot of the fleet has reported once**, nothing new goes to
+  anyone; reports and jobs are taken.
+- **A robot without a new report** then holds back only itself: nothing is sent or
+  released to it, what it holds (nodes, zones, a lift, a door) stays held, and the
+  dispatcher gives it no job. This is the strict rule: a robot that reports less
+  often than the cycles run is released only in the cycles with its report.
+- A time that does not advance or goes back counts no time; a jump counts in
+  full. A robot's waiting counts the time since its report before.
+
+The details are in the documentation of the `cycle` module.
 
 ## Parts
 
@@ -50,7 +70,8 @@ Optional: `set_charging`, `set_load_weight`, `set_wait_weight`.
 - The **traffic rules** say who may go now: how far each route is released, and
   the answers to zone requests. Their slot is the trait `policy::TrafficPolicy`;
   whoever makes the controller chooses them. A policy must implement `start`,
-  `place`, `release` and `zone_answers`.
+  `place`, `release` and `zone_answers`, and must give nothing to, and take nothing
+  from, a robot without a new report.
 
 ## Traffic rules
 

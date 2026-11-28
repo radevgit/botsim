@@ -13,9 +13,10 @@
 //!   header of instant actions) is only counted. A VDA 5050 state cannot carry
 //!   an action without an id: of an instant action refused for an empty
 //!   `actionId`, the controller sees the error but not the `FAILED` entry.
-//! - Of a report, a state refused whole is as one that cannot be had: that cycle
-//!   the controller only takes the new jobs, so nothing new is released while it
-//!   lasts. Of a state translated in part the controller sees the rest.
+//! - Of a report, a state refused whole is as one that has not arrived: while it
+//!   lasts the controller has no new report of that robot, so nothing new goes to
+//!   it (to nobody, if it never had one: see [`botsim_server::cycle`]). Of a state
+//!   translated in part the controller sees the rest.
 //! - The site's zone set is read as the content of a VDA 5050 message, with its
 //!   checks; without it a site with zones has no robot ready for tasks.
 //! - Doors and lifts are outside VDA 5050 and go as on the direct route.
@@ -33,7 +34,7 @@ use botsim_link::zone_set::ZoneSet;
 use botsim_model::robot::{RobotId, RobotNo};
 use botsim_model::zones::Zones;
 use botsim_server::controller::Controller;
-use botsim_server::cycle::{Config, robot_no};
+use botsim_server::cycle::{Config, Inbox, robot_no};
 use botsim_server::policy::TrafficPolicy;
 use botsim_sim::errors::RobotError;
 use botsim_sim::robot::{InstantEntry, Unread};
@@ -61,6 +62,7 @@ pub fn with_controller<P: TrafficPolicy>(
         controller: make(config),
         lifts,
         route: Some(Box::new(route)),
+        inbox: Inbox::default(),
     }
 }
 

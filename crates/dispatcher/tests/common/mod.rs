@@ -10,6 +10,7 @@ use botsim_dispatcher::{Answer, Control, Cycle, Dispatcher, Purpose, Robot, Site
 use botsim_model::graph::{EdgeIdx, Graph, GraphStation, NodeIdx};
 use botsim_model::job::Job;
 use botsim_model::spec::Kinematics;
+use botsim_model::time::Millis;
 use botsim_router::types::TypeRouting;
 use vdma_lif::Lif;
 
@@ -100,6 +101,8 @@ pub fn at(node: NodeIdx) -> Robot {
         charge: 100.0,
         ready: true,
         work: Work::None,
+        // (a second a dispatch, see `Rig::dispatch`)
+        elapsed: 1.0,
     }
 }
 
@@ -120,7 +123,7 @@ pub fn job(id: u64, pickup: NodeIdx, drop: NodeIdx) -> Job {
         id,
         pickup,
         drop,
-        created_tick: 0,
+        created: Millis(0),
     }
 }
 
@@ -246,7 +249,7 @@ impl Rig {
             rides: &self.rides,
         };
         let cycle = Cycle {
-            tick: self.tick,
+            now: Millis(1000 * self.tick as i64),
             elapsed: 1.0,
         };
         self.dispatcher

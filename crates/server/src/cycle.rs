@@ -1,7 +1,8 @@
 //! What the controller is given and what it gives back. It holds no robot, lift
-//! or door: the caller tells it the site once ([`Config`]), then runs it in
-//! cycles with what has arrived ([`Input`]) and sends what comes out
-//! ([`Output`]). What passes in the cycles is [`botsim_link`].
+//! or door and reads no clock: the caller tells it the site once ([`Config`]),
+//! then runs it in cycles with the time and what has arrived since the cycle
+//! before ([`Inbox`]), and sends what comes out ([`Outbox`]). What passes in the
+//! cycles is [`botsim_link`]. Cycles may come at any interval.
 //!
 //! **Numbers of robots, lifts and doors.** [`Config`] lists them in a fixed order,
 //! and they are named by their places in it: robot `i` is [`robot_no`]`(i)`, the
@@ -11,6 +12,59 @@
 //! **Sequence numbers.** Every message sent carries one that counts from 0 for each
 //! robot and kind of message (order, instant actions, responses, zone set) on its
 //! own, and for each door and each lift.
+//!
+//! # Reports
+//!
+//! An inbox holds the reports that have arrived, of any robots, in any order and
+//! number. The controller keeps the **newest** report of each robot: the one with
+//! the latest [`Header::time`](botsim_link::message::Header::time), of equal times
+//! the one with the highest [`seq`](botsim_link::message::Header::seq), and of
+//! equal headers the one later in the list.
+//! - A robot has a **new report** in a cycle if the inbox holds one that is not
+//!   older than the one kept. One with the very same header counts: it has
+//!   arrived.
+//! - An older one is not looked at. So **a robot whose clock goes back is held
+//!   back** until its time has passed that of the kept report.
+//! - A report of a robot the fleet does not have (by slot or generation) is not
+//!   looked at.
+//!
+//! Of a lift, the newest state in the inbox counts, in the same sense; none is
+//! kept for later cycles.
+//!
+//! # Before every robot has reported
+//!
+//! Until each robot of [`Config::robots`] has reported at least once, **nothing
+//! new goes to anyone**: no task, release, order, action, answer or command, as
+//! the server cannot know where a robot it has not heard stands. The cycle takes
+//! the reports and the new jobs; the traffic rules and the dispatcher are not asked
+//! (the dispatcher gets the jobs). [`Outbox::held_back`] says nothing of any robot
+//! and the reservations are those of the rules before their first cycle.
+//!
+//! # A robot without a new report
+//!
+//! After that, a robot without a new report holds back only itself: it stands
+//! still when in doubt, and what it holds stays held.
+//! - Nothing is sent to it: no order, instant action, zone set or answer.
+//! - Its report is not looked at again for refusals, an arrival, a release, a new
+//!   route or waiting time.
+//! - The traffic rules are told which robots have a new report ([`Known::new`]) and
+//!   give nothing to the others and take nothing from them (see
+//!   [`crate::policy`]).
+//! - The dispatcher sees it as not ready, one with a task as busy, on the node of
+//!   the kept report.
+//! - A lift or door it owns stays its own; the lift is not sent on or let go, and
+//!   neither is the door.
+//! - Why it is held back, and the route load average, go by the kept report.
+//!
+//! # Time
+//!
+//! The time of a cycle is in whole milliseconds since 1970. The controller's
+//! **clock** is the latest time it has been given: a time that does not advance, or
+//! goes back, counts no time; a jump counts in full. Messages carry the time as
+//! given. A robot's waiting, and what the rules and the dispatcher add up for it,
+//! counts the time since the cycle that took its report before (its first report:
+//! since the cycle before). A wait is seen only in cycles, each of which counts
+//! all of that time.
 
 use std::sync::Arc;
 
@@ -18,6 +72,7 @@ use botsim_link::device::{FromLift, ToDoor, ToLift};
 use botsim_link::message::{FromRobot, Millis, ToRobot};
 use botsim_link::zone_set::ZoneSet;
 use botsim_model::graph::Graph;
+use botsim_model::job::Job;
 use botsim_model::reservation::Reservation;
 use botsim_model::robot::{RobotId, RobotNo};
 use botsim_model::spec::{Kinematics, RobotSpec, Shape, SpecError};
@@ -53,11 +108,9 @@ pub struct Config {
     pub zone_set: Option<Arc<ZoneSet>>,
     pub lifts: Vec<Lift>,
     pub doors: Vec<Door>,
-    /// The seconds between two ticks of [`Time::tick`].
-    pub step_seconds: f64,
-    /// The tick the controller starts at: the first cycle counts the time from
+    /// The time the controller starts at: the first cycle counts the time from
     /// it.
-    pub start_tick: u64,
+    pub start: Millis,
 }
 
 /// One robot of the fleet, as far as it does not change.
@@ -84,37 +137,28 @@ impl FleetRobot {
     }
 }
 
-/// When a cycle runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Time {
-    /// Counts the steps of [`Config::step_seconds`]; it does not go back.
-    pub tick: u64,
-    /// Milliseconds since 1970-01-01T00:00:00Z, for the times of the messages.
-    pub unix_ms: i64,
-}
-
-impl Time {
-    /// The time as the messages carry it.
-    pub(crate) fn millis(self) -> Millis {
-        Millis(self.unix_ms)
-    }
-}
-
-/// What has arrived for one cycle.
-#[derive(Debug, Clone, Copy)]
-pub struct Input<'a> {
-    pub time: Time,
-    /// Every robot's state report, one for each of [`Config::robots`] and in that
-    /// order: report `i` is from robot [`robot_no`]`(i)`. Otherwise the cycle does
-    /// nothing but take the new jobs and the time.
-    pub states: &'a [FromRobot],
-    /// The states of the lifts, in any order; each names its lift. Of several of
-    /// one lift the last counts. A lift without one has no robot in its cabin as
-    /// far as the controller knows; one of a lift the site does not have is not
-    /// looked at.
-    pub lifts: &'a [FromLift],
+/// What has arrived since the cycle before.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Inbox {
+    /// State reports of robots, in any order, none or several of a robot (see the
+    /// module text).
+    pub robots: Vec<FromRobot>,
+    /// States of lifts, in any order; each names its lift. A lift without one has
+    /// no robot in its cabin as far as the controller knows in this cycle; one of
+    /// a lift the site does not have is not looked at.
+    pub lifts: Vec<FromLift>,
+    /// New jobs, oldest first; all are taken.
+    pub jobs: Vec<Job>,
     /// Somebody watches the run: the reservations are wanted.
     pub watched: bool,
+}
+
+/// The newest report of a robot, as the traffic rules see it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Known {
+    pub report: FromRobot,
+    /// It arrived in this cycle (see the module text).
+    pub new: bool,
 }
 
 /// One message to send.
@@ -130,12 +174,12 @@ pub enum Message {
 
 /// What a cycle gives back.
 #[derive(Debug, Clone, Default)]
-pub struct Output {
+pub struct Outbox {
     /// To be sent in this order.
     pub messages: Vec<Message>,
-    /// For each robot, why it is held back and by whom; `None` if the cycle did
-    /// nothing.
-    pub held_back: Option<Vec<Option<HeldBack>>>,
-    /// What is reserved; only if [`Input::watched`] and the cycle ran.
+    /// For each robot, why it is held back and by whom; `None` where it is not,
+    /// or nothing can be said.
+    pub held_back: Vec<Option<HeldBack>>,
+    /// What is reserved; only if [`Inbox::watched`].
     pub reservations: Option<Vec<Reservation>>,
 }

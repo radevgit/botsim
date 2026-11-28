@@ -102,7 +102,7 @@ fn the_rules_of_the_caller_say_who_may_go() {
         reason: WaitReason::Release,
         blockers: vec![0],
     };
-    assert_eq!(out.held_back, Some(vec![None, Some(held)]));
+    assert_eq!(out.held_back, vec![None, Some(held)]);
 
     // the first arrives: the second is released in the same cycle
     let states = [

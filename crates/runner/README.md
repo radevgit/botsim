@@ -48,15 +48,23 @@ connect::with_policy(&world, policy)            with other traffic rules
 connect::with_dispatcher(&world, policy, d)     and another dispatcher
 connect::with_controller(&world, make)          a controller made from the config
 connect::step(&mut controller, &mut world, new_jobs)
-                                                once per simulation step, with World::step
+                                                one cycle, with World::step
+connect::collect(&mut controller, &mut world)   in a step without a cycle
 connect::config(&world)                         the site and fleet as the controller gets them
 ```
 
 The functions give a `Connected` controller: it is used as the controller itself.
 
-`step` takes the clock, every robot's report and the states of the lifts, runs one
-cycle, sends the messages to the world in their order and publishes what the
-controller holds back and reserves.
+`step` takes the world's time, every robot's report and the states of the lifts,
+runs one cycle, sends the messages to the world in their order and publishes what
+the controller holds back and reserves. The `botsim` command runs a cycle in every
+step. A caller may run them less often, with `collect` in each step between, so
+that the next cycle gets the reports of all those steps.
+
+The world's time is given in whole milliseconds. **With a time step that is no
+whole number of milliseconds** the time between two cycles differs from the step by
+up to 1 ms; waiting figures, and the cycle in which a timeout of the rules ends,
+can then differ slightly from a count in steps.
 
 Both sides speak [`link`](../link/README.md) and number robots, lifts and doors in
 the order they were added to the world: nothing is translated. The site's zone
@@ -89,7 +97,7 @@ Nothing is dropped silently, every case is counted:
 
 | Case | Effect |
 |---|---|
-| a state message refused whole | as one that cannot be had: that cycle the controller only takes the new jobs |
+| a state message refused whole | as one that has not arrived: while it lasts nothing new goes to that robot (to nobody, if it never had one) |
 | a state message translated in part | the controller sees the rest |
 | an order or zone set refused | the robot reports the error and does not get the message |
 | an instant action left out | listed `FAILED` with its error, in its place; the others go |

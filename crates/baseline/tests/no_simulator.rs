@@ -9,12 +9,12 @@ use botsim_dispatcher::baseline::BaselineDispatcher;
 use botsim_dispatcher::{
     Answer, ChargePolicy, Control, Counts, Cycle, Dispatcher, Purpose, Robot, Site, Task, Work,
 };
-use botsim_link::message::{FromRobot, ToRobotBody};
+use botsim_link::message::{FromRobot, Millis, ToRobotBody};
 use botsim_model::errors::ErrorType;
 use botsim_model::graph::{Graph, NodeIdx};
 use botsim_model::job::Job;
 use botsim_server::controller::Controller;
-use botsim_server::cycle::{Config, FleetRobot, Input, Message, Output, Time};
+use botsim_server::cycle::{Config, FleetRobot, Inbox, Message, Outbox};
 use botsim_server::order_builder::Plan;
 use botsim_server::policy::{Ask, Fleet, Release, Setup, TrafficPolicy, ZoneAnswer};
 use serde_json::{Value, json};
@@ -24,8 +24,6 @@ use vda5050::order::Order;
 mod common;
 use common::graph;
 mod translate;
-
-const DT: f64 = 0.05;
 
 // the nodes of the line A → B → C → D → E
 const A: NodeIdx = 0;
@@ -57,8 +55,7 @@ fn config() -> Config {
         zone_set: None,
         lifts: Vec::new(),
         doors: Vec::new(),
-        step_seconds: DT,
-        start_tick: 0,
+        start: Millis(0),
     }
 }
 
@@ -135,24 +132,18 @@ fn cycle<P: TrafficPolicy>(
     tick: u64,
     report: &Report,
     jobs: impl IntoIterator<Item = Job>,
-) -> Output {
-    let states = [report.state()];
-    c.step(
-        &Input {
-            time: Time {
-                tick,
-                unix_ms: 1_000 * tick as i64,
-            },
-            states: &states,
-            lifts: &[],
-            watched: true,
-        },
-        jobs,
-    )
+) -> Outbox {
+    let inbox = Inbox {
+        robots: vec![report.state()],
+        jobs: jobs.into_iter().collect(),
+        watched: true,
+        ..Inbox::default()
+    };
+    c.step(Millis(50 * tick as i64), inbox)
 }
 
 /// The orders sent, as VDA 5050 `order` messages.
-fn orders(out: &Output) -> Vec<Order> {
+fn orders(out: &Outbox) -> Vec<Order> {
     let config = config();
     out.messages
         .iter()
@@ -165,7 +156,7 @@ fn orders(out: &Output) -> Vec<Order> {
 }
 
 /// The ids of the instant actions sent.
-fn actions(out: &Output) -> Vec<&str> {
+fn actions(out: &Outbox) -> Vec<&str> {
     out.messages
         .iter()
         .filter_map(|m| match m {
@@ -194,7 +185,7 @@ fn job(id: u64, pickup: NodeIdx, drop: NodeIdx) -> Job {
         id,
         pickup,
         drop,
-        created_tick: 0,
+        created: Millis(0),
     }
 }
 
@@ -210,7 +201,7 @@ fn the_controller_runs_a_job_from_states_written_by_hand() {
     );
     assert_eq!(sent[0].timestamp, "1970-01-01T00:00:00.000Z");
     assert_eq!(released(&sent[0]), ["A", "B", "C"]);
-    assert_eq!(out.held_back, Some(vec![None]));
+    assert_eq!(out.held_back, vec![None]);
     assert_eq!(out.reservations.as_ref().map(Vec::len), Some(1));
     // the robot has not answered: nothing to say
     let out = cycle(&mut c, 1, &Report::new("", 0, 0, A), []);
@@ -220,25 +211,22 @@ fn the_controller_runs_a_job_from_states_written_by_hand() {
     let out = cycle(&mut c, 2, &Report::new("job-1", 0, 2, C), []);
     assert!(out.messages.is_empty());
     assert_eq!(c.completed().len(), 1);
-    assert_eq!(c.completed()[0].finished_tick, 2);
+    assert_eq!(c.completed()[0].finished, Millis(100));
     assert_eq!(c.busy(), 0);
 }
 
 #[test]
-fn without_a_state_of_every_robot_a_cycle_only_takes_the_jobs() {
+fn a_robot_without_any_report_gets_nothing() {
     let mut c = botsim_baseline::controller(&config());
-    let input = Input {
-        time: Time {
-            tick: 0,
-            unix_ms: 0,
-        },
-        states: &[],
-        lifts: &[],
+    let inbox = Inbox {
+        jobs: vec![job(1, A, C)],
         watched: true,
+        ..Inbox::default()
     };
-    let out = c.step(&input, [job(1, A, C)]);
+    let out = c.step(Millis(0), inbox);
     assert!(out.messages.is_empty());
-    assert!(out.held_back.is_none() && out.reservations.is_none());
+    assert_eq!(out.held_back, vec![None]);
+    assert_eq!(out.reservations, Some(Vec::new()));
     assert_eq!(c.pending().count(), 1);
     // a time that goes back is no crash
     let report = Report::new("", 0, 0, A);
@@ -382,7 +370,7 @@ impl Dispatcher for ParkThenJob {
     fn dispatch(&mut self, site: &Site, robots: &[Robot], cycle: Cycle, c: &mut dyn Control) {
         let edges = |from: usize, to: usize| (from..to).collect::<Vec<_>>();
         assert_eq!(site.graph.edges.len(), 4);
-        match (cycle.tick, &robots[0].work) {
+        match (cycle.now.0 / 50, &robots[0].work) {
             (0, Work::None) => {
                 let task = Task {
                     job: job(0, A, C),
@@ -433,7 +421,7 @@ fn a_refused_addition_to_a_trip_gives_the_trip_its_old_route_back() {
     // standing at C, the end of the old route, it is not taken to have arrived
     cycle(&mut c, 3, &refused, []);
     assert!(given_up.borrow().is_empty());
-    assert_eq!(out.held_back, Some(vec![None]));
+    assert_eq!(out.held_back, vec![None]);
     refused.cancel = Some("cancel-park-0");
     cycle(&mut c, 4, &refused, []);
     assert_eq!(*given_up.borrow(), [Purpose::Job]);

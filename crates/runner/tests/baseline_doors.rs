@@ -6,6 +6,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_model::waiting::WaitReason;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::door::DoorSpec;
@@ -76,7 +77,7 @@ fn job(g: &Graph, id: u64, pickup: &str, drop: &str) -> Job {
         id,
         pickup: g.node_idx(pickup).unwrap(),
         drop: g.node_idx(drop).unwrap(),
-        created_tick: 0,
+        created: Millis(0),
     }
 }
 
@@ -132,7 +133,7 @@ fn the_robot_waits_for_the_door_and_the_job_takes_that_long() {
         let mut w = world_with(&["N0"], None, open);
         let mut c = connect::controller(&w);
         run_no_check(&mut w, &mut c, vec![job(&g, 1, "N0", "N5")], 6000);
-        c.completed()[0].finished_tick
+        c.completed()[0].finished.0 / 50
     };
     let (fast, slow) = (done(0.0), done(20.0));
     assert!(
@@ -235,7 +236,7 @@ fn the_same_run_gives_the_same_result() {
         run_no_check(&mut w, &mut c, jobs, 12000);
         c.completed()
             .iter()
-            .map(|d| (d.job.id, d.finished_tick, d.waiting_seconds.to_bits()))
+            .map(|d| (d.job.id, d.finished, d.waiting_seconds.to_bits()))
             .collect::<Vec<_>>()
     };
     assert_eq!(run_once(), run_once());

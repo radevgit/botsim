@@ -8,6 +8,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 use vda5050::factsheet::Factsheet;
@@ -73,17 +74,17 @@ fn lanes_used(weight: f64) -> [[bool; 2]; 2] {
     w.set_safety_stop(true);
     let mut ctl = connect::controller(&w);
     ctl.set_load_weight(weight);
-    let job = |id, pickup, created_tick| Job {
+    let job = |id, pickup, created| Job {
         id,
         pickup,
         drop: b,
-        created_tick,
+        created: Millis(created),
     };
     let mut used = [[false; 2]; 2];
     for tick in 0..(60.0 / DT) as u64 {
         let new = match tick {
             0 => vec![job(1, a, 0)],
-            40 => vec![job(2, c, 40)],
+            40 => vec![job(2, c, 2000)],
             _ => Vec::new(),
         };
         connect::step(&mut ctl, &mut w, new);

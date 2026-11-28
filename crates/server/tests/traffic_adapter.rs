@@ -66,6 +66,50 @@ fn x1() -> TypeRef {
 }
 
 #[test]
+fn under_the_traffic_rules_a_silent_robot_keeps_its_way_and_gets_no_more() {
+    let layout = lif(
+        &[
+            ("A", -10.0, 0.0),
+            ("M", 0.0, 0.0),
+            ("B", 10.0, 0.0),
+            ("C", 0.0, -10.0),
+            ("D", 0.0, 10.0),
+        ],
+        &[("A", "M"), ("M", "B"), ("C", "M"), ("M", "D")],
+    );
+    let g = Graph::from_lif(&layout).unwrap();
+    let [a, m, b, c, d] = ["A", "M", "B", "C", "D"].map(|id| g.node_idx(id).unwrap());
+    let adapter = TrafficAdapter::new(&layout, &[x1()], &MapOptions::default()).unwrap();
+    let mut ctl = Controller::with_policy(&config(g.clone()), adapter);
+    let (first, second) = ([a, m, b], [c, m, d]);
+    let idle = [
+        report(&g, 0, "", &[a], 0, false),
+        report(&g, 1, "", &[c], 0, false),
+    ];
+    cycle(&mut ctl, 0, &idle, [job(1, a, b), job(2, c, d)]);
+
+    // the first is silent: the second waits for its way
+    let waiting = [report(&g, 1, "job-2", &second, 0, false)];
+    for tick in [1, 2, 100_000] {
+        let out = cycle(&mut ctl, tick, &waiting, []);
+        assert!(out.messages.is_empty(), "tick {tick}: {:?}", out.messages);
+        let held = HeldBack {
+            reason: WaitReason::Release,
+            blockers: vec![0],
+        };
+        assert_eq!(out.held_back, vec![None, Some(held)], "tick {tick}");
+    }
+
+    // the second is silent while the first leaves the crossing and arrives:
+    // nothing for the second
+    let gone = [report(&g, 0, "job-1", &first, 2, false)];
+    let out = cycle(&mut ctl, 100_001, &gone, []);
+    assert!(out.messages.is_empty(), "{:?}", out.messages);
+    let out = cycle(&mut ctl, 100_002, &waiting, []);
+    assert_eq!(orders(&out), [(1, 1, vec![c, m, d])]);
+}
+
+#[test]
 fn the_second_robot_waits_for_the_first_at_a_crossing() {
     // A → M → B and C → M → D cross at M
     let layout = lif(
@@ -103,7 +147,7 @@ fn the_second_robot_waits_for_the_first_at_a_crossing() {
             reason: WaitReason::Release,
             blockers: vec![0],
         };
-        assert_eq!(out.held_back, Some(vec![None, Some(held)]), "tick {tick}");
+        assert_eq!(out.held_back, vec![None, Some(held)], "tick {tick}");
     }
 
     // it has left the crossing

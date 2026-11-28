@@ -4,6 +4,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::jobs::JobGenerator;
 use botsim_sim::world::World;
@@ -64,7 +65,7 @@ fn job(g: &Graph, id: u64, pickup: &str, drop: &str) -> Job {
         id,
         pickup: g.node_idx(pickup).unwrap(),
         drop: g.node_idx(drop).unwrap(),
-        created_tick: 0,
+        created: Millis(0),
     }
 }
 
@@ -92,7 +93,7 @@ fn one_robot_does_one_job() {
     assert_eq!(completed_ids(&c), vec![1]);
     let d = &c.completed()[0];
     assert_eq!(d.robot, RobotId::new("ACME", "R-1"));
-    assert!(d.finished_tick > d.assigned_tick);
+    assert!(d.finished > d.assigned);
     assert_eq!(
         (c.busy(), c.pending().count(), c.rejected().len()),
         (0, 0, 0)
@@ -101,7 +102,7 @@ fn one_robot_does_one_job() {
     let p = w.pose(&d.robot).unwrap();
     assert!((p.x - 25.0).abs() < 1e-9);
     // 25 m of driving takes time and both actions took 5 s: more than 10 s
-    assert!(d.finished_tick as f64 * DT > 10.0 + 25.0 / 1.5);
+    assert!(d.finished.0 as f64 / 1000.0 > 10.0 + 25.0 / 1.5);
 }
 
 #[test]
@@ -176,7 +177,7 @@ fn many_generated_jobs_all_get_done_and_the_run_is_repeatable() {
         // jobs for 10 minutes (about 20), then 30 more minutes to finish
         for t in 0..48_000u64 {
             let new: Vec<Job> = if t < 12_000 {
-                gen_.step(t).into_iter().collect()
+                gen_.step(Millis(w.now_ms())).into_iter().collect()
             } else {
                 vec![]
             };

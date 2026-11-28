@@ -10,9 +10,10 @@ use botsim_dispatcher::{
 };
 use botsim_model::graph::Graph;
 use botsim_model::job::Job;
+use botsim_model::time::Millis;
 use botsim_model::zones::Zones;
 use botsim_server::controller::Controller;
-use botsim_server::cycle::{Input, Message, Output, Time, robot_no};
+use botsim_server::cycle::{Inbox, Message, Outbox, robot_no};
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 use botsim_vda::translator::{RobotMessage, Translator};
@@ -70,7 +71,7 @@ fn state_with(w: &mut World, fields: Value) -> vda5050::state::State {
 }
 
 /// What the world gets of the messages of a cycle.
-fn written(w: &World, out: &Output) -> Vec<RobotMessage> {
+fn written(w: &World, out: &Outbox) -> Vec<RobotMessage> {
     let mut translator = Translator::new(Arc::new(w.graph().clone()));
     translator.add_robot(robot_no(0), id(1)).unwrap();
     out.messages
@@ -112,21 +113,16 @@ fn cycle(
     w: &World,
     message: &vda5050::state::State,
     jobs: Vec<Job>,
-) -> Output {
+) -> Outbox {
     let translator = vda_port::translator(w.graph(), id(1), robot_no(0));
     let read = translator.state_from_vda(message).unwrap();
     assert!(read.issues.is_empty(), "{:?}", read.issues);
-    let states = [read.message];
-    let input = Input {
-        time: Time {
-            tick: w.tick(),
-            unix_ms: w.now_ms(),
-        },
-        states: &states,
-        lifts: &[],
-        watched: false,
+    let inbox = Inbox {
+        robots: vec![read.message],
+        jobs,
+        ..Inbox::default()
     };
-    c.step(&input, jobs)
+    c.step(Millis(w.now_ms()), inbox)
 }
 
 #[test]
@@ -169,7 +165,7 @@ fn zones_orders_answers_and_cancel_are_written_as_before() {
         id: 1,
         pickup: node("N1"),
         drop: node("N3"),
-        created_tick: w.tick(),
+        created: Millis(w.now_ms()),
     };
     let out = cycle(&mut c, &w, &message, vec![job]);
     let answers = as_in_0_1(
@@ -257,7 +253,7 @@ impl Dispatcher for Charging {
     }
     fn dispatch(&mut self, site: &Site, _robots: &[Robot], cycle: Cycle, c: &mut dyn Control) {
         let node = |n: &str| site.graph.node_idx(n).unwrap();
-        match cycle.tick {
+        match (cycle.now.0 - START) / 50 {
             1 => c.charge_here(0, 7),
             2 => {
                 let task = Task {
@@ -265,7 +261,7 @@ impl Dispatcher for Charging {
                         id: 4,
                         pickup: node("N0"),
                         drop: node("N1"),
-                        created_tick: 0,
+                        created: Millis(0),
                     },
                     purpose: Purpose::Charge,
                     from: node("N0"),

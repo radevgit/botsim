@@ -19,6 +19,8 @@
 //! - **Passing:** when the robot has reached the end node of the edge, or its job
 //!   is over, the door is released and is free for the next robot. The door
 //!   itself does not close before the robot has left the edge.
+//! - **A silent robot** (no new report, see [`crate::cycle`]) keeps its door,
+//!   which is asked open as before.
 //!
 //! Not yet: robots sharing an open door, a route around a door that is too
 //! narrow (such a job is refused), two robots going opposite ways through a
@@ -31,7 +33,7 @@ use botsim_link::device::{DeviceHeader, DoorCommand, DoorNo, ToDoor};
 use botsim_link::message::Millis;
 use botsim_model::graph::EdgeIdx;
 
-use crate::cycle::Message;
+use crate::cycle::{Known, Message};
 use crate::order_builder::Plan;
 
 /// A door, as the controller is told of it.
@@ -152,14 +154,22 @@ impl DoorDesk {
     }
 
     /// One control cycle at `time`. `at[i]` is the plan index of the last node of
-    /// robot `i`, `None` if it has no job. The commands to the doors go to `out`.
-    pub fn update(&mut self, at: &[Option<usize>], time: Millis, out: &mut Vec<Message>) {
+    /// robot `i`, `None` if it has no job, and `robots[i]` is what is known of it.
+    /// The commands to the doors go to `out`. A door whose owner has no new report
+    /// is asked open as before, and stays the robot's.
+    pub fn update(
+        &mut self,
+        at: &[Option<usize>],
+        robots: &[Known],
+        time: Millis,
+        out: &mut Vec<Message>,
+    ) {
         for d in 0..self.owners.len() {
             let Some(o) = self.owners[d].clone() else {
                 continue;
             };
             // passed (at the end node of the edge) or the job is over: let go
-            let passed = at[o.robot].is_none_or(|a| a > o.edge_index);
+            let passed = robots[o.robot].new && at[o.robot].is_none_or(|a| a > o.edge_index);
             if passed {
                 self.owners[d] = None;
             }

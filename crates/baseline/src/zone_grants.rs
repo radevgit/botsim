@@ -10,6 +10,9 @@
 //! - a later request for another zone is not held back by an earlier one that has
 //!   to wait.
 //!
+//! A robot without a new report is not answered: it keeps its grants and its
+//! place in the queue; a request behind it may be granted meanwhile.
+//!
 //! The grant has no lease (no expiry) and is never revoked: not yet.
 //! Why one robot at a time and the zone covering the lift approach: see the
 //! design rule in `docs/rules.md` §7d.
@@ -28,6 +31,10 @@ pub struct RobotView {
     pub requests: Vec<ZoneRequest>,
     /// Map index and position, if the robot reported one.
     pub position: Option<(usize, f64, f64)>,
+    /// The report arrived in this cycle. Without a new one the robot keeps its
+    /// grants and its place in the queue and counts as standing where it said it
+    /// was, but is not answered.
+    pub new: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,7 +147,9 @@ impl ZoneGrants {
                 && !inside
                     .iter()
                     .any(|(r, zs)| *r != e.robot && zs.contains(&e.zone));
-            if free {
+            // (an entry is from a request of this robot, so it is in the list)
+            let new = robots[e.robot].new;
+            if free && new {
                 answers.push(ZoneAnswer {
                     robot: e.robot,
                     request_id: e.request.clone(),
@@ -163,7 +172,7 @@ impl ZoneGrants {
                         .filter(|&r| r != e.robot)
                         .map(|r| (e.robot, r)),
                 );
-                if self.told_queued.insert((e.robot, e.request.clone())) {
+                if new && self.told_queued.insert((e.robot, e.request.clone())) {
                     answers.push(ZoneAnswer {
                         robot: e.robot,
                         request_id: e.request.clone(),

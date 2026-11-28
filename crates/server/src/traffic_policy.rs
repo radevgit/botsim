@@ -208,9 +208,11 @@ impl TrafficPolicy for TrafficAdapter {
         let reports: Vec<Report> = self
             .robots
             .iter()
-            .zip(fleet.states)
-            .filter_map(|(robot, report)| {
-                let state = &report.state;
+            .zip(fleet.robots)
+            // (only a new report is progress)
+            .filter(|(_, known)| known.new)
+            .filter_map(|(robot, known)| {
+                let state = &known.report.state;
                 let robot = robot.as_ref()?;
                 let before = robot.order_before.as_ref()?;
                 // the module does not have the new order yet, or the state is not

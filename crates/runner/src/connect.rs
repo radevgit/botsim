@@ -5,7 +5,12 @@
 //!   them (a robot's type comes from its factsheet, S61);
 //! - [`controller`], [`with_policy`], [`with_dispatcher`]: a controller for that
 //!   site, [`Connected`] to the world;
-//! - [`step`]: one cycle, from the world's reports to the messages sent to it.
+//! - [`step`]: one cycle, from the world's reports to the messages sent to it;
+//! - [`collect`]: the reports of a step without a cycle, for the next one.
+//!
+//! A cycle need not run in every step of the world. Whoever runs them less often
+//! calls [`collect`] in each step between: the world's reports are asked for once
+//! in every step (that is what moves a delayed one on).
 //!
 //! Both sides speak [`botsim_link`] and number robots, lifts and doors the same
 //! way, in the order they were added to the world: nothing is translated. The
@@ -21,12 +26,12 @@ use std::sync::Arc;
 
 use botsim_baseline::baseline_policy::BaselinePolicy;
 use botsim_dispatcher::Dispatcher;
-use botsim_link::message::{FromRobot, ToRobot};
+use botsim_link::message::{FromRobot, Millis, ToRobot};
 use botsim_link::zone_set::ZoneSet;
 use botsim_model::job::Job;
 use botsim_model::zones::Zones;
 use botsim_server::controller::Controller;
-use botsim_server::cycle::{Config, FleetRobot, Input, Message, Time};
+use botsim_server::cycle::{Config, FleetRobot, Inbox, Message};
 use botsim_server::doors::Door;
 use botsim_server::lifts::{Lift, LiftStop};
 use botsim_server::policy::TrafficPolicy;
@@ -37,9 +42,9 @@ use crate::vda_route::VdaRoute;
 use crate::vda_route::report::Untranslated;
 
 /// The site and the fleet of `world`: its robots, lifts and doors in the order
-/// they were added, its zones, its time step and the tick it is at. A robot's
-/// number is its place in that order; should the factsheet of one not be read,
-/// it and the robots after it are left out.
+/// they were added, its zones, and the time it is at. A robot's number is its
+/// place in that order; should the factsheet of one not be read, it and the
+/// robots after it are left out.
 pub fn config(world: &World) -> Config {
     config_with(world, |zones| {
         Some(Arc::new(botsim_vda::zone_set_of_setup(zones)))
@@ -92,8 +97,7 @@ pub(crate) fn config_with(
                 edges: d.edges,
             })
             .collect(),
-        step_seconds: world.dt(),
-        start_tick: world.tick(),
+        start: Millis(world.now_ms()),
     }
 }
 
@@ -106,6 +110,8 @@ pub struct Connected<P: TrafficPolicy = BaselinePolicy> {
     pub(crate) lifts: usize,
     /// On the route through `vda`, what translates.
     pub(crate) route: Option<Box<VdaRoute>>,
+    /// What has arrived for the next cycle.
+    pub(crate) inbox: Inbox,
 }
 
 impl<P: TrafficPolicy> Deref for Connected<P> {
@@ -134,6 +140,7 @@ pub fn with_controller<P: TrafficPolicy>(
         controller: make(config),
         lifts,
         route: None,
+        inbox: Inbox::default(),
     }
 }
 
@@ -207,47 +214,48 @@ impl<P: TrafficPolicy> Connected<P> {
     }
 }
 
-/// One cycle of the controller: the new jobs, the world's time, every robot's
-/// report and the states of the lifts go in; the messages are sent to the world in
-/// their order, and what the controller holds back (and, if somebody watches,
-/// reserves) is published there. Call it once per step, after [`World::step`].
-pub fn step<P: TrafficPolicy>(
-    connected: &mut Connected<P>,
-    world: &mut World,
-    new_jobs: impl IntoIterator<Item = Job>,
-) {
+/// Take what `world` has to say in this step into the inbox of the next cycle:
+/// every robot's report and the states of the lifts. [`step`] does it itself:
+/// call this once in each step without a cycle.
+pub fn collect<P: TrafficPolicy>(connected: &mut Connected<P>, world: &mut World) {
     let tick = world.tick();
-    let time = Time {
-        tick,
-        unix_ms: world.now_ms(),
-    };
-    // (the world makes a report of every robot in every cycle, which is what moves
+    // (the world makes a report of every robot in every step, which is what moves
     // a delayed one on; the fleet is the robots the controller was told of)
     let mut states = world.reports();
     states.truncate(connected.controller.robots().count());
     if let Some(route) = connected.route.as_mut() {
-        // (if one cannot be translated, the list is short and the cycle does
-        // nothing)
+        // (one that cannot be translated has not arrived: that robot has no new
+        // report from it)
         states = states
             .iter()
             .filter_map(|report| route.report(report, tick))
             .collect();
     }
+    connected.inbox.robots.append(&mut states);
     let mut lifts = world.lift_reports();
     lifts.truncate(connected.lifts);
-    let input = Input {
-        time,
-        states: &states,
-        lifts: &lifts,
-        watched: world.observing(),
-    };
-    let output = connected.controller.step(&input, new_jobs);
+    connected.inbox.lifts.append(&mut lifts);
+}
+
+/// One cycle of the controller at the world's time: [`collect`], then the new jobs
+/// and all that has been collected go in; the messages are sent to the world in
+/// their order, and what the controller holds back (and, if somebody watches,
+/// reserves) is published there. Call it after [`World::step`], in every step or,
+/// with [`collect`] in the others, less often.
+pub fn step<P: TrafficPolicy>(
+    connected: &mut Connected<P>,
+    world: &mut World,
+    new_jobs: impl IntoIterator<Item = Job>,
+) {
+    collect(connected, world);
+    let mut inbox = std::mem::take(&mut connected.inbox);
+    inbox.jobs.extend(new_jobs);
+    inbox.watched = world.observing();
+    let output = connected.controller.step(Millis(world.now_ms()), inbox);
     for message in &output.messages {
         connected.send(world, message);
     }
-    if let Some(held_back) = output.held_back {
-        world.publish_held_back(held_back);
-    }
+    world.publish_held_back(output.held_back);
     if let Some(reservations) = output.reservations {
         world.publish_reservations(reservations);
     }

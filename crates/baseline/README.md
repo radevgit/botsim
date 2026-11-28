@@ -33,6 +33,9 @@ Traffic:
   its way (and further conditions hold).
 - A robot blocked for 10 s asks for another route.
 - A RELEASE zone is granted to one robot at a time, first come first served.
+- A robot without a new report in a cycle (see
+  [botsim-server](../server/README.md)) keeps what it holds, is not answered, and
+  does not go first nor is gone past.
 
 Jobs and routes are not these rules' business: the server's controller and its
 dispatcher (the baseline's unless another is given) do them.

@@ -6,7 +6,8 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
-use botsim_server::cycle::{Input, Message, Time, robot_no};
+use botsim_model::time::Millis;
+use botsim_server::cycle::{Inbox, Message, robot_no};
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 use botsim_vda::translator::{RobotMessage, Translator};
@@ -41,23 +42,18 @@ fn the_timestamp_made_from_the_time_of_a_cycle_is_the_worlds() {
             }
             // a controller that has just started sends an order at once
             let mut c = botsim::connect::controller(&w);
-            let states = w.reports();
-            let input = Input {
-                time: Time {
-                    tick: w.tick(),
-                    unix_ms: w.now_ms(),
-                },
-                states: &states,
-                lifts: &[],
-                watched: false,
-            };
             let job = Job {
                 id: 1,
                 pickup: a,
                 drop: b,
-                created_tick: w.tick(),
+                created: Millis(w.now_ms()),
             };
-            let out = c.step(&input, [job]);
+            let inbox = Inbox {
+                robots: w.reports(),
+                jobs: vec![job],
+                ..Inbox::default()
+            };
+            let out = c.step(Millis(w.now_ms()), inbox);
             let [Message::Robot(message)] = &out.messages[..] else {
                 panic!("one message expected: {:?}", out.messages);
             };

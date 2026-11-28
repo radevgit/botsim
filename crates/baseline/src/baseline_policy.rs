@@ -14,6 +14,9 @@
 //! - **Swept-area reservation** (see [`crate::conflicts`]): a robot is not released
 //!   onto an edge, or to a node, whose swept area meets what another robot holds.
 //! - **Go first** (S77), see `go_first`.
+//! - **A silent robot** (no new report in a cycle, see
+//!   [`botsim_server::policy`]) keeps what it holds, is answered no zone request,
+//!   and go-first neither lets it go first nor takes anything from it.
 //!
 //! These rules are frozen (brief U10): only bug fixes; they are the reference other
 //! policies are measured against.
@@ -170,8 +173,12 @@ impl BaselinePolicy {
     /// done head-on (X heading against H): there both would run into each other.
     /// Nor while a robot stands on a node too close to the one X would go to (S183).
     fn go_first(&mut self, fleet: &Fleet) {
-        let states = fleet.states;
+        let known = fleet.robots;
         for i in 0..self.robots.len() {
+            // a robot without a new report is given nothing
+            if !known[i].new {
+                continue;
+            }
             let Some(work) = route_of(fleet, i) else {
                 continue;
             };
@@ -252,7 +259,7 @@ impl BaselinePolicy {
                                 .iter()
                                 .take(w.released_through + 1)
                                 .any(|&n| n == node)
-                        }) && self.node_of(&states[h].state) != Some(node)
+                        }) && self.node_of(&known[h].report.state) != Some(node)
                     }
                     (None, Some((_, f))) => route_of(fleet, h).is_some_and(|w| {
                         w.route
@@ -262,7 +269,8 @@ impl BaselinePolicy {
                             .any(|&e| e == f)
                     }),
                 };
-                if !on_its_way {
+                // (and nothing is taken from a robot without a new report)
+                if !on_its_way || !known[h].new {
                     continue;
                 }
                 // H has not moved for a while with its route released
@@ -279,12 +287,12 @@ impl BaselinePolicy {
                     continue;
                 }
                 let (Some(px), Some(ph)) = (
-                    states[i].state.position.as_ref(),
-                    states[h].state.position.as_ref(),
+                    known[i].report.state.position.as_ref(),
+                    known[h].report.state.position.as_ref(),
                 ) else {
                     continue;
                 };
-                if !stands_still(&states[h].state) || px.map != ph.map {
+                if !stands_still(&known[h].report.state) || px.map != ph.map {
                     continue;
                 }
                 // X is ahead of H, within 4 m and 60° of H's heading, and heads the same
@@ -301,7 +309,7 @@ impl BaselinePolicy {
                 let same_route = same_route_after(fleet, i, h, node)
                     || swept.is_some_and(|(_, f)| self.meet_and_go_on(fleet, i, h, f));
                 // (not by who holds the node: X may have taken it over earlier)
-                let on_h_way = self.node_of(&states[i].state).is_some_and(|n| {
+                let on_h_way = self.node_of(&known[i].report.state).is_some_and(|n| {
                     route_of(fleet, h).is_some_and(|w| {
                         w.route
                             .nodes
@@ -395,13 +403,13 @@ impl BaselinePolicy {
     fn stands_in_way(&self, fleet: &Fleet, x: usize, h: usize, until: Held) -> bool {
         let (Some(work), Some(px), Some(ph)) = (
             route_of(fleet, h),
-            fleet.states[x].state.position.as_ref(),
-            fleet.states[h].state.position.as_ref(),
+            fleet.robots[x].report.state.position.as_ref(),
+            fleet.robots[h].report.state.position.as_ref(),
         ) else {
             return false;
         };
         let (route, released) = (work.route, work.released_through);
-        let at = (fleet.states[h].state.last_step() as usize).min(released);
+        let at = (fleet.robots[h].report.state.last_step() as usize).min(released);
         // the plan index of the last node of the way (where h is, if it has
         // passed what it holds)
         let end = match until {
@@ -484,10 +492,11 @@ impl TrafficPolicy for BaselinePolicy {
     }
 
     fn cycle_start(&mut self, fleet: &Fleet) {
+        // (a robot without a new report stands where its last one says)
         self.standing = fleet
-            .states
+            .robots
             .iter()
-            .map(|s| self.node_of(&s.state))
+            .map(|k| self.node_of(&k.report.state))
             .collect();
     }
 
@@ -648,11 +657,15 @@ impl TrafficPolicy for BaselinePolicy {
             return Vec::new();
         };
         let views: Vec<RobotView> = fleet
-            .states
+            .robots
             .iter()
-            .map(|s| RobotView {
-                requests: s.state.zone_requests.clone().unwrap_or_default(),
-                position: s.state.position.as_ref().map(|p| (p.map, p.x, p.y)),
+            .map(|k| {
+                let state = &k.report.state;
+                RobotView {
+                    requests: state.zone_requests.clone().unwrap_or_default(),
+                    position: state.position.as_ref().map(|p| (p.map, p.x, p.y)),
+                    new: k.new,
+                }
             })
             .collect();
         grants.decide(&views)
@@ -914,7 +927,7 @@ mod tests {
     use botsim_link::message::{FromRobot, Header, Millis};
     use botsim_link::state::{EmergencyStop, LastNode, OperatingMode, Position, Route, Velocity};
     use botsim_model::robot::RobotId;
-    use botsim_server::cycle::robot_no;
+    use botsim_server::cycle::{Known, robot_no};
 
     /// A state of a standing robot; the release rule does not look into it here.
     fn standing() -> State {
@@ -939,16 +952,17 @@ mod tests {
         }
     }
 
-    /// The report of robot `i` that says `state`.
-    fn report(i: usize, state: State) -> FromRobot {
-        FromRobot {
+    /// The new report of robot `i` that says `state`.
+    fn report(i: usize, state: State) -> Known {
+        let report = FromRobot {
             header: Header {
                 robot: robot_no(i),
                 seq: 0,
                 time: Millis(0),
             },
             state,
-        }
+        };
+        Known { report, new: true }
     }
 
     /// [`standing`] at a place of map M.
@@ -967,6 +981,12 @@ mod tests {
     /// Go-first with H on A (heading east), released to B, and X on a side road to B
     /// at `x_at`, waiting for B; both go on to C. Does X get B?
     fn x_goes_first(x_at: (f64, f64)) -> bool {
+        go_first_with(x_at, [true, true])
+    }
+
+    /// [`x_goes_first`], with whether H and X have a new report when go-first
+    /// looks.
+    fn go_first_with(x_at: (f64, f64), new: [bool; 2]) -> bool {
         let g = test_graph::graph(
             &[
                 ("A", 0.0, 0.0),
@@ -1005,7 +1025,7 @@ mod tests {
         ];
         let ask = |robot: usize, from, limit, elapsed| Ask {
             robot,
-            state: &states[robot].state,
+            state: &states[robot].report.state,
             route: if robot == 0 { &h_route } else { &x_route },
             at: 0,
             released_through: from,
@@ -1024,13 +1044,26 @@ mod tests {
                 cancelling: false,
             })
         };
+        let mut robots = states.clone();
+        for (known, new) in robots.iter_mut().zip(new) {
+            known.new = new;
+        }
         policy.after_releases(&Fleet {
-            tick: 0,
+            now: Millis(0),
             elapsed: 0.05,
-            states: &states,
+            robots: &robots,
             routes: &[view(&h_route, 1), view(&x_route, 0)],
         });
         policy.node_holder(n("B")) == Some(1)
+    }
+
+    /// A robot without a new report is given nothing, and nothing is taken from
+    /// it: no go-first for a silent X, none past a silent H.
+    #[test]
+    fn go_first_leaves_a_silent_robot_alone() {
+        assert!(go_first_with((1.8, 0.85), [true, true]));
+        assert!(!go_first_with((1.8, 0.85), [true, false]));
+        assert!(!go_first_with((1.8, 0.85), [false, true]));
     }
 
     /// X stands in the way of H (0.95 m off its road: clear of the body, within the
@@ -1112,7 +1145,7 @@ mod tests {
         };
         // a question about one of the two routes, from node 0
         fn ask<'a>(
-            states: &'a [FromRobot],
+            states: &'a [Known],
             route: &'a Plan,
             robot: usize,
             (released_through, limit): (usize, usize),
@@ -1120,7 +1153,7 @@ mod tests {
         ) -> Ask<'a> {
             Ask {
                 robot,
-                state: &states[robot].state,
+                state: &states[robot].report.state,
                 route,
                 at: 0,
                 released_through,
@@ -1129,11 +1162,11 @@ mod tests {
             }
         }
         let routes = [view(&h_route, 2), view(&x_route, 0), None];
-        fn fleet<'a>(states: &'a [FromRobot], routes: &'a [Option<RouteView<'a>>]) -> Fleet<'a> {
+        fn fleet<'a>(states: &'a [Known], routes: &'a [Option<RouteView<'a>>]) -> Fleet<'a> {
             Fleet {
-                tick: 0,
+                now: Millis(0),
                 elapsed: 0.05,
-                states,
+                robots: states,
                 routes,
             }
         }

@@ -10,6 +10,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 use vda5050::factsheet::Factsheet;
@@ -101,7 +102,7 @@ fn run(rounded: bool, kinematics: &str) -> (usize, usize) {
             id: k as u64 + 1,
             pickup: n(p),
             drop: n(d),
-            created_tick: 0,
+            created: Millis(0),
         })
         .collect();
     let start = n(0);
@@ -191,7 +192,7 @@ fn run_custom(
             id: k as u64 + 1,
             pickup: g.node_idx(p).unwrap(),
             drop: g.node_idx(d).unwrap(),
-            created_tick: 0,
+            created: Millis(0),
         })
         .collect();
     let start = g.node_idx(start).unwrap();

@@ -12,6 +12,7 @@
 
 use botsim_dispatcher::ChargePolicy;
 use botsim_model::job::Job;
+use botsim_model::time::Millis;
 use botsim_server::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
 use botsim_server::policy::TrafficPolicy;
 use botsim_sim::lift::DoorState;
@@ -278,6 +279,13 @@ fn seconds(ticks: u64, dt: f64) -> f64 {
     round_micro(ticks as f64 * dt)
 }
 
+/// The number of steps of `dt` seconds that `ms` milliseconds of the world's time
+/// are. (The times of the world are whole milliseconds; for a step above 2 ms
+/// this is the number of steps that passed between two of them.)
+fn steps_of(ms: i64, dt: f64) -> u64 {
+    (ms as f64 / (dt * 1000.0)).round() as u64
+}
+
 /// Number of steps that cover `duration` seconds (rounded to the nearest step).
 pub fn ticks_for(duration: f64, time_step: f64) -> u64 {
     (duration / time_step).round() as u64
@@ -356,7 +364,7 @@ fn run_controller<P: TrafficPolicy>(
     while world.tick() < ticks {
         // one cycle: new jobs → controller → the world moves
         if let (Some(g), Some(c)) = (generator.as_mut(), controller.as_mut()) {
-            let new: Vec<Job> = g.step(world.tick()).into_iter().collect();
+            let new: Vec<Job> = g.step(Millis(world.now_ms())).into_iter().collect();
             created += new.len();
             clock.time(measure_time, || connect::step(c, &mut world, new));
         }
@@ -389,7 +397,7 @@ fn run_controller<P: TrafficPolicy>(
                         let ticks: u64 = c
                             .completed()
                             .iter()
-                            .map(|d| d.finished_tick.saturating_sub(d.assigned_tick))
+                            .map(|d| steps_of(d.finished.millis_since(d.assigned), world.dt()))
                             .sum();
                         round_micro(ticks as f64 * world.dt() / c.completed().len() as f64)
                     }),

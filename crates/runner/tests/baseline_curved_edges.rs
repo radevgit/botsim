@@ -6,6 +6,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 use vda5050::factsheet::Factsheet;
@@ -50,7 +51,7 @@ fn run(pass_through: bool) -> (u64, f64) {
         id: 1,
         pickup: a,
         drop: g.node_idx("C").unwrap(),
-        created_tick: 0,
+        created: Millis(0),
     };
     let mut w = World::new(g, DT, 0).unwrap();
     let id = RobotId::new("ACME", "R-1");
@@ -80,7 +81,7 @@ fn run(pass_through: bool) -> (u64, f64) {
     let p = w.pose(&id).unwrap();
     assert_eq!((p.x, p.y), (5.0, 12.0));
     assert!(w.collisions().is_empty());
-    (c.completed()[0].finished_tick, lowest)
+    (c.completed()[0].finished.0 as u64 / 50, lowest)
 }
 
 #[test]

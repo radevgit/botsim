@@ -7,6 +7,7 @@ use botsim::{connect::Connected, vda_route};
 use botsim_dispatcher::ChargePolicy;
 use botsim_model::graph::{Graph, GraphStation};
 use botsim_model::job::Job;
+use botsim_model::time::Millis;
 use botsim_model::zones::Zones;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::battery::{Battery, BatterySpec};
@@ -180,7 +181,7 @@ fn job(w: &World, id: u64, pickup: &str, drop: &str) -> Job {
         id,
         pickup: w.graph().node_idx(pickup).unwrap(),
         drop: w.graph().node_idx(drop).unwrap(),
-        created_tick: w.tick(),
+        created: Millis(w.now_ms()),
     }
 }
 

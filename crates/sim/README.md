@@ -28,8 +28,8 @@ The layout graph (`Graph`), the robot types (`RobotSpec`) and the zones
 1. Build a `Graph`, then `World::new(graph, time_step, start_unix_ms)`.
 2. `add_robot` for each robot.
 3. Each step: take `reports` (once in every step) and `lift_reports` or
-   `door_reports`, let your controller send messages with `send`, `command_door`
-   and `command_lift`, then `step`.
+   `door_reports`, let your controller (in every step or less often) send messages
+   with `send`, `command_door` and `command_lift`, then `step`.
 4. Read `collisions`, `deadlocks`, `wait_totals` and `snapshot`.
 
 Robot `i`, in the order the robots were added, has the number `(i, 0)`; doors and

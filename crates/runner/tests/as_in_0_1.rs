@@ -6,6 +6,7 @@ use botsim_model::angle::normalize_angle;
 use botsim_model::graph::{EdgeOrientation, Graph};
 use botsim_model::job::Job;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_sim::actions::ActionTimes;
 use botsim_sim::world::World;
 
@@ -31,7 +32,7 @@ fn job_done(g: Graph, spec: RobotSpec, start_ms: i64, pickup: &str, drop: &str) 
         id: 1,
         pickup: node(pickup),
         drop: node(drop),
-        created_tick: 0,
+        created: Millis(0),
     };
     let mut w = World::new(g, DT, start_ms).unwrap();
     w.add_robot(id(1), spec, ActionTimes::new(1.0), 0, 0.0)

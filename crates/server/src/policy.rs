@@ -27,12 +27,24 @@
 //! 5. [`zone_answers`](TrafficPolicy::zone_answers);
 //! 6. [`place`](TrafficPolicy::place) for every route given out in this cycle;
 //! 7. [`reservations`](TrafficPolicy::reservations), if the run is watched.
+//!
+//! No cycle call is made before every robot has reported (see [`crate::cycle`]);
+//! only [`reservations`](TrafficPolicy::reservations) is asked then, of a watched
+//! run.
+//!
+//! **A robot without a new report** ([`Known::new`] is `false`) holds back only
+//! itself. The controller asks no [`release`](TrafficPolicy::release) or
+//! [`place`](TrafficPolicy::place) for it, and says
+//! [`idle`](TrafficPolicy::idle) of one without a route by the report it has kept.
+//! **The policy must give such a robot nothing new** (no zone grant or other
+//! answer, no node or edge taken over for it) **and take nothing from it**: what
+//! it holds stays held.
 
 use std::collections::HashSet;
 use std::fmt::Debug;
 
 use botsim_link::ids::RequestId;
-use botsim_link::message::FromRobot;
+use botsim_link::message::Millis;
 use botsim_link::response::Grant;
 use botsim_link::state::State;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
@@ -42,6 +54,7 @@ use botsim_model::spec::Shape;
 use botsim_model::zones::Zones;
 
 use crate::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
+use crate::cycle::Known;
 use crate::order_builder::{Plan, RELEASE_WINDOW};
 
 /// One robot of the fleet, as far as it does not change.
@@ -83,12 +96,12 @@ pub struct RouteView<'a> {
 /// All robots in one cycle.
 #[derive(Debug)]
 pub struct Fleet<'a> {
-    /// Simulation step of the cycle.
-    pub tick: u64,
-    /// Simulated seconds since the cycle before.
+    /// The controller's clock, which does not go back.
+    pub now: Millis,
+    /// Seconds since the cycle before.
     pub elapsed: f64,
-    /// The state reports as received.
-    pub states: &'a [FromRobot],
+    /// The newest report of every robot, and whether it arrived in this cycle.
+    pub robots: &'a [Known],
     /// `None` for a robot without a route.
     pub routes: &'a [Option<RouteView<'a>>],
 }
@@ -108,8 +121,8 @@ pub struct Ask<'a> {
     /// The furthest node that may be released now: the policy's
     /// [`window`](TrafficPolicy::window), cut short by lifts and doors.
     pub limit: usize,
-    /// Simulated seconds since the cycle before (0 in
-    /// [`place`](TrafficPolicy::place)).
+    /// Seconds since the cycle that took the robot's report before, which is what
+    /// a time spent waiting adds up (0 in [`place`](TrafficPolicy::place)).
     pub elapsed: f64,
 }
 
@@ -184,10 +197,11 @@ pub trait TrafficPolicy: Debug {
     /// After all releases of the cycle (the baseline lets robots go first here).
     fn after_releases(&mut self, _fleet: &Fleet) {}
 
-    /// A robot without a route stands on `node`.
+    /// A robot without a route stands on `node`, as its newest report says.
     fn idle(&mut self, _robot: usize, _node: NodeIdx) {}
 
-    /// Answers to the RELEASE zone requests the states carry.
+    /// Answers to the RELEASE zone requests the states carry; none for a robot
+    /// without a new report.
     fn zone_answers(&mut self, fleet: &Fleet) -> Vec<ZoneAnswer>;
 
     /// The robot that holds a node, for route load and for the dispatcher (free

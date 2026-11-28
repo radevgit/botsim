@@ -10,6 +10,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::Millis;
 use botsim_model::waiting::WaitReason;
 use botsim_model::zones::Zones;
 use botsim_server::policy::ZoneAnswer;
@@ -73,6 +74,7 @@ fn robot(requests: Vec<ZoneRequest>) -> RobotView {
     RobotView {
         requests,
         position: Some((0, 50.0, 50.0)),
+        new: true,
     }
 }
 
@@ -80,6 +82,7 @@ fn inside(zone_x: f64, requests: Vec<ZoneRequest>) -> RobotView {
     RobotView {
         requests,
         position: Some((0, zone_x, 0.0)),
+        new: true,
     }
 }
 
@@ -262,8 +265,8 @@ fn busy_ring_with(zones_on: bool, by_message: bool, delay: u64) -> (usize, Vec<S
     w.set_observer(Box::new(Recorder(log.clone())));
     let mut c = connect::controller(&w);
     let mut gen_ = JobGenerator::new(5, &nodes, 240.0, DT).unwrap();
-    for t in 0..24_000u64 {
-        let new: Vec<Job> = gen_.step(t).into_iter().collect();
+    for _ in 0..24_000u64 {
+        let new: Vec<Job> = gen_.step(Millis(w.now_ms())).into_iter().collect();
         connect::step(&mut c, &mut w, new);
         w.step();
     }
@@ -324,7 +327,7 @@ fn in_a_run_zone_waits_are_named_with_their_blocker() {
         id: 1,
         pickup: n0,
         drop: n2,
-        created_tick: 0,
+        created: Millis(0),
     }]);
     for _ in 0..(60.0 / DT) as usize {
         connect::step(&mut c, &mut w, jobs.take().unwrap_or_default());
@@ -416,7 +419,7 @@ fn robots_get_no_jobs_before_their_zone_set_is_enabled() {
             id: 1,
             pickup: n0,
             drop: g.node_idx("N2").unwrap(),
-            created_tick: 0,
+            created: Millis(0),
         };
         let f: Factsheet =
             serde_json::from_str(include_str!("data/diff_robot.factsheet.json")).unwrap();
