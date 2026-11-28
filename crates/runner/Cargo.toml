@@ -25,3 +25,5 @@ vdma-lif = "0.1.0"
 
 [dev-dependencies]
 botsim-link = { path = "../link" }
+# (the tests translate between VDA 5050 and the simulator's messages)
+botsim-vda = { path = "../vda" }

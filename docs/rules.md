@@ -16,8 +16,9 @@ LIF 2.0 (layouts).
   the clock, so a run is repeatable.
 - One step: the controller reads states and sends orders, then every robot
   moves (in the order they were added), then collisions are checked.
-- Message timestamps are simulated time on top of the scenario's `start_time`
-  (UTC). Each robot numbers its state messages 0, 1, 2, ….
+- Message times are simulated time on top of the scenario's `start_time` (UTC),
+  in milliseconds. Each robot numbers its state reports 0, 1, 2, … (the VDA 5050
+  `headerId`), and so does each door and lift.
 - A robot is identified by `manufacturer` + `serialNumber`, as in the VDA 5050
   topic. Serial numbers are `<serial_prefix>-001`, `-002`, ….
 - A layout (LIF) can have several maps (levels); every node and every robot
@@ -30,17 +31,18 @@ LIF 2.0 (layouts).
   within the step: an order is received at once and the robot answers at once;
   the controller reads the robot's state as it is now.
 - With `message_delay` (scenario, seconds, rounded to whole steps) every message
-  takes that long **in each direction**: orders, instant actions and responses
-  arrive at the robot that many steps after they were sent (in the order they
-  were sent), and the state messages the controller reads are that many steps
-  old. Before the first state has "arrived" the controller sees the first state.
-  A round trip (an order and the state that shows it) takes twice the delay.
+  takes that long **in each direction**: orders, instant actions, responses and
+  zone sets arrive at the robot that many steps after they were sent (in the
+  order they were sent), and the state reports the controller gets are that many
+  steps old. Before the first report has "arrived" the controller sees the first
+  one. A round trip (an order and the state that shows it) takes twice the delay.
 - **The robot's answer to an order is not returned any more:** the sender gets
   "in transit" and learns the outcome from the state — the `orderId` of the
   state, or an error that names the order (as in VDA 5050).
-- Only the VDA 5050 messages are delayed. **Lift and door commands and what the
-  controller reads from lifts and doors are instant**, and so is everything the
-  simulator itself looks at (collisions, deadlocks, the observer, metrics).
+- Only the messages to and from robots are delayed. **Lift and door commands and
+  what the controller gets from lifts and doors are instant**, and so is
+  everything the simulator itself looks at (collisions, deadlocks, the observer,
+  metrics).
 - **Baseline:** it uses no answer, with or without a delay. It takes every order
   and update it sends as accepted and learns of a refusal from the state: one that
   does not show the order or update yet and has an error that names the order, or
@@ -55,15 +57,25 @@ LIF 2.0 (layouts).
 - Not yet: a different delay per direction or per robot, random delays or lost
   messages, a delay for the lift and door commands.
 
-## 1b. The controller's messages (VDA 5050)
+## 1b. The controller's messages (VDA 5050 meaning)
 
 The controller sees the robots only through these messages (S61 lists what is
-and is not a message yet). Inside the program it speaks their compact form,
-`botsim-link`; the translator `botsim-vda` makes the VDA 5050 messages of it
-for the simulated robots and reads their state messages. What cannot be
-translated is counted and shown in the summary (`untranslated`, left out when
-everything can); a state that is refused whole counts as one that cannot be had,
+and is not a message yet). Inside the program the controller and the simulated
+robots speak their compact form, `botsim-link`: it has the meaning of VDA 5050
+and nothing that VDA 5050 cannot express, and nothing is translated. Robots are
+named by their numbers, in the order of the scenario.
+
+The translator `botsim-vda` makes VDA 5050 messages of them and reads those. A
+**route through `vda`** takes every message to a robot and every report of a
+robot through that translation and back; it tests the translation without real
+robots and is used by the tests only (`botsim-bridge`). What the translator
+refuses of a message to a robot then shows in that robot's errors, like the
+robot's own refusals; a state it refuses whole counts as one that cannot be had,
 and then the controller only takes the new jobs in that cycle.
+
+A message with numbers that name nothing (a node, edge or map outside the layout,
+a robot, lift or door that is not there) is refused by the robot or the
+simulator; it never stops the program.
 
 | Direction | Message | State |
 |---|---|---|
@@ -76,8 +88,8 @@ and then the controller only takes the new jobs in that cycle.
 | from the robot | `visualization` | **not planned** (S66 discussion): it is the standard's optional topic for a high-rate position and path feed to outside visualization tools (never used by fleet control for logic). Viewers and recorders use the observer port (§7b), which shows the whole world; the message would only matter once an MQTT adapter feeds an outside tool |
 
 Lift and door commands are not VDA 5050; they have their own ports (§7f, §7h).
-The controller's messages to lifts and doors, and the lift states it gets, are
-`botsim-link`'s too and name each lift and door by its number.
+The commands to lifts and doors and their states are `botsim-link`'s too and name
+each lift and door by its number.
 
 ## 2. Robot motion
 
@@ -275,13 +287,20 @@ The controller's messages to lifts and doors, and the lift states it gets, are
   *update* (same `orderId`, higher `orderUpdateId`, starting at the last base
   node) extends it.
 - Acceptance order (Figure 8 of the standard):
-  1. the order must be valid, else `VALIDATION_FAILURE` or `NO_ROUTE_TO_TARGET`;
+  1. the order must be valid, else `VALIDATION_FAILURE` or `NO_ROUTE_TO_TARGET`:
+     its nodes and edges are in the layout, each edge connects its two nodes, a
+     new order starts at `sequenceId` 0. (An order in the compact form of
+     `botsim-link` cannot have wrong counts, `sequenceId`s with gaps or broken
+     release rules; for a VDA 5050 message the translator `botsim-vda` checks
+     those, and the names);
   2. a new `orderId` is accepted only if the robot is idle (else
      `OTHER_ORDER_ACTIVE`), `orderUpdateId` is 0, and the first node is where
      the robot stands within 0.1 m (else `START_NODE_OUT_OF_RANGE`);
   3. the same `orderId` is an update: lower id → `OUTDATED_ORDER_UPDATE`,
      same id → `SAME_ORDER_UPDATE_ID`, after a cancel →
-     `ORDER_UPDATE_FOLLOWING_CANCEL`; it must start at the end of the base.
+     `ORDER_UPDATE_FOLLOWING_CANCEL`; it must start at the end of the base, with
+     the `sequenceId` of that node (the numbers of an order run on through its
+     updates, VDA 5050 §6.1), else `VALIDATION_FAILURE`.
 - A refused message changes nothing; its error stays in the state until a new
   order or update is accepted.
 - An order is finished only when all its actions are finished.
@@ -306,10 +325,11 @@ The controller's messages to lifts and doors, and the lift states it gets, are
 - Every other instant action fails with `INVALID_INSTANT_ACTION`.
 - Simplification: every action can be cancelled.
 
-## 6. State message
+## 6. State report
 
-- Built from the robot's real state and checked in the tests against the
-  official VDA 5050 state schema.
+- Built from the robot's real state, in the compact form of `botsim-link`. The
+  tests translate it to the VDA 5050 `state` message and check that against the
+  official schema; the names below are those of the message.
 - `nodeStates` / `edgeStates` list everything still ahead (base and horizon);
   the first node of an order is never listed; `lastNodeId` is the last node
   reached. `driving` is true while driving or turning on the spot.
@@ -534,8 +554,8 @@ how the controller uses them. Not enforced by the simulator yet.)
 
 - A lift is a **peripheral** of the simulated world: not a robot and not part
   of VDA 5050 (the standard leaves talking to lifts and doors to the fleet
-  control). It has its **own small command port** next to the VDA 5050 messages
-  (**S44**). Robots ride it as described in §7g.
+  control). It has its **own small command port** next to the messages of the
+  robots (**S44**). Robots ride it as described in §7g.
 - **Lift:** a list of floors (the maps it stops at, lowest first, at least two,
   all different), one cabin, one or more doors (see Doors). The cabin passes one floor in
   `travel_seconds_per_floor`; the door goes closed → opening
@@ -681,7 +701,9 @@ how the controller uses them. Not enforced by the simulator yet.)
 
 ## 9. Baseline controller
 
-The bundled controller talks to the robots only with VDA 5050 messages.
+The *baseline controller* is the fleet server's controller with the baseline's
+traffic rules and dispatcher. It talks to the robots only through the messages of
+`botsim-link`, which have the meaning of VDA 5050 (§1b).
 
 **Controller, dispatcher and traffic policy (U9).** The **controller**
 (`botsim_server::controller`) carries out tasks: it re-plans routes when asked,
@@ -900,7 +922,7 @@ gets); the command line chooses with `--policy`.
   its released route, turning on the spot where its heading changes, up to what H
   holds that keeps X: the contested node, or for a swept-area or node-edge wait the
   end of the held edge, or the held node. Reason: a robot that only stands, e.g. in
-  its own random stop (the state message does not tell it from a stop by the
+  its own random stop (the state report does not tell it from a stop by the
   protective field), was gone first past and then drove into the taker (M1, 2
   collisions).
   `BaselinePolicy::give_ways()` counts it. **Not done head-on** (X heading
@@ -1240,8 +1262,9 @@ counting turns; no blending through corners; route costs are distances, not
 travel times (a curve may be driven slower, §2); the LIF corridor; per-robot-type
 edge properties of the LIF (paths, speeds, corridors); rotation restrictions at
 nodes; node orientation and deviation; edge actions; other instant actions;
-operating modes; state message timing (the state is sent when the controller asks,
-not every 0.5 s, and a delay is the same for all messages, §1a); horizon actions;
+operating modes; state report timing (a report is made when the controller asks
+for it, once in every step, not every 0.5 s, and a delay is the same for all
+messages, §1a); horizon actions;
 breakdowns; walls and people as obstacles of the safety stop (§7a); deadlock
 resolution beyond the baseline's re-routing (§9);
 station properties beyond the interaction nodes (§8); the other per-type LIF edge properties (§2, rotation rules done, not planned around by the baseline); the viewer (the
@@ -1281,9 +1304,10 @@ What was slow, and what was done:
 - **Deadlock check:** "who stands on my next node" looked at every robot; now a
   grid of the robots' positions.
 
-What is still the biggest cost at 1,000 robots (about 6 + 5 ms per step): the
-VDA 5050 state message is built for every robot twice per step (once by the
-controller, once by the deadlock check).
+What was still the biggest cost at 1,000 robots when these figures were taken
+(botsim 0.1, about 6 + 5 ms per step): a VDA 5050 state message built for every
+robot twice per step. Robots now report in the compact form of `botsim-link`; the
+figures have not been taken again.
 
 **Observer cost** (the `aabb` change does not touch the observer; measured
 separately, 1,000 robots on 100 × 100, an observer that only counts): no

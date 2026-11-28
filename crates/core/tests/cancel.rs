@@ -1,6 +1,5 @@
 use botsim_core::actions::ActionTimes;
 use botsim_core::robot::{Reception::Accepted, Reception::Rejected, Robot};
-use botsim_core::state_report::Header;
 use botsim_model::errors::ErrorType::*;
 use botsim_model::graph::Graph;
 use botsim_model::spec::RobotSpec;
@@ -10,6 +9,9 @@ use vda5050::order::Order;
 use vda5050::state::ActionStatus::{self, Failed, Finished, Running};
 use vda5050::state::State;
 use vdma_lif::Lif;
+
+mod vda_port;
+use vda_port::{Header, VdaRobot};
 
 const DT: f64 = 0.05;
 
@@ -78,7 +80,7 @@ fn state(r: &Robot) -> State {
     let s = r.state(&graph(), &header());
     // every state must be valid against the official schema
     let schema: serde_json::Value =
-        serde_json::from_str(include_str!("data/vda5050_state.schema.json")).unwrap();
+        serde_json::from_str(include_str!("../../vda/tests/data/state.schema")).unwrap();
     let v = jsonschema::options()
         .should_validate_formats(true)
         .build(&schema)

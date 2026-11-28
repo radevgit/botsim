@@ -11,6 +11,9 @@
 
 use botsim_model::graph::{EdgeIdx, NodeIdx};
 
+/// VDA 5050 `orientationType`: what an edge orientation is relative to.
+pub use botsim_model::orientation::OrientationType;
+
 use crate::ids::{ActionId, ActionType, OrderId};
 use crate::shape::ShapeError;
 
@@ -45,15 +48,6 @@ pub struct Leg {
     pub orientation: Option<f64>,
     /// VDA 5050 edge `orientationType`, if the order gives one.
     pub orientation_type: Option<OrientationType>,
-}
-
-/// What an edge orientation is relative to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OrientationType {
-    /// The map.
-    Global,
-    /// The direction of the edge.
-    Tangential,
 }
 
 /// An action at a node of an order.

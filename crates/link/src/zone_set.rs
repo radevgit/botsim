@@ -9,6 +9,9 @@ use std::sync::Arc;
 use botsim_model::graph::MapIdx;
 use serde_json::Value;
 
+/// VDA 5050 `releaseLossBehavior` of a release zone.
+pub use botsim_model::zones::LossBehavior;
+
 use crate::ids::{ActionType, ZoneId, ZoneSetId};
 use crate::order::Blocking;
 
@@ -65,14 +68,6 @@ pub enum ZoneKind {
         direction: f64,
         limitation: Bidirected,
     },
-}
-
-/// VDA 5050 `releaseLossBehavior` of a release zone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LossBehavior {
-    Stop,
-    Continue,
-    Evacuate,
 }
 
 /// VDA 5050 `directedLimitation`.

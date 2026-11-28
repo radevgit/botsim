@@ -1,6 +1,5 @@
 use botsim_core::actions::ActionTimes;
 use botsim_core::robot::Robot;
-use botsim_core::state_report::Header;
 use botsim_model::graph::Graph;
 use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
@@ -9,6 +8,8 @@ use vdma_lif::Lif;
 
 mod read_state;
 use read_state::is_waiting;
+mod vda_port;
+use vda_port::{Header, VdaRobot};
 
 const DT: f64 = 0.05;
 

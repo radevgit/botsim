@@ -4,6 +4,10 @@ use botsim::scenario::{Scenario, ScenarioError};
 use botsim::summary;
 use botsim_core::lift::DoorState;
 
+#[path = "../../core/tests/vda_port/mod.rs"]
+mod vda_port;
+use vda_port::VdaWorld;
+
 fn data() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data")
 }

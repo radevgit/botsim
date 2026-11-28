@@ -5,6 +5,10 @@ use botsim_core::robot::Reception::Accepted;
 use botsim_model::robot::RobotId;
 use vda5050::order::Order;
 
+#[path = "../../core/tests/vda_port/mod.rs"]
+mod vda_port;
+use vda_port::VdaWorld;
+
 fn data() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data")
 }

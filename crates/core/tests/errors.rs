@@ -3,14 +3,16 @@ use std::collections::HashSet;
 use botsim_core::drive::{DriveError, Driver, RouteEdge};
 use botsim_core::errors::RobotError;
 use botsim_core::order_route::OrderError;
-use botsim_core::state_report::{Header, build_state};
+use botsim_model::errors::ErrorLevel::{self, Critical, Fatal, Urgent, Warning};
 use botsim_model::errors::ErrorType;
 use botsim_model::graph::Graph;
 use botsim_model::orientation::OrientationError;
 use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
-use vda5050::state::ErrorLevel::{self, Critical, Fatal, Urgent, Warning};
 use vdma_lif::Lif;
+
+mod vda_port;
+use vda_port::{Header, build_state};
 
 /// Table 9 of VDA 5050 (error type, level), copied from the specification.
 const TABLE_9: [(&str, ErrorLevel); 28] = [
@@ -57,7 +59,8 @@ fn the_enum_matches_table_9_of_the_standard() {
 
 #[test]
 fn order_errors_map_to_predefined_types_with_the_prescribed_references() {
-    let r = RobotError::from_order_error(&OrderError::FirstNodeNotReleased, "o1", 3);
+    // (those of the translator are in `botsim-vda`, `tests/refused_orders.rs`)
+    let r = RobotError::from_order_error(&OrderError::FirstNodeNotZero { found: 10 }, "o1", 3);
     assert_eq!(r.error_type, ErrorType::ValidationFailure);
     assert_eq!(
         r.references,
@@ -68,9 +71,9 @@ fn order_errors_map_to_predefined_types_with_the_prescribed_references() {
     );
 
     let r = RobotError::from_order_error(
-        &OrderError::Unknown {
+        &OrderError::OutsideLayout {
             what: "node",
-            id: "Z".into(),
+            number: 99,
         },
         "o1",
         3,
@@ -149,7 +152,7 @@ fn errors_appear_in_a_schema_valid_state_message() {
     assert_eq!(s.errors.len(), 1);
     let e = &s.errors[0];
     assert_eq!(e.error_type, "ORIENTATION_UNREACHABLE");
-    assert_eq!(e.error_level, Warning);
+    assert_eq!(e.error_level, vda5050::state::ErrorLevel::Warning);
     let refs = e.error_references.as_ref().unwrap();
     assert_eq!(
         (
@@ -160,7 +163,7 @@ fn errors_appear_in_a_schema_valid_state_message() {
     );
 
     let schema: serde_json::Value =
-        serde_json::from_str(include_str!("data/vda5050_state.schema.json")).unwrap();
+        serde_json::from_str(include_str!("../../vda/tests/data/state.schema")).unwrap();
     let validator = jsonschema::options()
         .should_validate_formats(true)
         .build(&schema)

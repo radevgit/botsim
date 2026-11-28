@@ -13,6 +13,9 @@ use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;
 
+mod vda_port;
+use vda_port::VdaWorld;
+
 const DT: f64 = 0.05;
 
 /// S(-10,0) → Q(10,0) is one long edge that passes P(0,0); P → Q is another.

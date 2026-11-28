@@ -12,6 +12,9 @@ use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;
 
+mod vda_port;
+use vda_port::VdaWorld;
+
 const DT: f64 = 0.05;
 const X1: (&str, &str) = ("ACME", "X1");
 const Y2: (&str, &str) = ("ACME", "Y2");

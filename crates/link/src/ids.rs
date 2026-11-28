@@ -21,6 +21,12 @@ macro_rules! text_id {
             }
         }
 
+        impl From<&str> for $name {
+            fn from(text: &str) -> $name {
+                $name::new(text)
+            }
+        }
+
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 fmt::Display::fmt(self.as_str(), f)

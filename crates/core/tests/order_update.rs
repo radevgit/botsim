@@ -1,11 +1,13 @@
 use botsim_core::actions::ActionTimes;
 use botsim_core::drive::{DriveError, Driver, Phase};
-use botsim_core::order_route::route_from_order;
 use botsim_model::graph::Graph;
 use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;
+
+mod vda_port;
+use vda_port::route_from_order;
 
 const DT: f64 = 0.05;
 

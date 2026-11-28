@@ -14,5 +14,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 
 [dev-dependencies]
+# (the tests translate between VDA 5050 and the simulator's messages)
+botsim-link = { path = "../link" }
+botsim-vda = { path = "../vda" }
 vdma-lif = "0.1.0"
 vda5050 = "0.1.0"

@@ -15,8 +15,9 @@
 
 use std::collections::HashMap;
 
-use vda5050::common::BlockingType;
-use vda5050::state::ActionStatus;
+use botsim_link::ids::{ActionId, ActionType};
+use botsim_link::order::Blocking;
+use botsim_link::state::{ActionState, ActionStatus};
 
 use crate::jobs::Rng;
 
@@ -84,16 +85,16 @@ impl ActionTimes {
 /// An action as the order describes it, before a duration is chosen.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActionSpec {
-    pub action_id: String,
-    pub action_type: String,
-    pub blocking: BlockingType,
+    pub action_id: ActionId,
+    pub action_type: ActionType,
+    pub blocking: Blocking,
 }
 
 impl ActionTimes {
     /// Decide the duration of an action (with random extra time if noise is on;
     /// each call draws one number).
     pub fn plan(&mut self, a: &ActionSpec) -> PlannedAction {
-        let base = self.duration(&a.action_type);
+        let base = self.duration(a.action_type.as_str());
         let duration = match self.noise.as_mut() {
             Some(n) => base * (1.0 + n.rng.next_f64() * n.variation),
             None => base,
@@ -110,9 +111,9 @@ impl ActionTimes {
 /// An action to be executed, with its duration already decided.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlannedAction {
-    pub action_id: String,
-    pub action_type: String,
-    pub blocking: BlockingType,
+    pub action_id: ActionId,
+    pub action_type: ActionType,
+    pub blocking: Blocking,
     /// Seconds, ≥ 0.
     pub duration: f64,
 }
@@ -233,8 +234,7 @@ impl ActionQueue {
     /// Driving is allowed unless a `SOFT` or `HARD` action is unfinished.
     pub fn driving_allowed(&self) -> bool {
         !self.items.iter().any(|i| {
-            !is_done(i.status)
-                && matches!(i.action.blocking, BlockingType::Soft | BlockingType::Hard)
+            !is_done(i.status) && matches!(i.action.blocking, Blocking::Soft | Blocking::Hard)
         })
     }
 
@@ -243,8 +243,8 @@ impl ActionQueue {
         self.items.iter().all(|i| is_done(i.status))
     }
 
-    /// Id, type and status of every action ever queued, in queue order (for the
-    /// state message; finished ones stay listed).
+    /// Id, type and status of every action ever queued, in queue order (finished
+    /// ones stay listed).
     pub fn states(&self) -> impl Iterator<Item = (&str, &str, ActionStatus)> {
         self.items.iter().map(|i| {
             (
@@ -254,6 +254,15 @@ impl ActionQueue {
             )
         })
     }
+
+    /// The same as the state report carries them.
+    pub(crate) fn reported(&self) -> impl Iterator<Item = ActionState> {
+        self.items.iter().map(|i| ActionState {
+            id: i.action.action_id.clone(),
+            kind: Some(i.action.action_type.clone()),
+            status: i.status,
+        })
+    }
 }
 
 fn is_done(s: ActionStatus) -> bool {
@@ -261,6 +270,6 @@ fn is_done(s: ActionStatus) -> bool {
 }
 
 /// `SINGLE` and `HARD` allow no other action next to them.
-fn is_exclusive(b: BlockingType) -> bool {
-    matches!(b, BlockingType::Single | BlockingType::Hard)
+fn is_exclusive(b: Blocking) -> bool {
+    matches!(b, Blocking::Single | Blocking::Hard)
 }

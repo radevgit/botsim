@@ -1,5 +1,6 @@
-//! The messages to robots that reach the world are, field by field, those the 0.1
-//! controller built: the controller's messages translated by `botsim-vda`.
+//! The messages to robots that reach the world say, field by field, what those the
+//! 0.1 controller built said: the controller's messages translated by
+//! `botsim-vda`.
 
 use std::sync::Arc;
 
@@ -19,6 +20,9 @@ use serde_json::{Value, json};
 
 mod setup;
 use setup::{DT, id, line, robot_spec};
+#[path = "../../core/tests/vda_port/mod.rs"]
+mod vda_port;
+use vda_port::VdaWorld;
 
 /// 2026-11-20T10:00:00Z.
 const START: i64 = 1_795_168_800_000;
@@ -109,7 +113,10 @@ fn cycle(
     message: &vda5050::state::State,
     jobs: Vec<Job>,
 ) -> Output {
-    let states = [c.read_state(message, w.tick()).unwrap()];
+    let translator = vda_port::translator(w.graph(), id(1), robot_no(0));
+    let read = translator.state_from_vda(message).unwrap();
+    assert!(read.issues.is_empty(), "{:?}", read.issues);
+    let states = [read.message];
     let input = Input {
         time: Time {
             tick: w.tick(),
@@ -220,7 +227,6 @@ fn zones_orders_answers_and_cancel_are_written_as_before() {
     let cancel = json!({"actionType": "cancelOrder", "actionId": "cancel-job-1",
         "blockingType": "NONE"});
     assert_eq!(written(&w, &out), [instant(&w, 1, cancel)]);
-    assert!(c.untranslated().is_empty(), "{:?}", c.untranslated());
 }
 
 /// Sends the robot to a charger on N1, has it charge where it stands, and stops
@@ -317,5 +323,4 @@ fn the_charging_actions_are_written_as_before() {
         written(&w, &out),
         [instant(&w, 2, start("charge-charge-4"))]
     );
-    assert!(c.untranslated().is_empty(), "{:?}", c.untranslated());
 }

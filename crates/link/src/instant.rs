@@ -26,3 +26,17 @@ pub enum InstantKind {
     /// Any other action type; its parameters are not carried.
     Other(ActionType),
 }
+
+impl InstantKind {
+    /// The VDA 5050 `actionType`.
+    pub fn action_type(&self) -> ActionType {
+        ActionType::new(match self {
+            InstantKind::CancelOrder { .. } => "cancelOrder",
+            InstantKind::EnableZoneSet { .. } => "enableZoneSet",
+            InstantKind::DeleteZoneSet { .. } => "deleteZoneSet",
+            InstantKind::StartCharging => "startCharging",
+            InstantKind::StopCharging => "stopCharging",
+            InstantKind::Other(other) => return other.clone(),
+        })
+    }
+}

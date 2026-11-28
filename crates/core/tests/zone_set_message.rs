@@ -15,6 +15,9 @@ use vda5050::state::{ActionStatus, EnabledStatus, State};
 use vda5050::zone_set::ZoneSetMessage;
 use vdma_lif::Lif;
 
+mod vda_port;
+use vda_port::VdaWorld;
+
 const DT: f64 = 0.05;
 
 fn id() -> RobotId {

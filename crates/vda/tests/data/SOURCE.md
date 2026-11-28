@@ -12,6 +12,7 @@
 - Copied from the `vda5050` crate 0.1.0, which carries them (`spec/schemas/`).
 - Licence: MIT, Copyright 2026 Verband der Automobilindustrie, see
   `LICENSE-VDA5050`. It applies to the five schema files.
+- `botsim-core`'s tests check their state messages against `state.schema` here.
 
 ## Layout
 

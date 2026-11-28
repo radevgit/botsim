@@ -17,6 +17,10 @@ use botsim_server::controller::NODE_TOLERANCE;
 use vda5050::factsheet::Factsheet;
 use vdma_lif::Lif;
 
+#[path = "../../core/tests/vda_port/mod.rs"]
+mod vda_port;
+use vda_port::VdaWorld;
+
 const DT: f64 = 0.05;
 
 /// Message delays (steps) every case is run with.

@@ -7,6 +7,9 @@ use botsim_model::errors::ErrorType;
 use botsim_model::graph::{EdgeIdx, MapIdx, NodeIdx};
 use botsim_model::waiting::stands_waiting;
 
+/// VDA 5050 `errorLevel`.
+pub use botsim_model::errors::ErrorLevel;
+
 use crate::ids::{ActionId, ActionType, OrderId, RequestId, ZoneId, ZoneSetId};
 use crate::shape::ShapeError;
 
@@ -71,7 +74,7 @@ impl State {
 /// - there is nothing ahead without a last node;
 /// - no more entries are released than there are;
 /// - every `sequenceId` fits in 32 bits.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Route {
     last_node: Option<LastNode>,
     ahead: Vec<Ahead>,
@@ -273,13 +276,4 @@ pub enum ErrorKind {
     Predefined(ErrorType),
     /// A type that is not predefined, for example `BATTERY_EMPTY`.
     Other(Arc<str>),
-}
-
-/// VDA 5050 `errorLevel`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorLevel {
-    Warning,
-    Urgent,
-    Critical,
-    Fatal,
 }

@@ -1,10 +1,10 @@
 use botsim_core::actions::{ActionQueue, ActionTimes, PlannedAction};
-use vda5050::common::BlockingType::{self, Hard, None as NoBlock, Single, Soft};
-use vda5050::state::ActionStatus::{self, Finished, Running, Waiting};
+use botsim_link::order::Blocking::{self, Hard, None as NoBlock, Single, Soft};
+use botsim_link::state::ActionStatus::{self, Finished, Running, Waiting};
 
 const DT: f64 = 0.1;
 
-fn act(id: &str, blocking: BlockingType, duration: f64) -> PlannedAction {
+fn act(id: &str, blocking: Blocking, duration: f64) -> PlannedAction {
     PlannedAction {
         action_id: id.into(),
         action_type: "t".into(),

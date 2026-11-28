@@ -12,6 +12,7 @@ use botsim_link::zone_set::{
     Bidirected, Directed, LossBehavior, Zone, ZoneAction, ZoneKind, ZoneSet,
 };
 use botsim_model::errors::ErrorType;
+use botsim_model::zones::Zones;
 use vda5050::zone_set as vda;
 
 use crate::header::{Incoming, finite, usable};
@@ -114,9 +115,8 @@ impl Translator {
         })
     }
 
-    /// A zone set on its own, without a message around it (the fleet server reads
-    /// the site's zone set when it starts). It is taken whole or refused, as in a
-    /// message.
+    /// A zone set on its own, without a message around it. It is taken whole or
+    /// refused, as in a message.
     pub fn zone_set_content_from_vda(&self, set: &vda::ZoneSet) -> Result<ZoneSet, Issue> {
         self.zones_from_vda(set)
             .map_err(|r| refuse(r, &set.zone_set_id))
@@ -128,7 +128,7 @@ impl Translator {
         let zones = set
             .zones
             .iter()
-            .map(zone_from_vda)
+            .map(|z| zone_from_vda(z, Checks::Message))
             .collect::<Result<_, _>>()
             .map_err(invalid)?;
         Ok(ZoneSet {
@@ -137,6 +137,49 @@ impl Translator {
             descriptor: set.zone_set_descriptor.as_deref().map(Arc::from),
             zones,
         })
+    }
+}
+
+/// The zone set of a site's configuration in `link` types, as the fleet server
+/// gets it when it starts: setup data that has been checked against the layout
+/// ([`Zones::new`]), not a message of another sender. Nothing is refused, empty
+/// ids included. It has no `zoneSetDescriptor`.
+pub fn zone_set_of_setup(zones: &Zones) -> ZoneSet {
+    ZoneSet {
+        id: ZoneSetId::new(zones.zone_set_id.as_str()),
+        map: zones.map,
+        descriptor: None,
+        zones: zones
+            .zones
+            .iter()
+            // (without the checks of a message nothing can fail)
+            .filter_map(|z| zone_from_vda(z, Checks::Setup).ok())
+            .collect(),
+    }
+}
+
+/// What the reading of a zone asks of its ids and numbers.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Checks {
+    /// As in a message: no empty id, only finite numbers.
+    Message,
+    /// None: configuration that has its own checks.
+    Setup,
+}
+
+impl Checks {
+    fn id<'a>(self, id: &'a str, field: &'static str) -> Result<&'a str, Problem> {
+        match self {
+            Checks::Message => usable(id, field),
+            Checks::Setup => Ok(id),
+        }
+    }
+
+    fn number(self, value: f64, field: &'static str) -> Result<f64, Problem> {
+        match self {
+            Checks::Message => finite(value, field),
+            Checks::Setup => Ok(value),
+        }
     }
 }
 
@@ -216,13 +259,15 @@ fn zone_to_vda(z: &Zone) -> Result<vda::Zone, Problem> {
     })
 }
 
-fn zone_from_vda(z: &vda::Zone) -> Result<Zone, Problem> {
-    let id = usable(&z.zone_id, ZONE_ID)?;
+fn zone_from_vda(z: &vda::Zone, checks: Checks) -> Result<Zone, Problem> {
+    let id = checks.id(&z.zone_id, ZONE_ID)?;
     let vertices = z
         .vertices
         .iter()
-        .map(|v| Ok((finite(v.x, VERTEX)?, finite(v.y, VERTEX)?)))
+        .map(|v| Ok((checks.number(v.x, VERTEX)?, checks.number(v.y, VERTEX)?)))
         .collect::<Result<_, Problem>>()?;
+    let number = |value, field| checks.number(value, field);
+    let actions = |list| actions_from_vda(list, checks);
     let kind = match &z.kind {
         vda::ZoneKind::Blocked => ZoneKind::Blocked,
         vda::ZoneKind::LineGuided => ZoneKind::LineGuided,
@@ -233,35 +278,35 @@ fn zone_from_vda(z: &vda::Zone) -> Result<Zone, Problem> {
         },
         vda::ZoneKind::CoordinatedReplanning => ZoneKind::CoordinatedReplanning,
         vda::ZoneKind::SpeedLimit { maximum_speed } => ZoneKind::SpeedLimit {
-            maximum_speed: finite(*maximum_speed, MAXIMUM_SPEED)?,
+            maximum_speed: number(*maximum_speed, MAXIMUM_SPEED)?,
         },
         vda::ZoneKind::Action {
             entry_actions,
             during_actions,
             exit_actions,
         } => ZoneKind::Action {
-            entry: actions_from_vda(entry_actions)?,
-            during: actions_from_vda(during_actions)?,
-            exit: actions_from_vda(exit_actions)?,
+            entry: actions(entry_actions)?,
+            during: actions(during_actions)?,
+            exit: actions(exit_actions)?,
         },
         vda::ZoneKind::Priority { priority_factor } => ZoneKind::Priority {
-            factor: finite(*priority_factor, PRIORITY_FACTOR)?,
+            factor: number(*priority_factor, PRIORITY_FACTOR)?,
         },
         vda::ZoneKind::Penalty { penalty_factor } => ZoneKind::Penalty {
-            factor: finite(*penalty_factor, PENALTY_FACTOR)?,
+            factor: number(*penalty_factor, PENALTY_FACTOR)?,
         },
         vda::ZoneKind::Directed {
             direction,
             directed_limitation,
         } => ZoneKind::Directed {
-            direction: finite(*direction, DIRECTION)?,
+            direction: number(*direction, DIRECTION)?,
             limitation: directed_from_vda(*directed_limitation),
         },
         vda::ZoneKind::Bidirected {
             direction,
             bidirected_limitation,
         } => ZoneKind::Bidirected {
-            direction: finite(*direction, DIRECTION)?,
+            direction: number(*direction, DIRECTION)?,
             limitation: bidirected_from_vda(*bidirected_limitation),
         },
     };
@@ -296,12 +341,15 @@ fn actions_to_vda(actions: &[ZoneAction]) -> Result<Vec<vda::ZoneAction>, Proble
         .collect()
 }
 
-fn actions_from_vda(actions: &[vda::ZoneAction]) -> Result<Vec<ZoneAction>, Problem> {
+fn actions_from_vda(
+    actions: &[vda::ZoneAction],
+    checks: Checks,
+) -> Result<Vec<ZoneAction>, Problem> {
     actions
         .iter()
         .map(|a| {
             Ok(ZoneAction {
-                kind: ActionType::new(usable(&a.action_type, ACTION_TYPE)?),
+                kind: ActionType::new(checks.id(&a.action_type, ACTION_TYPE)?),
                 descriptor: a.action_descriptor.as_deref().map(Arc::from),
                 blocking: blocking_from_vda(a.blocking_type),
                 parameters: a.action_parameters.as_ref().map(|parameters| {

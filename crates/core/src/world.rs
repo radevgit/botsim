@@ -1,16 +1,29 @@
-//! The simulated world: one layout, a clock with a fixed time step, and many
-//! robots. This is the "plain struct" version (no ECS); it is what a controller
-//! talks to.
+//! The simulated world: one layout, a clock with a fixed time step, many robots,
+//! and the lifts and doors of the site. This is the "plain struct" version (no
+//! ECS). It talks in the messages of [`botsim_link`] (VDA 5050 meaning):
 //!
+//! - **To robots** [`World::send`]: orders, instant actions, responses and zone
+//!   sets. [`World::send_unread`] is for what whoever reads a robot's messages
+//!   could not read.
+//! - **From robots** [`World::reports`]: a state report of every robot; call it
+//!   once in every step (with a message delay the reports on their way move on
+//!   when they are asked for). [`World::report`] gives one robot's.
+//! - **Doors and lifts**: [`World::command_door`], [`World::command_lift`],
+//!   [`World::door_reports`], [`World::lift_reports`].
 //! - **Time** is a tick counter times a fixed step `dt` (never wall-clock time),
-//!   so a run is repeatable. The VDA 5050 timestamps are made from the simulated
-//!   time plus a start date given by the caller.
-//! - **Addressing**: a robot is `(manufacturer, serialNumber)`, as in the VDA 5050
-//!   topics; `send_order` and `send_instant_actions` take the id from the message.
+//!   so a run is repeatable. The times of the messages are the simulated time plus
+//!   a start date given by the caller.
+//! - **Addressing**: robot `i` of the world, in the order they were added, is the
+//!   robot number `(i, 0)` ([`World::robot_no`]); door `i` is `DoorNo(i)` and lift
+//!   `i` is `LiftNo(i)`. A robot's identity is `(manufacturer, serialNumber)`, as
+//!   in the VDA 5050 topics.
 //! - **One step** moves every robot, in the order they were added (deterministic).
 //!   Messages are applied when sent, i.e. between steps.
-//! - **State messages** are produced on request ([`World::state`]); each robot
-//!   has its own `headerId` counter, which grows by one per state message.
+//! - Each robot numbers its state reports (as `headerId` does), each door and lift
+//!   its own.
+//!
+//! A message that names what is not there, whatever its numbers, is an error or is
+//! refused by the robot, never a panic.
 //!
 //! Not yet: collisions, the spatial index, a controller port with queues, state
 //! publishing rules (`minimumStateInterval`), peripherals.
@@ -22,9 +35,6 @@ use aabb::prelude::AABB;
 use togo::prelude::{circle_bounding_rect, orect_bounding_rect};
 
 use vda5050::factsheet::Factsheet;
-use vda5050::instant_actions::InstantActions;
-use vda5050::order::Order;
-use vda5050::state::State;
 
 use crate::actions::ActionTimes;
 use crate::deadlock::{DEFAULT_TIMEOUT_SECONDS, DeadlockDetector};
@@ -33,17 +43,22 @@ use crate::door::{Door, DoorError, DoorSpec, DoorStatus};
 use crate::drive::Phase;
 use crate::drive::{DriveError, Glance, Pose};
 use crate::jobs::Rng;
-use crate::lift::{Lift, LiftError, LiftSpec, LiftStatus};
+use crate::lift::{DoorState, Lift, LiftError, LiftSpec, LiftStatus};
 use crate::observer::{Blocking, Observer, RobotSnapshot, RobotStatus, Snapshot};
-use crate::robot::{Reception, Robot, START_NODE_TOLERANCE};
-use crate::state_report::Header;
+use crate::robot::{Reception, Robot, START_NODE_TOLERANCE, Unread};
 use crate::waiting::{Place, Wait, WaitTotal};
 use crate::zone_requests::ZoneRequestTiming;
+use botsim_link::device::{
+    DeviceHeader, DoorCommand, DoorNo, DoorPhase, FromDoor, FromLift, LiftCommand, LiftNo, ToDoor,
+    ToLift,
+};
+use botsim_link::message::{FromRobot, Header, Millis, ToRobot, ToRobotBody};
+use botsim_link::state::ZoneRequest;
 use botsim_model::collision::{Body, gap, overlap, place};
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::protocol::PROTOCOL_VERSION;
 use botsim_model::reservation::Reservation;
-use botsim_model::robot::RobotId;
+use botsim_model::robot::{RobotId, RobotNo};
 use botsim_model::spec::RobotSpec;
 use botsim_model::time::iso8601;
 use botsim_model::waiting::{HeldBack, WaitReason, stands_waiting};
@@ -70,6 +85,12 @@ pub struct BatteryReport {
 pub enum WorldError {
     DuplicateRobot(RobotId),
     UnknownRobot(RobotId),
+    /// No robot with this number.
+    UnknownRobotNo(RobotNo),
+    /// No door with this number.
+    UnknownDoorNo(DoorNo),
+    /// No lift with this number.
+    UnknownLiftNo(LiftNo),
     /// The robot cannot be placed on its start node.
     Start(DriveError),
     /// The time step must be a positive, finite number of seconds.
@@ -111,6 +132,14 @@ impl fmt::Display for WorldError {
             WorldError::UnknownRobot(id) => {
                 write!(f, "no robot {}/{}", id.manufacturer, id.serial_number)
             }
+            WorldError::UnknownRobotNo(no) => write!(
+                f,
+                "no robot number {} (generation {})",
+                no.slot(),
+                no.generation()
+            ),
+            WorldError::UnknownDoorNo(no) => write!(f, "no door number {}", no.0),
+            WorldError::UnknownLiftNo(no) => write!(f, "no lift number {}", no.0),
             WorldError::Start(e) => write!(f, "cannot place the robot: {e}"),
             WorldError::BadTimeStep => write!(f, "the time step must be positive and finite"),
             WorldError::Disturbance(e) => write!(f, "{e}"),
@@ -145,24 +174,22 @@ impl std::error::Error for WorldError {}
 struct Entry {
     id: RobotId,
     robot: Robot,
-    /// `headerId` of the next state message.
+    /// Sequence number of the next state report.
     next_header_id: u32,
     /// Random stops of this robot, if disturbances are on.
     stops: Option<StopGenerator>,
-    /// The state messages the controller asked for, with the tick they were made
-    /// at (only with a message delay, S58).
-    seen: VecDeque<(u64, State)>,
+    /// The state reports asked for, with the tick they were made at (only with a
+    /// message delay, S58).
+    seen: VecDeque<(u64, FromRobot)>,
     /// The last step in which the protective field stopped the robot.
     obstructed_tick: Option<u64>,
 }
 
-/// A message on its way to a robot (S58).
+/// What is on its way to a robot (S58).
 #[derive(Debug)]
 enum Delivery {
-    Order(Order),
-    InstantActions(InstantActions),
-    Responses(vda5050::responses::Responses),
-    ZoneSet(vda5050::zone_set::ZoneSetMessage),
+    Message(ToRobotBody),
+    Unread(Unread),
 }
 
 #[derive(Debug)]
@@ -170,8 +197,9 @@ pub struct World {
     /// The power (W) of the chargers, and the nodes where they are ([`World::set_chargers`]).
     charger_power_w: Option<f64>,
     charger_nodes: Vec<NodeIdx>,
-    /// Messages to the robots that are on their way: (tick they arrive, message).
-    inbox: VecDeque<(u64, Delivery)>,
+    /// Messages to the robots that are on their way: (tick they arrive, index of
+    /// the robot, message).
+    inbox: VecDeque<(u64, usize, Delivery)>,
     /// How many steps a message takes, each way (S58); 0 = none.
     message_delay: u64,
     /// Seed and spec of the random stops; robots added later get them too.
@@ -216,8 +244,11 @@ pub struct World {
     doors: Vec<Door>,
     /// The door that guards an edge → index into `doors`.
     door_of_edge: HashMap<EdgeIdx, usize>,
-    /// Passage width of the doors by edge id (for robots added later).
-    door_widths: HashMap<String, f64>,
+    /// Passage width of the doors by edge (for robots added later).
+    door_widths: HashMap<EdgeIdx, f64>,
+    /// For each door and each lift, the sequence number of its next report.
+    door_seqs: Vec<u32>,
+    lift_seqs: Vec<u32>,
     /// Broad phase of the collision check (S52): rebuilt every step.
     broad: AABB,
     /// The robots brake when another robot is in their protective field (S54).
@@ -284,6 +315,8 @@ impl World {
             doors: Vec::new(),
             door_of_edge: HashMap::new(),
             door_widths: HashMap::new(),
+            door_seqs: Vec::new(),
+            lift_seqs: Vec::new(),
             broad: AABB::new(),
             safety_stop: false,
             pass_through: false,
@@ -296,12 +329,12 @@ impl World {
     }
 
     /// Every message between the controller and the robots takes `steps` time
-    /// steps, in each direction (S58): orders, instant actions and responses
-    /// arrive at the robot `steps` steps after they were sent, and the state
-    /// messages the controller reads ([`World::state`]) are `steps` steps old.
-    /// 0 (the default) = instant. Set it before the run. The robot's answer to an
-    /// order is not returned any more ([`Reception::InTransit`]); it shows in the
-    /// state. Lift and door commands are not delayed.
+    /// steps, in each direction (S58): orders, instant actions, responses and
+    /// zone sets arrive at the robot `steps` steps after they were sent, and the
+    /// state reports the controller gets ([`World::reports`]) are `steps` steps
+    /// old. 0 (the default) = instant. Set it before the run. The robot's answer
+    /// to an order is not returned any more ([`Reception::InTransit`]); it shows
+    /// in the state. Lift and door commands are not delayed.
     pub fn set_message_delay(&mut self, steps: u64) {
         self.message_delay = steps;
     }
@@ -313,23 +346,19 @@ impl World {
 
     /// Deliver the messages whose time has come, oldest first.
     fn deliver_due(&mut self) {
-        while self.inbox.front().is_some_and(|(due, _)| *due <= self.tick) {
-            let Some((_, d)) = self.inbox.pop_front() else {
+        while self
+            .inbox
+            .front()
+            .is_some_and(|(due, _, _)| *due <= self.tick)
+        {
+            let Some((_, i, delivery)) = self.inbox.pop_front() else {
                 break;
             };
-            match d {
-                Delivery::Order(o) => {
-                    let _ = self.deliver_order(&o);
+            match delivery {
+                Delivery::Message(body) => {
+                    self.deliver(i, &body);
                 }
-                Delivery::InstantActions(m) => {
-                    let _ = self.deliver_instant_actions(&m);
-                }
-                Delivery::Responses(m) => {
-                    let _ = self.deliver_responses(&m);
-                }
-                Delivery::ZoneSet(m) => {
-                    let _ = self.deliver_zone_set(&m);
-                }
+                Delivery::Unread(unread) => self.deliver_unread(i, &unread),
             }
         }
     }
@@ -403,12 +432,12 @@ impl World {
         iso8601(ms)
     }
 
-    /// The robot's `factsheet` message (S61): the factsheet its spec was made
-    /// from, as the robot states it: its own `manufacturer` and `serialNumber`,
-    /// the protocol version of the world, and the time now. Not delayed by a
-    /// message delay (a controller asks for it once, when it starts). The
-    /// controller learns the robot's type from it (`manufacturer`,
-    /// `typeSpecification.seriesName`).
+    /// The robot's `factsheet` (S61): setup data, in the form of the VDA 5050
+    /// message. It is the factsheet the robot's spec was made from, as the robot
+    /// states it: its own `manufacturer` and `serialNumber`, the protocol version
+    /// of the world, and the time now. Not delayed by a message delay (a
+    /// controller asks for it once, when it starts). The controller learns the
+    /// robot's type from it (`manufacturer`, `typeSpecification.seriesName`).
     pub fn factsheet(&self, id: &RobotId) -> Result<Factsheet, WorldError> {
         let mut f = self.robots[self.find(id)?].robot.spec().factsheet.clone();
         f.header_id = 0;
@@ -448,7 +477,7 @@ impl World {
         robot.set_time(self.now_ms());
         robot.set_rides(self.rides.clone());
         robot.set_door_widths(self.door_widths.clone());
-        robot.set_door_edges(self.door_edge_ids());
+        robot.set_door_edges(self.door_edges());
         robot.set_pass_through(self.pass_through);
         if let (Some(zones), true) = (&self.zones, self.zones_on_robots) {
             robot.set_zones(zones.clone(), ZoneRequestTiming::default());
@@ -620,24 +649,22 @@ impl World {
         for &e in &door.spec().edges {
             self.door_of_edge.insert(e, index);
             if let Some(w) = door.spec().passage_width {
-                self.door_widths.insert(self.graph.edges[e].id.clone(), w);
+                self.door_widths.insert(e, w);
             }
         }
-        let door_edges = self.door_edge_ids();
+        let door_edges = self.door_edges();
         for e in &mut self.robots {
             e.robot.set_door_widths(self.door_widths.clone());
             e.robot.set_door_edges(door_edges.clone());
         }
         self.doors.push(door);
+        self.door_seqs.push(0);
         Ok(())
     }
 
-    /// The ids of all edges that have a door.
-    fn door_edge_ids(&self) -> HashSet<String> {
-        self.door_of_edge
-            .keys()
-            .map(|&e| self.graph.edges[e].id.clone())
-            .collect()
+    /// All edges that have a door.
+    fn door_edges(&self) -> HashSet<EdgeIdx> {
+        self.door_of_edge.keys().copied().collect()
     }
 
     /// Let the robots drive **through** nodes without stopping where they can
@@ -665,8 +692,7 @@ impl World {
         }
         let mut occupied = vec![false; self.doors.len()];
         for e in &self.robots {
-            if let Some(id) = e.robot.driving_edge_id()
-                && let Some(edge) = self.graph.edge_idx(id)
+            if let Some(edge) = e.robot.driving_edge()
                 && let Some(&d) = self.door_of_edge.get(&edge)
             {
                 occupied[d] = true;
@@ -675,16 +701,11 @@ impl World {
         for (d, door) in self.doors.iter_mut().enumerate() {
             door.step(self.dt, occupied[d]);
         }
-        let closed: HashSet<String> = self
+        let closed: HashSet<EdgeIdx> = self
             .doors
             .iter()
             .filter(|d| !d.is_open())
-            .flat_map(|d| {
-                d.spec()
-                    .edges
-                    .iter()
-                    .map(|&e| self.graph.edges[e].id.clone())
-            })
+            .flat_map(|d| d.spec().edges.iter().copied())
             .collect();
         for e in &mut self.robots {
             e.robot.set_closed_door_edges(closed.clone());
@@ -726,6 +747,41 @@ impl World {
     /// What the doors are like (edges, width, times), in the order they were added.
     pub fn door_specs(&self) -> Vec<DoorSpec> {
         self.doors.iter().map(|d| d.spec().clone()).collect()
+    }
+
+    /// A command to the door the header names: the controller wants it open, or is
+    /// done with it (see [`Door::open`], [`Door::release`]).
+    pub fn command_door(&mut self, message: &ToDoor) -> Result<(), WorldError> {
+        let no = message.header.device;
+        let door = usize::try_from(no.0)
+            .ok()
+            .and_then(|i| self.doors.get_mut(i))
+            .ok_or(WorldError::UnknownDoorNo(no))?;
+        match message.command {
+            DoorCommand::Open => door.open(),
+            DoorCommand::Release => door.release(),
+        }
+        Ok(())
+    }
+
+    /// The state of every door, in the order they were added.
+    pub fn door_reports(&mut self) -> Vec<FromDoor> {
+        let time = Millis(self.now_ms());
+        (0u32..)
+            .zip(self.doors.iter().zip(&mut self.door_seqs))
+            .map(|(i, (door, seq))| {
+                let header = DeviceHeader {
+                    device: DoorNo(i),
+                    seq: *seq,
+                    time,
+                };
+                *seq = seq.wrapping_add(1);
+                FromDoor {
+                    header,
+                    door: door_phase(door.status().state),
+                }
+            })
+            .collect()
     }
 
     /// Add a lift (a peripheral, see [`crate::lift`]). Its floors are map indices
@@ -772,6 +828,7 @@ impl World {
             e.robot.set_rides(self.rides.clone());
         }
         self.lifts.push(lift);
+        self.lift_seqs.push(0);
         Ok(())
     }
 
@@ -822,16 +879,77 @@ impl World {
     /// The robot in the cabin of lift `lift_id`, if any (one robot at a time).
     pub fn lift_rider(&self, lift_id: &str) -> Result<Option<&RobotId>, WorldError> {
         let li = self.lift_index(lift_id)?;
-        Ok(self
-            .robots
-            .iter()
-            .find(|r| {
-                r.robot.is_riding()
-                    && r.robot
-                        .ride_edge()
-                        .is_some_and(|e| self.lift_of_ride(e) == Some(li))
-            })
-            .map(|r| &r.id))
+        Ok(self.rider(li).map(|i| &self.robots[i].id))
+    }
+
+    /// The index of the robot in the cabin of lift `li`.
+    fn rider(&self, li: usize) -> Option<usize> {
+        self.robots.iter().position(|r| {
+            r.robot.is_riding()
+                && r.robot
+                    .ride_edge()
+                    .is_some_and(|e| self.lift_of_ride(e) == Some(li))
+        })
+    }
+
+    /// A command to the lift the header names: bring the cabin to a floor and open
+    /// a door there, or close the open door (see [`Lift::call_door`],
+    /// [`Lift::release`]).
+    pub fn command_lift(&mut self, message: &ToLift) -> Result<(), WorldError> {
+        let no = message.header.device;
+        let lift = usize::try_from(no.0)
+            .ok()
+            .and_then(|i| self.lifts.get_mut(i))
+            .ok_or(WorldError::UnknownLiftNo(no))?;
+        match message.command {
+            LiftCommand::Release => lift.release(),
+            LiftCommand::Call { map, car_door } => {
+                let floor = lift
+                    .spec()
+                    .floors
+                    .iter()
+                    .position(|&m| m == map)
+                    .ok_or_else(|| WorldError::UnknownMap(format!("number {map}")))?;
+                let door = usize::try_from(car_door)
+                    .ok()
+                    .filter(|&d| d < lift.spec().doors.len())
+                    .ok_or_else(|| WorldError::UnknownDoor(format!("number {car_door}")))?;
+                lift.call_door(floor, door).map_err(WorldError::Lift)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The state of every lift, in the order they were added, with the robot in its
+    /// cabin (which a real lift could not name).
+    pub fn lift_reports(&mut self) -> Vec<FromLift> {
+        let time = Millis(self.now_ms());
+        let mut reports = Vec::with_capacity(self.lifts.len());
+        for (i, li) in (0u32..).zip(0..self.lifts.len()) {
+            let status = self.lifts[li].status();
+            // (the cabin is at a floor of the lift and uses one of its doors)
+            let (Some(&map), Ok(car_door)) = (
+                self.lifts[li].spec().floors.get(status.floor),
+                u32::try_from(status.door_index),
+            ) else {
+                continue;
+            };
+            let occupant = self.rider(li).and_then(number);
+            let header = DeviceHeader {
+                device: LiftNo(i),
+                seq: self.lift_seqs[li],
+                time,
+            };
+            self.lift_seqs[li] = self.lift_seqs[li].wrapping_add(1);
+            reports.push(FromLift {
+                header,
+                map,
+                car_door,
+                door: door_phase(status.door),
+                occupant,
+            });
+        }
+        reports
     }
 
     fn lift_index(&self, id: &str) -> Result<usize, WorldError> {
@@ -937,7 +1055,7 @@ impl World {
 
     /// Set the zone set of the site (already checked against the layout) **without**
     /// giving it to the robots (S62): the controller reads it (`zones()`), and
-    /// must send it to each robot as a `zoneSet` message and enable it with the
+    /// must send it to each robot in a zone set message and enable it with the
     /// `enableZoneSet` instant action. Until then the robots have no zones and
     /// state no requests.
     pub fn set_site_zones(&mut self, zones: Zones) {
@@ -1032,11 +1150,9 @@ impl World {
         Ok(self.robots[i].robot.battery().map(|b| b.percent()))
     }
 
-    /// The robot's zone requests as it states them now.
-    pub fn zone_requests(
-        &self,
-        id: &RobotId,
-    ) -> Result<Vec<vda5050::state::ZoneRequest>, WorldError> {
+    /// The robot's zone requests as it states them now (its report says them too,
+    /// with a message delay later).
+    pub fn zone_requests_of(&self, id: &RobotId) -> Result<Vec<ZoneRequest>, WorldError> {
         Ok(self.robots[self.find(id)?].robot.zone_requests())
     }
 
@@ -1092,19 +1208,13 @@ impl World {
     /// drives; `None` if its order names neither.
     fn place_of(&self, i: usize, now: &Glance) -> Option<Place> {
         let p = self.robots[i].robot.pose();
-        let last = now.last_node.and_then(|n| self.graph.node_idx(&n.node_id));
-        let next = now
-            .remaining_nodes
-            .first()
-            .and_then(|n| self.graph.node_idx(&n.node_id));
+        let last = now.last_node.map(|n| n.node);
+        let next = now.remaining_nodes.first().map(|n| n.node);
         let on = [last, next].into_iter().flatten().find(|&n| {
             let node = &self.graph.nodes[n];
             node.map == p.map && (p.x - node.x).hypot(p.y - node.y) <= START_NODE_TOLERANCE
         });
-        let edge = || {
-            let first = now.remaining_edges.first()?;
-            self.graph.edge_idx(&first.edge_id)
-        };
+        let edge = || now.remaining_edges.first().map(|e| e.edge);
         on.map(Place::Node)
             .or_else(|| edge().map(Place::Edge))
             .or_else(|| last.map(Place::Node))
@@ -1112,13 +1222,12 @@ impl World {
 
     /// The world as it is now.
     pub fn snapshot(&self) -> Snapshot {
-        let header = plain_header();
         let robots = self
             .robots
             .iter()
             .enumerate()
             .map(|(i, e)| {
-                let state = e.robot.state(&self.graph, &header);
+                let state = e.robot.report();
                 let p = e.robot.pose();
                 // (a robot with an empty battery stands still: it is held, also when
                 // it was standing already)
@@ -1144,36 +1253,37 @@ impl World {
                     status,
                     // along the heading (negative backwards); an omnidirectional robot
                     // that moves sideways: the speed over the ground
-                    speed: state.velocity.as_ref().map_or(0.0, |v| {
-                        let (x, y) = (v.vx.unwrap_or(0.0), v.vy.unwrap_or(0.0));
-                        if y == 0.0 { x } else { x.hypot(y) }
-                    }),
-                    order_id: state.order_id.clone(),
-                    last_node: self.graph.node_idx(&state.last_node_id),
+                    speed: state
+                        .velocity
+                        .as_ref()
+                        .map_or(0.0, |v| if v.vy == 0.0 { v.vx } else { v.vx.hypot(v.vy) }),
+                    order_id: state
+                        .order_id
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default(),
+                    // (a robot that reports no last node counts as at the node
+                    // with the empty id, if a layout has one)
+                    last_node: state
+                        .route
+                        .last_node()
+                        .map(|n| n.node)
+                        .or_else(|| self.graph.node_idx("")),
                     released_nodes: Vec::new(),
                     released_edges: Vec::new(),
                     planned_nodes: Vec::new(),
                     planned_edges: Vec::new(),
                     charge: e.robot.battery().map(|b| b.percent()),
-                    charging: state.power_supply.charging,
+                    charging: state.charging,
                     waiting: self.counted_wait(i),
                 };
-                for n in &state.node_states {
-                    if let Some(i) = self.graph.node_idx(&n.node_id) {
-                        if n.released {
-                            snap.released_nodes.push(i);
-                        } else {
-                            snap.planned_nodes.push(i);
-                        }
-                    }
-                }
-                for ed in &state.edge_states {
-                    if let Some(i) = self.graph.edge_idx(&ed.edge_id) {
-                        if ed.released {
-                            snap.released_edges.push(i);
-                        } else {
-                            snap.planned_edges.push(i);
-                        }
+                for (at, ahead) in (0u32..).zip(state.route.ahead()) {
+                    if at < state.route.released() {
+                        snap.released_nodes.push(ahead.node);
+                        snap.released_edges.push(ahead.edge);
+                    } else {
+                        snap.planned_nodes.push(ahead.node);
+                        snap.planned_edges.push(ahead.edge);
                     }
                 }
                 snap
@@ -1244,8 +1354,8 @@ impl World {
     }
 
     /// Who waits, why and for whom (the rule is in [`crate::waiting`]), from what
-    /// the robots' state messages report, read from the robots directly (no
-    /// message is built); then look for deadlocks among these waits.
+    /// the robots' state reports say, read from the robots directly (no report is
+    /// built); then look for deadlocks among these waits.
     fn check_deadlocks(&mut self) {
         // a robot in a lift cabin stands on no node (map = none)
         let poses: Vec<Pose> = self
@@ -1272,10 +1382,10 @@ impl World {
         let glances: Vec<_> = self.robots.iter().map(|e| e.robot.glance()).collect();
         // Who holds a node: the robot that has it released ahead of it (a reserved
         // node, S73). The lowest index if several do.
-        let mut released_by: HashMap<&str, usize> = HashMap::new();
+        let mut released_by: HashMap<NodeIdx, usize> = HashMap::new();
         for (j, g) in glances.iter().enumerate().rev() {
             for n in g.remaining_nodes.iter().filter(|n| n.released) {
-                released_by.insert(n.node_id.as_str(), j);
+                released_by.insert(n.node, j);
             }
         }
         let waits: Vec<Option<Wait>> = self
@@ -1306,7 +1416,7 @@ impl World {
                         blocker: self.nearest(i, &held.blockers),
                     });
                 }
-                let node = &self.graph.nodes[self.graph.node_idx(&next.node_id)?];
+                let node = &self.graph.nodes[next.node];
                 // the robot with the lowest index on the node (within the tolerance)
                 let (cx, cy) = (cell(node.x), cell(node.y));
                 let standing = (-1..=1)
@@ -1325,12 +1435,8 @@ impl World {
                     })
                     .min();
                 // else the node is reserved, though empty: its holder has it released
-                let blocker = standing.or_else(|| {
-                    released_by
-                        .get(next.node_id.as_str())
-                        .copied()
-                        .filter(|&j| j != i)
-                });
+                let blocker =
+                    standing.or_else(|| released_by.get(&next.node).copied().filter(|&j| j != i));
                 blocker.map(|j| Wait {
                     reason: WaitReason::Release,
                     blocker: Some(j),
@@ -1481,100 +1587,71 @@ impl World {
         }
     }
 
-    /// Deliver an `order`; the robot is the one named in the message.
-    /// Without a message delay the robot answers at once; with one the order is
-    /// on its way and the answer is [`Reception::InTransit`].
-    pub fn send_order(&mut self, order: &Order) -> Result<Reception, WorldError> {
-        let id = RobotId::new(&order.manufacturer, &order.serial_number);
-        self.find(&id)?;
+    /// Send a message to the robot its header names: an order, instant actions,
+    /// responses or a zone set (S62: the robot stores it disabled, and the
+    /// `enableZoneSet` instant action enables it).
+    ///
+    /// For an order the robot's answer is returned: without a message delay at
+    /// once, with one [`Reception::InTransit`]. `None` for the other messages.
+    pub fn send(&mut self, message: &ToRobot) -> Result<Option<Reception>, WorldError> {
+        let i = self.numbered(message.header.robot)?;
         if self.message_delay > 0 {
-            let due = self.tick + self.message_delay;
-            self.inbox.push_back((due, Delivery::Order(order.clone())));
-            return Ok(Reception::InTransit);
+            self.queue(i, Delivery::Message(message.body.clone()));
+            let order = matches!(message.body, ToRobotBody::Order(_));
+            return Ok(order.then_some(Reception::InTransit));
         }
-        self.deliver_order(order)
+        Ok(self.deliver(i, &message.body))
     }
 
-    fn deliver_order(&mut self, order: &Order) -> Result<Reception, WorldError> {
-        let id = RobotId::new(&order.manufacturer, &order.serial_number);
-        let i = self.find(&id)?;
-        Ok(self.robots[i].robot.receive_order(&self.graph, order))
-    }
-
-    /// Deliver a `responses` message (answers to the robot's zone requests).
-    pub fn send_responses(
-        &mut self,
-        msg: &vda5050::responses::Responses,
-    ) -> Result<(), WorldError> {
-        let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
-        self.find(&id)?;
+    /// Something sent to robot `robot` could not be read (see
+    /// [`Robot::take_unread`]). It takes the way of a message: with a message
+    /// delay it arrives later, in its turn.
+    pub fn send_unread(&mut self, robot: RobotNo, unread: Unread) -> Result<(), WorldError> {
+        let i = self.numbered(robot)?;
         if self.message_delay > 0 {
-            let due = self.tick + self.message_delay;
-            self.inbox
-                .push_back((due, Delivery::Responses(msg.clone())));
-            return Ok(());
+            self.queue(i, Delivery::Unread(unread));
+        } else {
+            self.deliver_unread(i, &unread);
         }
-        self.deliver_responses(msg)
+        Ok(())
     }
 
-    fn deliver_responses(&mut self, msg: &vda5050::responses::Responses) -> Result<(), WorldError> {
-        let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
-        let i = self.find(&id)?;
+    /// Put what is sent to robot `i` on its way.
+    fn queue(&mut self, i: usize, delivery: Delivery) {
+        let due = self.tick.saturating_add(self.message_delay);
+        self.inbox.push_back((due, i, delivery));
+    }
+
+    /// A message arrives at robot `i`; the answer to an order is returned.
+    fn deliver(&mut self, i: usize, body: &ToRobotBody) -> Option<Reception> {
         let now_ms = self.now_ms();
-        self.robots[i].robot.set_time(now_ms);
-        self.robots[i].robot.receive_responses(msg);
-        Ok(())
-    }
-
-    /// Deliver an `instantActions` message.
-    pub fn send_instant_actions(&mut self, msg: &InstantActions) -> Result<(), WorldError> {
-        let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
-        self.find(&id)?;
-        if self.message_delay > 0 {
-            let due = self.tick + self.message_delay;
-            self.inbox
-                .push_back((due, Delivery::InstantActions(msg.clone())));
-            return Ok(());
+        let robot = &mut self.robots[i].robot;
+        match body {
+            ToRobotBody::Order(order) => return Some(robot.take_order(&self.graph, order)),
+            ToRobotBody::InstantActions(actions) => {
+                robot.take_instant_actions(&self.graph, actions);
+            }
+            ToRobotBody::Responses(responses) => {
+                robot.set_time(now_ms);
+                robot.take_responses(responses);
+            }
+            ToRobotBody::ZoneSet(zone_set) => {
+                robot.set_time(now_ms);
+                robot.take_zone_set(&self.graph, zone_set);
+            }
         }
-        self.deliver_instant_actions(msg)
+        None
     }
 
-    fn deliver_instant_actions(&mut self, msg: &InstantActions) -> Result<(), WorldError> {
-        let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
-        let i = self.find(&id)?;
-        self.robots[i]
-            .robot
-            .receive_instant_actions(&self.graph, msg);
-        Ok(())
-    }
-
-    /// Deliver a `zoneSet` message (S62): the robot stores the zone set, disabled
-    /// (see [`Robot::receive_zone_set`]); the controller enables it with the
-    /// `enableZoneSet` instant action. With a message delay it is on its way.
-    pub fn send_zone_set(
-        &mut self,
-        msg: &vda5050::zone_set::ZoneSetMessage,
-    ) -> Result<(), WorldError> {
-        let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
-        self.find(&id)?;
-        if self.message_delay > 0 {
-            let due = self.tick + self.message_delay;
-            self.inbox.push_back((due, Delivery::ZoneSet(msg.clone())));
-            return Ok(());
-        }
-        self.deliver_zone_set(msg)
-    }
-
-    fn deliver_zone_set(
-        &mut self,
-        msg: &vda5050::zone_set::ZoneSetMessage,
-    ) -> Result<(), WorldError> {
-        let id = RobotId::new(&msg.manufacturer, &msg.serial_number);
-        let i = self.find(&id)?;
+    /// Something that could not be read arrives at robot `i`.
+    fn deliver_unread(&mut self, i: usize, unread: &Unread) {
         let now_ms = self.now_ms();
-        self.robots[i].robot.set_time(now_ms);
-        self.robots[i].robot.receive_zone_set(&self.graph, msg);
-        Ok(())
+        let robot = &mut self.robots[i].robot;
+        if matches!(unread, Unread::ZoneSet(_)) {
+            // (how long its error is reported is counted from now)
+            robot.set_time(now_ms);
+        }
+        robot.take_unread(&self.graph, unread);
     }
 
     /// What the robot is doing now (turning, driving, waiting for a lift, …).
@@ -1582,32 +1659,56 @@ impl World {
         Ok(self.robots[self.find(id)?].robot.phase())
     }
 
-    /// The robot's state message as the controller gets it: the state now, or with
-    /// a message delay ([`World::set_message_delay`]) the one the robot sent that
-    /// many steps ago (before the first one has arrived, the first state). Every
-    /// call makes a new message with the next `headerId`.
-    pub fn state(&mut self, id: &RobotId) -> Result<State, WorldError> {
-        let i = self.find(id)?;
+    /// The number of the robot `id`.
+    pub fn robot_no(&self, id: &RobotId) -> Option<RobotNo> {
+        self.index(id).and_then(number)
+    }
+
+    /// The state report of robot `robot` as the controller gets it: the state now,
+    /// or with a message delay ([`World::set_message_delay`]) the one the robot
+    /// sent that many steps ago (before the first one has arrived, the first
+    /// one). Every call makes a new report with the next sequence number.
+    pub fn report(&mut self, robot: RobotNo) -> Result<FromRobot, WorldError> {
+        let i = self.numbered(robot)?;
+        Ok(self.report_of(i, robot))
+    }
+
+    /// The report of every robot, in the order they were added (see
+    /// [`World::report`]). Call it once in every step: with a message delay a
+    /// report is on its way from the call that made it.
+    pub fn reports(&mut self) -> Vec<FromRobot> {
+        (0..self.robots.len())
+            .filter_map(|i| Some((i, number(i)?)))
+            .map(|(i, robot)| self.report_of(i, robot))
+            .collect()
+    }
+
+    /// The report of robot `i`, whose number is `robot`.
+    fn report_of(&mut self, i: usize, robot: RobotNo) -> FromRobot {
+        let time = Millis(self.now_ms());
+        let (tick, delay) = (self.tick, self.message_delay);
+        let entry = &mut self.robots[i];
         let header = Header {
-            header_id: self.robots[i].next_header_id,
-            timestamp: self.timestamp(),
-            version: PROTOCOL_VERSION.to_string(),
-            manufacturer: id.manufacturer.clone(),
-            serial_number: id.serial_number.clone(),
+            robot,
+            seq: entry.next_header_id,
+            time,
         };
-        self.robots[i].next_header_id += 1;
-        let now = self.robots[i].robot.state(&self.graph, &header);
-        if self.message_delay == 0 {
-            return Ok(now);
+        entry.next_header_id = entry.next_header_id.wrapping_add(1);
+        let now = FromRobot {
+            header,
+            state: entry.robot.report(),
+        };
+        if delay == 0 {
+            return now;
         }
-        let due = self.tick.saturating_sub(self.message_delay);
-        let seen = &mut self.robots[i].seen;
-        seen.push_back((self.tick, now));
-        // keep the newest message that has arrived by now (made at or before `due`)
+        let due = tick.saturating_sub(delay);
+        let seen = &mut entry.seen;
+        seen.push_back((tick, now));
+        // keep the newest report that has arrived by now (made at or before `due`)
         while seen.len() >= 2 && seen[1].0 <= due {
             seen.pop_front();
         }
-        Ok(seen[0].1.clone())
+        seen[0].1.clone()
     }
 
     fn index(&self, id: &RobotId) -> Option<usize> {
@@ -1618,15 +1719,26 @@ impl World {
         self.index(id)
             .ok_or_else(|| WorldError::UnknownRobot(id.clone()))
     }
+
+    /// The index of the robot with the number `no`.
+    fn numbered(&self, no: RobotNo) -> Result<usize, WorldError> {
+        usize::try_from(no.slot())
+            .ok()
+            .filter(|&i| i < self.robots.len() && no.generation() == 0)
+            .ok_or(WorldError::UnknownRobotNo(no))
+    }
 }
 
-/// A header for state messages that are only read inside the simulator.
-fn plain_header() -> Header {
-    Header {
-        header_id: 0,
-        timestamp: String::new(),
-        version: PROTOCOL_VERSION.to_string(),
-        manufacturer: String::new(),
-        serial_number: String::new(),
+/// The number of robot `i`.
+fn number(i: usize) -> Option<RobotNo> {
+    u32::try_from(i).ok().map(|slot| RobotNo::new(slot, 0))
+}
+
+fn door_phase(state: DoorState) -> DoorPhase {
+    match state {
+        DoorState::Closed => DoorPhase::Closed,
+        DoorState::Opening => DoorPhase::Opening,
+        DoorState::Open => DoorPhase::Open,
+        DoorState::Closing => DoorPhase::Closing,
     }
 }

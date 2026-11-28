@@ -16,8 +16,8 @@
 //! - To and from robots: only what VDA 5050 can express, and of that what botsim
 //!   writes or reads. Doors and lifts are outside VDA 5050.
 //!
-//! The fleet server's controller (`botsim-server`) speaks them; `botsim-bridge`
-//! translates them for the simulator through `botsim-vda`.
+//! The fleet server's controller (`botsim-server`) and the simulator
+//! (`botsim-core`) speak them; `botsim-bridge` passes them between the two.
 //!
 //! Depends on no botsim crate but `botsim-model`.
 

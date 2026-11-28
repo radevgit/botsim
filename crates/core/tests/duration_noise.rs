@@ -3,14 +3,17 @@ use botsim_core::disturbances::DisturbanceError;
 use botsim_core::jobs::Rng;
 use botsim_core::robot::Reception::Accepted;
 use botsim_core::world::{World, WorldError};
+use botsim_link::order::Blocking;
 use botsim_model::graph::Graph;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
-use vda5050::common::BlockingType;
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vda5050::state::ActionStatus::Running;
 use vdma_lif::Lif;
+
+mod vda_port;
+use vda_port::VdaWorld;
 
 const DT: f64 = 0.05;
 
@@ -18,7 +21,7 @@ fn pick() -> ActionSpec {
     ActionSpec {
         action_id: "a".into(),
         action_type: "pick".into(),
-        blocking: BlockingType::Hard,
+        blocking: Blocking::Hard,
     }
 }
 

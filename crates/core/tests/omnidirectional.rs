@@ -12,6 +12,9 @@ use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;
 
+mod vda_port;
+use vda_port::VdaWorld;
+
 const DT: f64 = 0.05;
 
 fn id() -> RobotId {
@@ -150,7 +153,7 @@ fn the_observer_shows_the_speed_over_the_ground_of_a_sideways_robot() {
 #[test]
 fn the_state_with_a_sideways_speed_is_a_valid_state_message() {
     let schema: serde_json::Value =
-        serde_json::from_str(include_str!("data/vda5050_state.schema.json")).unwrap();
+        serde_json::from_str(include_str!("../../vda/tests/data/state.schema")).unwrap();
     let validator = jsonschema::validator_for(&schema).unwrap();
     let mut w = world("OMNIDIRECTIONAL");
     assert_eq!(w.send_order(&order("")), Ok(Reception::Accepted));

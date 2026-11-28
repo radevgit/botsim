@@ -38,19 +38,16 @@ impl NodeGrid {
     }
 
     /// The node nearest to (`x`, `y`) on `map` within `tolerance` metres
-    /// (at most one cell, 1 m).
+    /// (at most one cell, 1 m). The position is a robot's report: any numbers.
     pub fn node_near(&self, map: usize, x: f64, y: f64, tolerance: f64) -> Option<NodeIdx> {
         debug_assert!(tolerance <= CELL);
         let (cx, cy) = (cell(x), cell(y));
         let mut best: Option<(f64, NodeIdx)> = None;
         for dx in -1..=1 {
             for dy in -1..=1 {
-                for &n in self
-                    .cells
-                    .get(&(map, cx + dx, cy + dy))
-                    .into_iter()
-                    .flatten()
-                {
+                // (the cell of an enormous coordinate is the last there is)
+                let at = (map, cx.saturating_add(dx), cy.saturating_add(dy));
+                for &n in self.cells.get(&at).into_iter().flatten() {
                     let (_, nx, ny) = self.at[n];
                     let d = (nx - x).hypot(ny - y);
                     if d <= tolerance && best.is_none_or(|(bd, bn)| d < bd || (d == bd && n < bn)) {

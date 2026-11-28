@@ -12,9 +12,10 @@
 //! | Fleet server | [`to_robot_to_vda`](translator::Translator::to_robot_to_vda) | [`state_from_vda`](translator::Translator::state_from_vda) |
 //! | Robot | [`state_to_vda`](translator::Translator::state_to_vda) | [`order_from_vda`](translator::Translator::order_from_vda), [`instant_actions_from_vda`](translator::Translator::instant_actions_from_vda), [`responses_from_vda`](translator::Translator::responses_from_vda), [`zone_set_from_vda`](translator::Translator::zone_set_from_vda) |
 //!
-//! A zone set that is not in a message, such as the one of a site's configuration,
-//! is read with
-//! [`zone_set_content_from_vda`](translator::Translator::zone_set_content_from_vda).
+//! A zone set that is not in a message is read with
+//! [`zone_set_content_from_vda`](translator::Translator::zone_set_content_from_vda),
+//! with the checks of a message. The zone set of a site's configuration, which has
+//! its own checks, is made into `link` types with [`zone_set_of_setup`].
 //!
 //! Whatever cannot be translated is reported as an [`Issue`](report::Issue), never
 //! a panic. A message is either refused whole (`Err`) or translated with the parts
@@ -79,3 +80,4 @@ pub mod translator;
 mod zone_set;
 
 pub use header::VERSION;
+pub use zone_set::zone_set_of_setup;

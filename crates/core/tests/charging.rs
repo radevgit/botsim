@@ -13,6 +13,9 @@ use vda5050::instant_actions::InstantActions;
 use vda5050::state::ActionStatus;
 use vdma_lif::Lif;
 
+mod vda_port;
+use vda_port::VdaWorld;
+
 const DT: f64 = 0.05;
 
 /// The three-node layout; the station C1 of type `charger` has node A, the

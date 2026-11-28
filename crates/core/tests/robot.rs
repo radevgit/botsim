@@ -1,6 +1,5 @@
 use botsim_core::actions::ActionTimes;
 use botsim_core::robot::{Reception, Reception::Accepted, Robot};
-use botsim_core::state_report::Header;
 use botsim_model::errors::ErrorType::{self, *};
 use botsim_model::graph::Graph;
 use botsim_model::spec::RobotSpec;
@@ -8,6 +7,9 @@ use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vda5050::state::State;
 use vdma_lif::Lif;
+
+mod vda_port;
+use vda_port::{Header, VdaRobot};
 
 const DT: f64 = 0.05;
 
@@ -279,6 +281,65 @@ fn order_updates_are_checked_for_their_update_id_and_start() {
     assert_eq!(state(&r).last_node_id, "C");
 }
 
+/// The `sequenceId`s run on through the updates of an order (VDA 5050 §6.1), so
+/// the first node of an update has that of the node the base ends at.
+#[test]
+fn an_update_whose_first_node_has_another_sequence_id_is_refused() {
+    let g = graph();
+    let mut r = robot("A");
+    let first = order(
+        "o1",
+        0,
+        &[("A", 0, true), ("B", 2, true), ("C", 4, false)],
+        &[("A-B", 1, true), ("B-C", 3, false)],
+    );
+    assert_eq!(r.receive_order(&g, &first), Accepted);
+    // while the robot is on its way to the decision point, and when it is there
+    for steps in [10, 1000] {
+        for _ in 0..steps {
+            r.step(DT);
+        }
+        // lower and higher than the 2 of B at the end of the base
+        for wrong in [0, 4] {
+            let update = order(
+                "o1",
+                1,
+                &[("B", wrong, true), ("C", wrong + 2, true)],
+                &[("B-C", wrong + 1, true)],
+            );
+            let before = state(&r);
+            assert_eq!(
+                r.receive_order(&g, &update),
+                Reception::Rejected(ValidationFailure),
+                "{wrong}"
+            );
+            let after = state(&r);
+            assert_eq!(after.order_update_id, 0);
+            assert_eq!(after.node_states, before.node_states);
+            assert_eq!(after.last_node_sequence_id, before.last_node_sequence_id);
+            let error = after.errors.last().unwrap();
+            let references: Vec<_> = error
+                .error_references
+                .iter()
+                .flatten()
+                .map(|r| (r.reference_key.as_str(), r.reference_value.as_str()))
+                .collect();
+            assert_eq!(references, [("orderId", "o1"), ("orderUpdateId", "1")]);
+        }
+    }
+    // the update that continues the numbers is taken
+    let update = order(
+        "o1",
+        1,
+        &[("B", 2, true), ("C", 4, true)],
+        &[("B-C", 3, true)],
+    );
+    assert_eq!(r.receive_order(&g, &update), Accepted);
+    run_until_idle(&mut r);
+    let s = state(&r);
+    assert_eq!((s.last_node_id.as_str(), s.last_node_sequence_id), ("C", 4));
+}
+
 #[test]
 fn the_state_with_errors_is_schema_valid() {
     let g = graph();
@@ -286,7 +347,7 @@ fn the_state_with_errors_is_schema_valid() {
     r.receive_order(&g, &a_to_b("o1"));
     r.receive_order(&g, &b_to_c("o2")); // OTHER_ORDER_ACTIVE
     let schema: serde_json::Value =
-        serde_json::from_str(include_str!("data/vda5050_state.schema.json")).unwrap();
+        serde_json::from_str(include_str!("../../vda/tests/data/state.schema")).unwrap();
     let v = jsonschema::options()
         .should_validate_formats(true)
         .build(&schema)

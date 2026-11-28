@@ -1,7 +1,7 @@
 //! Lifts (elevators) as **peripherals** of the simulated world. They are not
 //! robots and not part of VDA 5050 (the standard leaves talking to lifts and doors
 //! to the fleet control), so a lift has its **own small command port** next to the
-//! VDA 5050 messages.
+//! messages of the robots.
 //!
 //! Robots ride a lift through its **stops** (S46): see [`LiftStop`] and
 //! `docs/rules.md` §7g. The world, not this type, moves the robots in and out.

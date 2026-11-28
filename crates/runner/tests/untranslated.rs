@@ -1,5 +1,6 @@
-//! What cannot be translated between the world and the controller shows in the
-//! summary, and the key is not there when everything can.
+//! A run translates nothing between the world and the controller, so there is
+//! nothing in the summary about it, also for a zone set that a connection through
+//! VDA 5050 would refuse (`botsim-bridge`, `tests/untranslated.rs`).
 
 use std::path::{Path, PathBuf};
 
@@ -26,29 +27,18 @@ fn run(file: &str) -> Summary {
 
 #[test]
 fn a_zone_set_that_cannot_be_translated_is_in_the_summary() {
-    // a zone with an empty id: the scenario takes it, the translator does not, and
-    // no robot gets a task
+    // a zone with an empty id: the scenario takes it, and as nothing is
+    // translated the robots get their tasks, as in botsim 0.1
     let r = run("zones_empty_id.json");
-    assert_eq!((r.jobs.done, r.jobs.in_progress), (0, 0), "{:?}", r.jobs);
-    assert!(r.jobs.waiting_for_robot > 0);
-    let untranslated = r.untranslated.expect("in the summary");
-    assert_eq!(untranslated.total, 1);
-    let [case] = &untranslated.cases[..] else {
-        panic!("one case: {untranslated:?}");
-    };
-    assert_eq!(
-        (case.what.as_str(), case.of.as_str(), case.refused),
-        ("site zone set", "ring-zones", true)
-    );
-    assert_eq!((case.first_time, case.count), (0.0, 1));
-    assert!(case.reason.contains("zoneId"), "{}", case.reason);
+    assert!(r.jobs.done > 0, "{:?}", r.jobs);
+    let json = serde_json::to_value(&r).unwrap();
+    assert!(json.get("untranslated").is_none());
 }
 
 #[test]
 fn a_run_that_translates_everything_says_nothing() {
     let r = run("zones.json");
     assert!(r.jobs.done > 0, "{:?}", r.jobs);
-    assert_eq!(r.untranslated, None);
     let json = serde_json::to_value(&r).unwrap();
     assert!(json.get("untranslated").is_none());
 }

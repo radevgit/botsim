@@ -14,13 +14,13 @@ use std::sync::Arc;
 use crate::actions::{ActionQueue, ActionSpec, ActionTimes, TIME_EPSILON};
 use crate::motion::{Along, EdgeGoal, advance, rotate, rotate_in};
 use crate::order_route::{OrderRoute, PlanEdge, PlanNode};
+use botsim_link::ids::OrderId;
+use botsim_link::state::{ActionState, ActionStatus};
 use botsim_model::angle::{angle_diff, normalize_angle};
 use botsim_model::graph::{EdgeIdx, Graph, MapIdx, NodeIdx, Rotation, THREE_WHEEL_TOLERANCE};
-use botsim_model::orientation::{OrientationError, edge_heading};
+use botsim_model::orientation::{OrientationError, OrientationType, edge_heading};
 use botsim_model::path::Path;
 use botsim_model::spec::{Kinematics, Limits, RobotSpec};
-use vda5050::order::OrientationType;
-use vda5050::state::ActionStatus;
 
 /// Map (floor), position of the kinematic center in that map's coordinates, and
 /// heading. Metres, radians (CCW positive).
@@ -88,6 +88,10 @@ pub enum DriveError {
     },
     /// An order update does not start at the end of the base driven so far.
     NotContinuation { expected: String, found: String },
+    /// The first node of an order update has another `sequenceId` than the end
+    /// of the base driven so far: the numbers of an order run on through its
+    /// updates (VDA 5050 §6.1).
+    SequenceNotContinued { expected: u32, found: u32 },
 }
 
 impl fmt::Display for DriveError {
@@ -126,6 +130,10 @@ impl fmt::Display for DriveError {
             DriveError::NotContinuation { expected, found } => write!(
                 f,
                 "order update starts at node '{found}', but the base ends at node '{expected}'"
+            ),
+            DriveError::SequenceNotContinued { expected, found } => write!(
+                f,
+                "order update starts at sequenceId {found}, but the base ends at sequenceId {expected}"
             ),
         }
     }
@@ -169,21 +177,22 @@ impl From<EdgeIdx> for RouteEdge {
     }
 }
 
-/// The whole order the robot is executing (base and horizon), for the state message.
+/// The whole order the robot is executing (base and horizon), for the state report.
 /// Entry i of `nodes` is the node where segment i starts; `edges[i]` follows it.
 #[derive(Debug, Clone)]
 struct Plan {
-    order_id: String,
+    order_id: OrderId,
     order_update_id: u32,
     nodes: Vec<PlanNode>,
     edges: Vec<PlanEdge>,
 }
 
-/// Snapshot of what the VDA 5050 state message reports, taken from the driver.
+/// Snapshot of what the state report carries, taken from the driver.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Progress {
-    /// Empty if the driver was built from a bare route (no order).
-    pub order_id: String,
+    /// `None` if the driver was built from a bare route (no order), or the order
+    /// has an empty `orderId`.
+    pub order_id: Option<OrderId>,
     pub order_update_id: u32,
     /// The last node reached (or the node the robot stands on); `None` without an order.
     pub last_node: Option<PlanNode>,
@@ -203,8 +212,8 @@ pub struct Progress {
     pub vy: f64,
     /// Rotation speed, rad/s (counter-clockwise positive).
     pub omega: f64,
-    /// All actions: id, type, status (queued ones, then those still to be triggered).
-    pub actions: Vec<(String, String, ActionStatus)>,
+    /// All actions: queued ones, then those still to be triggered.
+    pub actions: Vec<ActionState>,
 }
 
 /// See [`Driver::glance`]; the fields mean what they mean in [`Progress`].
@@ -456,7 +465,7 @@ pub struct Driver {
     arrive_actions: Vec<Vec<ActionSpec>>,
     times: ActionTimes,
     queue: ActionQueue,
-    /// The whole order, for the state message; `None` when built from a bare route.
+    /// The whole order, for the state report; `None` when built from a bare route.
     plan: Option<Plan>,
     /// Node where the released base ends (the decision point).
     base_end: NodeIdx,
@@ -669,18 +678,14 @@ impl Driver {
             .is_some_and(|e| self.blocked.contains(&e.sequence_id))
     }
 
-    /// The id of the layout edge the robot is on: it is driving and has left the
-    /// start node. `None` while turning, standing or at a node. (A door does not
-    /// close while a robot is on its edge.)
-    pub fn driving_edge_id(&self) -> Option<&str> {
+    /// The layout edge the robot is on: it is driving and has left the start
+    /// node. `None` while turning, standing or at a node. (A door does not close
+    /// while a robot is on its edge.)
+    pub fn driving_edge(&self) -> Option<EdgeIdx> {
         if self.phase != Phase::Driving || self.along.s <= 0.0 {
             return None;
         }
-        self.plan
-            .as_ref()?
-            .edges
-            .get(self.current)
-            .map(|e| e.edge_id.as_str())
+        self.plan.as_ref()?.edges.get(self.current).map(|e| e.edge)
     }
 
     /// Let the robot drive **through** nodes without stopping where it can (S66).
@@ -825,7 +830,7 @@ impl Driver {
         self.hold = self.hold.max(seconds);
     }
 
-    /// Id, type and status of every action queued so far (for the state message).
+    /// Id, type and status of every action queued so far (for the state report).
     pub fn action_states(&self) -> impl Iterator<Item = (&str, &str, ActionStatus)> {
         self.queue.states()
     }
@@ -884,6 +889,19 @@ impl Driver {
             return Err(DriveError::NotContinuation {
                 expected: graph.nodes[self.base_end].id.clone(),
                 found: graph.nodes[route.start].id.clone(),
+            });
+        }
+        // the numbers go on from the end of the base
+        if let Some(plan) = &self.plan
+            && let (Some(end), Some(first)) = (
+                plan.nodes.get(self.segments.len()),
+                route.plan_nodes.first(),
+            )
+            && end.sequence_id != first.sequence_id
+        {
+            return Err(DriveError::SequenceNotContinued {
+                expected: end.sequence_id,
+                found: first.sequence_id,
             });
         }
         // the update goes on from the end of what is planned: the heading the robot
@@ -957,26 +975,25 @@ impl Driver {
         }
     }
 
-    /// What the state message reports about the order and the robot's movement.
+    /// What the state report says about the order and the robot's movement.
     pub fn progress(&self) -> Progress {
         let (order_id, order_update_id) = match &self.plan {
-            Some(p) => (p.order_id.clone(), p.order_update_id),
-            None => (String::new(), 0),
+            Some(p) => (
+                Some(p.order_id.clone()).filter(|id| !id.as_str().is_empty()),
+                p.order_update_id,
+            ),
+            None => (None, 0),
         };
         let now = self.glance();
 
         // Actions: those queued so far, then those still to be triggered (WAITING).
-        let mut actions: Vec<(String, String, ActionStatus)> = self
-            .queue
-            .states()
-            .map(|(id, t, s)| (id.to_string(), t.to_string(), s))
-            .collect();
+        let mut actions: Vec<ActionState> = self.queue.reported().collect();
         for a in self.arrive_actions.iter().skip(self.current).flatten() {
-            actions.push((
-                a.action_id.clone(),
-                a.action_type.clone(),
-                ActionStatus::Waiting,
-            ));
+            actions.push(ActionState {
+                id: a.action_id.clone(),
+                kind: Some(a.action_type.clone()),
+                status: ActionStatus::Waiting,
+            });
         }
 
         let seg = self.segments.get(self.current);

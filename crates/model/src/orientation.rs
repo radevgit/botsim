@@ -14,10 +14,17 @@
 
 use std::fmt;
 
-use vda5050::order::OrientationType;
-
 use crate::angle::{angle_diff, normalize_angle};
 use crate::spec::Kinematics;
+
+/// What an edge orientation is relative to (VDA 5050 `orientationType`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrientationType {
+    /// The map.
+    Global,
+    /// The direction of the edge.
+    Tangential,
+}
 
 /// An orientation of exactly 0 or π is expected, but real layouts write
 /// e.g. 3.14 for π; values within this many radians count as 0 or π.

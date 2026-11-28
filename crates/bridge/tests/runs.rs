@@ -1,20 +1,101 @@
 //! Whole runs through the bridge for what the reference runs do not reach: doors
 //! and lifts named by their numbers, zone requests and a charge below the critical
-//! limit with a message delay. The work gets done and everything is translated.
+//! limit with a message delay. The work gets done, and the route through `vda`
+//! translates everything and gives, step by step, the same as the direct one.
 
+use botsim_bridge::{Bridged, vda_route};
 use botsim_core::actions::ActionTimes;
 use botsim_core::battery::{Battery, BatterySpec};
 use botsim_core::door::DoorSpec;
 use botsim_core::lift::{DoorState, LiftSpec, LiftStop};
+use botsim_core::observer::{Observer, Snapshot};
 use botsim_core::world::World;
 use botsim_dispatcher::ChargePolicy;
-use botsim_model::graph::GraphStation;
+use botsim_model::graph::{Graph, GraphStation};
 use botsim_model::job::Job;
 use botsim_model::zones::Zones;
 use serde_json::json;
 
 mod setup;
 use setup::{DT, graph, id, robot_spec};
+
+/// What an observer saw: every snapshot, with what the controller reserved.
+#[derive(Debug, Clone, Default)]
+struct Seen(std::rc::Rc<std::cell::RefCell<Vec<Snapshot>>>);
+
+impl Observer for Seen {
+    fn on_layout(&mut self, _layout: &Graph) {}
+
+    fn on_step(&mut self, snapshot: &Snapshot) {
+        self.0.borrow_mut().push(snapshot.clone());
+    }
+}
+
+/// What a run gives, to compare the two routes by.
+#[derive(Debug, PartialEq)]
+struct Results {
+    /// Every step: the robots (pose, state, order, route, charge, wait), the lifts
+    /// and doors, the reservations, who blocks whom, overlaps and deadlocks.
+    steps: Vec<Snapshot>,
+    /// The state report of every robot at the end, as the robots hold it: orders,
+    /// actions, instant actions, zone requests and sets, errors.
+    reports: Vec<botsim_link::message::FromRobot>,
+    done: String,
+    waits: Vec<botsim_core::waiting::WaitTotal>,
+}
+
+/// Run `world` for `seconds` with the jobs given at the start.
+fn run(
+    mut w: World,
+    mut c: Bridged,
+    jobs: Vec<Job>,
+    seconds: f64,
+    mut each: impl FnMut(&World),
+) -> (World, Bridged, Results) {
+    let seen = Seen::default();
+    w.set_observer(Box::new(seen.clone()));
+    let mut jobs = Some(jobs);
+    for _ in 0..(seconds / DT) as usize {
+        botsim_bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
+        w.step();
+        each(&w);
+    }
+    let results = Results {
+        steps: seen.0.take(),
+        reports: w.reports(),
+        done: format!("{:?}", c.completed()),
+        waits: w.wait_totals(),
+    };
+    (w, c, results)
+}
+
+/// The two connections of a controller to `w`: direct, and through `vda`.
+fn connect(through_vda: bool, w: &World) -> Bridged {
+    if through_vda {
+        vda_route::controller(w)
+    } else {
+        botsim_bridge::controller(w)
+    }
+}
+
+/// Nothing was left untranslated on the route through `vda`.
+fn translated(c: &Bridged, through_vda: bool) {
+    assert_eq!(c.untranslated().is_some(), through_vda);
+    if let Some(untranslated) = c.untranslated() {
+        assert!(untranslated.is_empty(), "{untranslated:?}");
+    }
+}
+
+/// The two runs are the same; the first difference is shown.
+fn assert_same(direct: &Results, through_vda: &Results) {
+    assert_eq!(direct.steps.len(), through_vda.steps.len());
+    for (a, b) in direct.steps.iter().zip(&through_vda.steps) {
+        assert_eq!(a, b, "step {}", a.tick);
+    }
+    assert_eq!(direct.reports, through_vda.reports);
+    assert_eq!(direct.done, through_vda.done);
+    assert_eq!(direct.waits, through_vda.waits);
+}
 
 /// Two lanes, each from floor 1 over a lift to floor 2, each with a door at its
 /// start. The two lifts list their cabin doors the other way round, and each
@@ -106,37 +187,43 @@ fn job(w: &World, id: u64, pickup: &str, drop: &str) -> Job {
 #[test]
 fn each_door_and_lift_gets_its_own_commands_with_and_without_a_delay() {
     for delay in [0, 10] {
-        let mut w = two_lanes();
-        w.set_message_delay(delay);
-        let mut c = botsim_bridge::controller(&w);
-        let jobs = [job(&w, 1, "B", "E"), job(&w, 2, "Q", "T")];
-        let mut jobs = Some(jobs.to_vec());
-        let mut opened = [false; 2];
-        for _ in 0..(120.0 / DT) as usize {
-            botsim_bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
-            w.step();
-            for (seen, door) in opened.iter_mut().zip(w.doors()) {
-                *seen |= door.state == DoorState::Open;
-            }
-        }
-        assert_eq!(c.completed().len(), 2, "delay {delay}");
-        assert_eq!(opened, [true, true], "delay {delay}");
-        // each cabin is on floor 2, and the door used last there is the stop's
-        let lifts: Vec<_> = w
-            .lifts()
-            .into_iter()
-            .map(|l| (l.id, l.floor, l.door_id))
-            .collect();
-        let expected = [("north", 1, "rear"), ("south", 1, "rear")]
-            .map(|(id, floor, door)| (id.to_string(), floor, door.to_string()));
-        assert_eq!(lifts, expected, "delay {delay}");
-        assert!(w.collisions().is_empty(), "delay {delay}");
-        assert!(c.untranslated().is_empty(), "{:?}", c.untranslated());
+        let [direct, through_vda] = [false, true].map(|through_vda| {
+            let mut w = two_lanes();
+            w.set_message_delay(delay);
+            let c = connect(through_vda, &w);
+            let jobs = vec![job(&w, 1, "B", "E"), job(&w, 2, "Q", "T")];
+            let mut opened = [false; 2];
+            let (w, c, results) = run(w, c, jobs, 120.0, |w| {
+                for (seen, door) in opened.iter_mut().zip(w.doors()) {
+                    *seen |= door.state == DoorState::Open;
+                }
+            });
+            assert_eq!(c.completed().len(), 2, "delay {delay}");
+            assert_eq!(opened, [true, true], "delay {delay}");
+            // each cabin is on floor 2, and the door used last there is the stop's
+            let lifts: Vec<_> = w
+                .lifts()
+                .into_iter()
+                .map(|l| (l.id, l.floor, l.door_id))
+                .collect();
+            let expected = [("north", 1, "rear"), ("south", 1, "rear")]
+                .map(|(id, floor, door)| (id.to_string(), floor, door.to_string()));
+            assert_eq!(lifts, expected, "delay {delay}");
+            assert!(w.collisions().is_empty(), "delay {delay}");
+            translated(&c, through_vda);
+            results
+        });
+        assert_same(&direct, &through_vda);
     }
 }
 
 #[test]
 fn zone_requests_and_a_critical_charge_work_with_a_delay() {
+    let [direct, through_vda] = [false, true].map(zones_and_charging);
+    assert_same(&direct, &through_vda);
+}
+
+fn zones_and_charging(through_vda: bool) -> Results {
     // a one-way ring with the charger on a side way from N3 to N0
     let mut g = graph(
         &[
@@ -188,19 +275,17 @@ fn zone_requests_and_a_critical_charge_work_with_a_delay() {
     w.set_battery(&id(1), Battery::new(battery, 5.0).unwrap())
         .unwrap();
     assert_eq!(w.set_chargers(3600.0).unwrap(), 1);
-    let mut c = botsim_bridge::controller(&w);
+    let mut c = connect(through_vda, &w);
     c.set_charging(ChargePolicy {
         low: 25.0,
         high: 80.0,
         critical: 10.0,
     });
-    let mut jobs = Some(vec![job(&w, 1, "N1", "N2"), job(&w, 2, "N0", "N2")]);
+    let jobs = vec![job(&w, 1, "N1", "N2"), job(&w, 2, "N0", "N2")];
     let mut most = 0.0_f64;
-    for _ in 0..(300.0 / DT) as usize {
-        botsim_bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
-        w.step();
+    let (w, c, results) = run(w, c, jobs, 300.0, |w| {
         most = most.max(w.battery_percent(&id(1)).unwrap().unwrap());
-    }
+    });
     // it charged from 5 % to the upper limit and stopped there (a delay lets it
     // run on a little), so `startCharging` and `stopCharging` both arrived
     assert_eq!(c.charge_trips(), 1);
@@ -208,5 +293,6 @@ fn zone_requests_and_a_critical_charge_work_with_a_delay() {
     // both jobs need a robot in the zone, which a robot enters only with a grant
     assert_eq!(c.completed().len(), 2);
     assert!(w.collisions().is_empty());
-    assert!(c.untranslated().is_empty(), "{:?}", c.untranslated());
+    translated(&c, through_vda);
+    results
 }

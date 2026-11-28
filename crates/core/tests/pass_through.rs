@@ -13,6 +13,9 @@ use vda5050::instant_actions::InstantActions;
 use vda5050::order::Order;
 use vdma_lif::Lif;
 
+mod vda_port;
+use vda_port::VdaWorld;
+
 const DT: f64 = 0.05;
 
 fn id() -> RobotId {
@@ -292,7 +295,7 @@ fn cancelling_while_driving_through_stops_the_robot_at_the_next_node() {
 #[test]
 fn the_state_stays_valid_and_consistent_while_driving_through() {
     let schema: serde_json::Value =
-        serde_json::from_str(include_str!("data/vda5050_state.schema.json")).unwrap();
+        serde_json::from_str(include_str!("../../vda/tests/data/state.schema")).unwrap();
     let validator = jsonschema::validator_for(&schema).unwrap();
     let mut w = world(graph(&line(), &[]), true);
     w.send_order(&order(5, 4, &[])).unwrap();

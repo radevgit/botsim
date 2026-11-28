@@ -13,6 +13,10 @@ use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;
 
+#[path = "../../../core/tests/vda_port/mod.rs"]
+mod vda_port;
+use vda_port::VdaWorld;
+
 pub const DT: f64 = 0.05;
 const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scenarios/");
 

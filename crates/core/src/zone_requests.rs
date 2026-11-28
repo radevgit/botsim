@@ -19,7 +19,7 @@
 //!   or no edge ahead enters it any more, the request is removed.
 //! - `requestId`s are unique per robot (`req-1`, `req-2`, …).
 //! - An edge **enters** a zone if it starts outside it and reaches it
-//!   ([`Zones::release_zones_entered`]); a straight edge is used.
+//!   ([`RobotZones::release_zones_entered`]); a straight edge is used.
 //! - All zone sets count as enabled from the start (no `enableZoneSet` yet).
 //!
 //! - **Answers** ([`ZoneRequester::respond`]): GRANTED → status GRANTED and the
@@ -51,15 +51,16 @@
 
 use std::collections::{HashMap, HashSet};
 
-use vda5050::responses::GrantType;
-use vda5050::state::{RequestStatus, ZoneRequest, ZoneRequestType};
-use vda5050::zone_set::{ZoneKind, ZoneReleaseLossBehavior};
+use botsim_link::ids::RequestId;
+use botsim_link::response::Grant;
+use botsim_link::state::{RequestStatus, ZoneRequest, ZoneRequestType};
 
 use crate::errors::RobotError;
 use crate::order_route::PlanEdge;
+use crate::robot_zones::RobotZones;
 use botsim_model::errors::ErrorType;
-use botsim_model::graph::Graph;
-use botsim_model::zones::Zones;
+use botsim_model::graph::{EdgeIdx, Graph};
+use botsim_model::zones::{AreaKind, LossBehavior};
 
 /// When a robot states the request for a zone it is about to enter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -73,7 +74,7 @@ pub enum ZoneRequestTiming {
 
 #[derive(Debug, Clone, PartialEq)]
 struct Request {
-    id: String,
+    id: RequestId,
     zone: usize,
     status: RequestStatus,
     /// Until when the grant is valid (milliseconds since 1970); `None` = for ever.
@@ -82,10 +83,10 @@ struct Request {
 
 #[derive(Debug, Clone)]
 pub struct ZoneRequester {
-    zones: Zones,
+    zones: RobotZones,
     timing: ZoneRequestTiming,
-    /// Edge id → the RELEASE zones that edge enters (only edges of the order).
-    entering: HashMap<String, Vec<usize>>,
+    /// Edge → the RELEASE zones that edge enters (only edges of the order).
+    entering: HashMap<EdgeIdx, Vec<usize>>,
     /// (edge sequenceId, zone) pairs the robot has already entered.
     entered: HashSet<(u32, usize)>,
     requests: Vec<Request>,
@@ -97,7 +98,7 @@ pub struct ZoneRequester {
 }
 
 impl ZoneRequester {
-    pub fn new(zones: Zones, timing: ZoneRequestTiming) -> ZoneRequester {
+    pub fn new(zones: RobotZones, timing: ZoneRequestTiming) -> ZoneRequester {
         ZoneRequester {
             zones,
             timing,
@@ -127,17 +128,16 @@ impl ZoneRequester {
     /// Learn which zones the edges of an order (or update) enter.
     pub fn learn_edges(&mut self, graph: &Graph, edges: &[PlanEdge]) {
         for e in edges {
-            let Some(idx) = graph.edge_idx(&e.edge_id) else {
+            let Some(edge) = graph.edges.get(e.edge) else {
                 continue;
             };
-            let edge = &graph.edges[idx];
             let (a, b) = (&graph.nodes[edge.start], &graph.nodes[edge.end]);
             let zones = if a.map == self.zones.map && b.map == self.zones.map {
                 self.zones.release_zones_entered((a.x, a.y), (b.x, b.y))
             } else {
                 Vec::new()
             };
-            self.entering.insert(e.edge_id.clone(), zones);
+            self.entering.insert(e.edge, zones);
         }
     }
 
@@ -174,7 +174,7 @@ impl ZoneRequester {
         // robot is inside now has been entered; the edge must not ask for it again
         // while the robot is still on that edge after leaving the zone.
         if let Some(first) = ahead.first() {
-            for &z in self.entering.get(&first.edge_id).into_iter().flatten() {
+            for &z in self.entering.get(&first.edge).into_iter().flatten() {
                 if inside_now.contains(&z) {
                     self.entered.insert((first.sequence_id, z));
                 }
@@ -187,7 +187,7 @@ impl ZoneRequester {
             if self.timing == ZoneRequestTiming::OnRelease && !e.released {
                 continue;
             }
-            for &z in self.entering.get(&e.edge_id).into_iter().flatten() {
+            for &z in self.entering.get(&e.edge).into_iter().flatten() {
                 if !wanted.contains(&z) && !self.entered.contains(&(e.sequence_id, z)) {
                     wanted.push(z);
                 }
@@ -204,7 +204,7 @@ impl ZoneRequester {
                 continue;
             }
             self.requests.push(Request {
-                id: format!("req-{}", self.next_id),
+                id: RequestId::new(format!("req-{}", self.next_id)),
                 zone: z,
                 status: RequestStatus::Requested,
                 lease_ms: None,
@@ -227,28 +227,32 @@ impl ZoneRequester {
     ///   zone it has lost its release: status REVOKED and the zone's
     ///   `releaseLossBehavior` applies ([`ZoneRequester::halt`],
     ///   [`ZoneRequester::errors`]).
-    pub fn respond(&mut self, request_id: &str, grant: GrantType, lease_ms: Option<i64>) {
-        let Some(pos) = self.requests.iter().position(|r| r.id == request_id) else {
+    pub fn respond(&mut self, request_id: &str, grant: Grant, lease_ms: Option<i64>) {
+        let Some(pos) = self
+            .requests
+            .iter()
+            .position(|r| r.id.as_str() == request_id)
+        else {
             return;
         };
         let inside = self.inside.contains(&self.requests[pos].zone);
         let r = &mut self.requests[pos];
         match grant {
-            GrantType::Granted => {
+            Grant::Granted => {
                 r.status = RequestStatus::Granted;
                 r.lease_ms = lease_ms;
             }
-            GrantType::Queued => {
+            Grant::Queued => {
                 if r.status == RequestStatus::Requested {
                     r.status = RequestStatus::Queued;
                 }
             }
-            GrantType::Rejected => {
+            Grant::Rejected => {
                 if r.status != RequestStatus::Granted {
                     self.requests.remove(pos);
                 }
             }
-            GrantType::Revoked => {
+            Grant::Revoked => {
                 if inside {
                     r.status = RequestStatus::Revoked;
                 } else {
@@ -260,12 +264,10 @@ impl ZoneRequester {
 
     /// What the robot does after losing a release inside a RELEASE zone (the
     /// zone's `releaseLossBehavior`; STOP if the zone has none).
-    fn loss_behavior(&self, zone: usize) -> ZoneReleaseLossBehavior {
-        match &self.zones.zones[zone].kind {
-            ZoneKind::Release {
-                release_loss_behavior: Some(b),
-            } => *b,
-            _ => ZoneReleaseLossBehavior::Stop,
+    fn loss_behavior(&self, zone: usize) -> LossBehavior {
+        match self.zones.zones[zone].kind {
+            AreaKind::Release { loss: Some(b) } => b,
+            _ => LossBehavior::Stop,
         }
     }
 
@@ -280,7 +282,7 @@ impl ZoneRequester {
     /// `EVACUATE` let it drive on.
     pub fn halt(&self) -> bool {
         self.lost()
-            .any(|r| self.loss_behavior(r.zone) == ZoneReleaseLossBehavior::Stop)
+            .any(|r| self.loss_behavior(r.zone) == LossBehavior::Stop)
     }
 
     /// The errors of a release loss, for the state: `ZONE_RELEASE_LOST` (CRITICAL)
@@ -291,15 +293,15 @@ impl ZoneRequester {
         self.lost()
             .filter_map(|r| {
                 let error_type = match self.loss_behavior(r.zone) {
-                    ZoneReleaseLossBehavior::Stop => ErrorType::ZoneReleaseLost,
+                    LossBehavior::Stop => ErrorType::ZoneReleaseLost,
                     _ if self.has_ahead => ErrorType::ZoneReleaseLossHandling,
                     _ => return None,
                 };
                 Some(RobotError {
                     error_type,
                     references: vec![
-                        ("zoneId".into(), self.zones.zones[r.zone].zone_id.clone()),
-                        ("requestId".into(), r.id.clone()),
+                        ("zoneId".into(), self.zones.zones[r.zone].id.to_string()),
+                        ("requestId".into(), r.id.to_string()),
                     ],
                     description: Some("the release of the zone was lost".into()),
                 })
@@ -312,7 +314,7 @@ impl ZoneRequester {
     pub fn blocked_edges(&self, ahead: &[PlanEdge]) -> HashSet<u32> {
         let mut blocked = HashSet::new();
         for e in ahead {
-            for &z in self.entering.get(&e.edge_id).into_iter().flatten() {
+            for &z in self.entering.get(&e.edge).into_iter().flatten() {
                 if self.entered.contains(&(e.sequence_id, z)) {
                     continue;
                 }
@@ -328,17 +330,16 @@ impl ZoneRequester {
         blocked
     }
 
-    /// The `zoneRequests` of the state message.
-    pub fn to_state(&self) -> Vec<ZoneRequest> {
+    /// The zone requests of the state report.
+    pub fn to_report(&self) -> Vec<ZoneRequest> {
         self.requests
             .iter()
             .map(|r| ZoneRequest {
-                request_id: r.id.clone(),
-                request_type: ZoneRequestType::Access,
-                zone_id: self.zones.zones[r.zone].zone_id.clone(),
-                zone_set_id: self.zones.zone_set_id.clone(),
-                request_status: r.status,
-                trajectory: None,
+                id: r.id.clone(),
+                kind: ZoneRequestType::Access,
+                zone: self.zones.zones[r.zone].id.clone(),
+                zone_set: self.zones.id.clone(),
+                status: r.status,
             })
             .collect()
     }

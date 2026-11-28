@@ -10,6 +10,9 @@ use vda5050::order::Order;
 use vda5050::state::ActionStatus::Finished;
 use vdma_lif::Lif;
 
+mod vda_port;
+use vda_port::VdaWorld;
+
 const DT: f64 = 0.05;
 /// 2026-11-20T10:00:00Z
 const START_MS: i64 = 1_795_168_800_000;

@@ -12,7 +12,7 @@ use crate::report::Problem;
 use crate::translator::Translator;
 
 /// The VDA 5050 version written in the headers.
-pub const VERSION: &str = "3.0.1";
+pub const VERSION: &str = botsim_model::protocol::PROTOCOL_VERSION;
 
 /// The range of the angles in the schemas of order and state (rad). It is a hair
 /// wider than −π..π.

@@ -41,8 +41,7 @@ fn the_timestamp_made_from_the_time_of_a_cycle_is_the_worlds() {
             }
             // a controller that has just started sends an order at once
             let mut c = botsim_bridge::controller(&w);
-            let state = w.state(&id).unwrap();
-            let states = [c.read_state(&state, w.tick()).unwrap()];
+            let states = w.reports();
             let input = Input {
                 time: Time {
                     tick: w.tick(),

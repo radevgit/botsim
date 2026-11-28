@@ -14,6 +14,9 @@ use vda5050::factsheet::Factsheet;
 
 mod common;
 use common::graph;
+#[path = "../../core/tests/vda_port/mod.rs"]
+mod vda_port;
+use vda_port::VdaWorld;
 
 const DT: f64 = 0.05;
 

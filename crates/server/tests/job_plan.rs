@@ -19,6 +19,9 @@ use vda5050::state::ActionStatus::{Finished, Running};
 mod common;
 use common::graph;
 mod translate;
+#[path = "../../core/tests/vda_port/mod.rs"]
+mod vda_port;
+use vda_port::VdaWorld;
 
 /// The order message as VDA 5050, for the robot of these tests; they build only
 /// valid ones.

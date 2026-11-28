@@ -2,10 +2,14 @@
 #![allow(clippy::approx_constant)]
 
 use botsim_core::drive::RouteEdge;
-use botsim_core::order_route::{OrderError, route_from_order};
+use botsim_core::order_route::OrderError;
 use botsim_model::graph::Graph;
-use vda5050::order::{Order, OrientationType};
+use botsim_model::orientation::OrientationType;
+use vda5050::order::Order;
 use vdma_lif::Lif;
+
+mod vda_port;
+use vda_port::{Refused, route_from_order};
 
 fn graph() -> Graph {
     let lif: Lif = serde_json::from_str(include_str!("data/three_nodes.lif.json")).unwrap();
@@ -72,60 +76,12 @@ fn only_the_released_base_is_in_the_route() {
     assert!(r.has_horizon && r.edges.is_empty());
 }
 
-#[test]
-fn release_rules_are_checked() {
-    let g = graph();
-    assert_eq!(
-        route_from_order(&g, &order([false, false, false, false, false])),
-        Err(OrderError::FirstNodeNotReleased)
-    );
-    // edge B-C released but node C is not
-    assert_eq!(
-        route_from_order(&g, &order([true, true, true, true, false])),
-        Err(OrderError::EdgeReleasedWithoutNode { edge: "B-C".into() })
-    );
-    // unreleased edge A-B followed by a released node B (and edge B-C)
-    assert_eq!(
-        route_from_order(&g, &order([true, false, true, true, true])),
-        Err(OrderError::ReleasedAfterHorizon { id: "B".into() })
-    );
-    // unreleased edge B-C followed by a released node C
-    assert_eq!(
-        route_from_order(&g, &order([true, true, true, false, true])),
-        Err(OrderError::ReleasedAfterHorizon { id: "C".into() })
-    );
-}
+// (the structure of the lists and the release rules are the translator's checks:
+// `botsim-vda`, `tests/refused_orders.rs`)
 
 #[test]
-fn structure_is_checked() {
+fn a_new_order_starts_at_sequence_id_zero_and_an_update_may_continue() {
     let g = graph();
-
-    let mut o = order([true; 5]);
-    o.edges.pop();
-    assert_eq!(
-        route_from_order(&g, &o),
-        Err(OrderError::WrongCounts { nodes: 3, edges: 1 })
-    );
-
-    let mut o = order([true; 5]);
-    o.nodes.clear();
-    o.edges.clear();
-    assert!(matches!(
-        route_from_order(&g, &o),
-        Err(OrderError::WrongCounts { .. })
-    ));
-
-    let mut o = order([true; 5]);
-    o.edges[0].sequence_id = 5;
-    assert_eq!(
-        route_from_order(&g, &o),
-        Err(OrderError::BadSequenceId {
-            what: "edge",
-            id: "A-B".into(),
-            expected: 1,
-            found: 5
-        })
-    );
 
     // a new order must start at sequenceId 0 ...
     let mut o = order([true; 5]);
@@ -137,7 +93,9 @@ fn structure_is_checked() {
     }
     assert_eq!(
         route_from_order(&g, &o),
-        Err(OrderError::FirstNodeNotZero { found: 10 })
+        Err(Refused::Simulator(OrderError::FirstNodeNotZero {
+            found: 10
+        }))
     );
     // ... an update may continue the numbering
     o.order_update_id = 1;
@@ -148,32 +106,49 @@ fn structure_is_checked() {
 fn ids_and_connections_are_checked_against_the_layout() {
     let g = graph();
 
+    // (names the layout does not have are refused by the translator)
     let mut o = order([true; 5]);
     o.nodes[2].node_id = "Z".into();
-    assert_eq!(
+    assert!(matches!(
         route_from_order(&g, &o),
-        Err(OrderError::Unknown {
-            what: "node",
-            id: "Z".into()
-        })
-    );
-
-    let mut o = order([true; 5]);
-    o.edges[1].edge_id = "X-Y".into();
-    assert_eq!(
-        route_from_order(&g, &o),
-        Err(OrderError::Unknown {
-            what: "edge",
-            id: "X-Y".into()
-        })
-    );
+        Err(Refused::Translator(_))
+    ));
 
     // edge C-B exists but runs the other way than B -> C
     let mut o = order([true; 5]);
     o.edges[1].edge_id = "C-B".into();
     assert_eq!(
         route_from_order(&g, &o),
-        Err(OrderError::EdgeDoesNotConnect { edge: "C-B".into() })
+        Err(Refused::Simulator(OrderError::EdgeDoesNotConnect {
+            edge: "C-B".into()
+        }))
+    );
+}
+
+#[test]
+fn numbers_outside_the_layout_are_refused() {
+    use botsim_core::order_route;
+    use botsim_link::ids::OrderId;
+    use botsim_link::order::{Leg, Order};
+
+    let g = graph();
+    let leg = |edge, end| Leg {
+        edge,
+        end,
+        orientation: None,
+        orientation_type: None,
+    };
+    let refused = |start, legs: Vec<Leg>| {
+        // (the horizon is checked like the base)
+        let order = Order::new(OrderId::new("o"), 0, 0, start, legs, 0, Vec::new()).unwrap();
+        order_route::route_from_order(&g, &order).unwrap_err()
+    };
+    let outside = |what, number| OrderError::OutsideLayout { what, number };
+    assert_eq!(refused(99, Vec::new()), outside("node", 99));
+    assert_eq!(refused(0, vec![leg(0, 99)]), outside("node", 99));
+    assert_eq!(
+        refused(0, vec![leg(usize::MAX, 1)]),
+        outside("edge", usize::MAX)
     );
 }
 

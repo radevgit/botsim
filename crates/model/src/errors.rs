@@ -1,7 +1,14 @@
 //! The predefined error types of VDA 5050 (Table 9), with their names in messages
 //! and the error level the standard prescribes for each.
 
-use vda5050::state::ErrorLevel;
+/// VDA 5050 `errorLevel`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorLevel {
+    Warning,
+    Urgent,
+    Critical,
+    Fatal,
+}
 
 /// Predefined VDA 5050 error types (Table 9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

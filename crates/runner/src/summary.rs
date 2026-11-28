@@ -11,7 +11,6 @@
 //! Not yet: deadlocks, controller time per step.
 
 use botsim_bridge::Bridged;
-use botsim_bridge::report::Untranslated;
 use botsim_core::lift::DoorState;
 use botsim_core::world::World;
 use botsim_dispatcher::ChargePolicy;
@@ -72,55 +71,6 @@ pub struct Summary {
     /// differs from run to run and so breaks identical output.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timing: Option<TimingSummary>,
-    /// What could not be translated between the world and the controller; left out
-    /// when all could.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub untranslated: Option<UntranslatedSummary>,
-}
-
-/// What could not be translated between the world's VDA 5050 messages, lifts and
-/// doors and the controller (see `botsim_bridge::report`).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct UntranslatedSummary {
-    /// How many cases came up, counting each time.
-    pub total: u64,
-    /// The different cases in the order they came up first (not all, if there are
-    /// very many).
-    pub cases: Vec<UntranslatedCase>,
-}
-
-/// One case of [`UntranslatedSummary`].
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct UntranslatedCase {
-    /// What was being translated, e.g. `state` or `order`.
-    pub what: String,
-    /// The robot, lift, door or zone set.
-    pub of: String,
-    /// Nothing of it went through; `false`: the rest did, without the part.
-    pub refused: bool,
-    pub reason: String,
-    /// The simulated time when it came up first.
-    pub first_time: f64,
-    pub count: u64,
-}
-
-/// `None` if there was nothing that could not be translated.
-fn untranslated_summary(report: &Untranslated, dt: f64) -> Option<UntranslatedSummary> {
-    (!report.is_empty()).then(|| UntranslatedSummary {
-        total: report.total(),
-        cases: report
-            .entries()
-            .iter()
-            .map(|e| UntranslatedCase {
-                what: e.what.to_string(),
-                of: e.name.clone(),
-                refused: e.refused,
-                reason: e.reason.to_string(),
-                first_time: seconds(e.first_tick, dt),
-                count: e.count,
-            })
-            .collect(),
-    })
 }
 
 /// The batteries of the run (charging brief).
@@ -474,7 +424,14 @@ fn run_controller<P: TrafficPolicy>(
         // somehow cannot be read is left out of the list)
         .filter_map(|id| {
             let p = world.pose(id).ok()?;
-            let state = world.state(id).ok()?;
+            // (the robot's own last node, as its report says it: with a message
+            // delay an old one)
+            let report = world.report(world.robot_no(id)?).ok()?;
+            let last_node = report.state.route.last_node();
+            let last_node_id = last_node
+                .and_then(|n| world.graph().nodes.get(n.node))
+                .map(|n| n.id.clone())
+                .unwrap_or_default();
             let spec = world.spec(id).ok()?;
             Some(RobotSummary {
                 manufacturer: id.manufacturer.clone(),
@@ -488,7 +445,7 @@ fn run_controller<P: TrafficPolicy>(
                 y: p.y,
                 heading: p.heading,
                 max_speed: round_micro(spec.limits.max_speed),
-                last_node_id: state.last_node_id,
+                last_node_id,
             })
         })
         .collect();
@@ -517,9 +474,6 @@ fn run_controller<P: TrafficPolicy>(
         .collect();
     Ok(Summary {
         timing: measure_time.then(|| clock.report()),
-        untranslated: controller
-            .as_ref()
-            .and_then(|c| untranslated_summary(c.untranslated(), dt)),
         scenario: scenario.name.clone(),
         deadlock_count: deadlocks.len(),
         deadlocks,

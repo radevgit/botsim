@@ -15,6 +15,10 @@ use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;
 use vdma_lif::Lif;
 
+#[path = "../../core/tests/vda_port/mod.rs"]
+mod vda_port;
+use vda_port::VdaWorld;
+
 const DT: f64 = 0.05;
 /// The weight of the middle control point of a quarter circle.
 const W: f64 = std::f64::consts::FRAC_1_SQRT_2;

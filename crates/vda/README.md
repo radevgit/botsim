@@ -6,8 +6,9 @@ messages, in both directions. Inside the program the fleet server and the robots
 translates. It adds no custom fields.
 
 Library only; of the botsim crates it depends on `botsim-link` and `botsim-model`
-only, reads no files and uses no network. `botsim-bridge` uses it between the fleet
-server and the simulator.
+only, reads no files and uses no network. The fleet server and the simulator talk
+to each other in `link` without it. `botsim-bridge` uses it for its route through
+`vda`, which tests the translation without real robots.
 
 The VDA 5050 side is the message types of the
 [`vda5050`](https://crates.io/crates/vda5050) crate. JSON text and MQTT topics are
@@ -24,8 +25,9 @@ the table that says which `RobotId` a `RobotNo` stands for (`add_robot`,
 | Fleet server | `to_robot_to_vda` | `state_from_vda` |
 | Robot | `state_to_vda` | `order_from_vda`, `instant_actions_from_vda`, `responses_from_vda`, `zone_set_from_vda` |
 
-A zone set outside a message (a site's configuration) is read with
-`zone_set_content_from_vda`.
+A zone set outside a message is read with `zone_set_content_from_vda`, with the
+checks of a message. The zone set of a site's configuration, which has its own
+checks, is made into `link` types as it is with `zone_set_of_setup`.
 
 ## What cannot be translated
 

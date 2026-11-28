@@ -1,8 +1,10 @@
-//! A simulated robot as the controller sees it: it receives VDA 5050 orders,
-//! accepts or rejects them, executes them, and reports its state.
+//! A simulated robot as the fleet server sees it: it receives orders, accepts or
+//! rejects them, executes them, and reports its state, all in the compact form of
+//! [`botsim_link`] (VDA 5050 meaning).
 //!
 //! Order acceptance follows VDA 5050 §6.1.2 (Figure 8), in this order:
-//! 1. the order must be valid (structure, release rules, ids in the layout);
+//! 1. the order must be valid (see [`crate::order_route`]: numbers in the layout,
+//!    edges that connect, a new order from `sequenceId` 0);
 //! 2. a **different `orderId`** is a new order:
 //!    - the robot must be idle (order done, and no horizon to wait for), else
 //!      `OTHER_ORDER_ACTIVE`;
@@ -11,29 +13,36 @@
 //! 3. the **same `orderId`** is an update: a lower `orderUpdateId` →
 //!    `OUTDATED_ORDER_UPDATE`, after a `cancelOrder` → `ORDER_UPDATE_FOLLOWING_CANCEL`,
 //!    the same → `SAME_ORDER_UPDATE_ID`, higher → it must start at the decision
-//!    point (the end of the base so far).
+//!    point (the end of the base so far), with the `sequenceId` of that node.
 //!
 //! A rejected message changes nothing except that its error is reported in the
 //! state ("until new order is accepted"); an accepted order or update clears the
-//! errors.
+//! errors. A message that whoever reads the robot's messages could not read is
+//! reported the same way ([`Robot::take_unread`]).
 //!
-//! Instant actions: only `cancelOrder` (see [`Robot::receive_instant_actions`]).
+//! Instant actions: see [`Robot::take_instant_actions`].
 //!
 //! Not yet: operating modes (`MOBILE_ROBOT_NOT_AVAILABLE`), other instant actions,
 //! a deviation range around the start node (a fixed tolerance is used).
 
 use std::collections::{HashMap, HashSet};
 
-use vda5050::instant_actions::InstantActions;
-use vda5050::order::Order;
-use vda5050::state::{ActionStatus, State};
+use botsim_link::ids::{ActionId, ActionType, ZoneSetId};
+use botsim_link::instant::{InstantAction, InstantKind};
+use botsim_link::order::Order;
+use botsim_link::response::Response;
+use botsim_link::state::{
+    ActionState, ActionStatus, Error, ErrorKind, ErrorLevel, State, ZoneRequest, ZoneSetInfo,
+};
+use botsim_link::zone_set::ZoneSet;
 
 use crate::actions::ActionTimes;
 use crate::battery::Battery;
 use crate::drive::{DriveError, Driver, Glance, Phase, Pose};
 use crate::errors::RobotError;
 use crate::order_route::route_from_order;
-use crate::state_report::{Header, InstantActionState, build_state};
+use crate::robot_zones::RobotZones;
+use crate::state_report::build_state;
 use crate::zone_requests::{ZoneRequestTiming, ZoneRequester};
 use botsim_model::errors::ErrorType;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
@@ -60,10 +69,36 @@ pub enum Reception {
 /// our choice, 10 s.
 pub const ZONE_SET_ERROR_MS: i64 = 10_000;
 
+/// What was sent to a robot and could not be read, as whoever reads its messages
+/// reports it (a translator): the error it would be refused with.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Unread {
+    /// An order or order update.
+    Order(RobotError),
+    /// A zone set.
+    ZoneSet(RobotError),
+    /// A message of instant actions of which not all could be read: all its
+    /// entries, in their order.
+    InstantActions(Vec<InstantEntry>),
+}
+
+/// An entry of a message of instant actions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InstantEntry {
+    Read(InstantAction),
+    /// One that could not be read: it is listed `FAILED`, with its error.
+    Unread {
+        id: ActionId,
+        /// Its `actionType`, if that much is known.
+        kind: Option<ActionType>,
+        error: RobotError,
+    },
+}
+
 /// A zone set on the robot, with its `zoneSetStatus`.
 #[derive(Debug, Clone)]
 struct StoredZoneSet {
-    zones: Zones,
+    zones: RobotZones,
     enabled: bool,
 }
 
@@ -74,7 +109,7 @@ pub struct Robot {
     driver: Driver,
     errors: Vec<RobotError>,
     /// All instant actions received, with their status (kept, as the standard says).
-    instant: Vec<InstantActionState>,
+    instant: Vec<ActionState>,
     /// Index in `instant` of a `cancelOrder` that is still stopping the robot.
     cancel_action: Option<usize>,
     /// RELEASE zone requests; `None` while no zone set is enabled.
@@ -91,14 +126,14 @@ pub struct Robot {
     now_ms: i64,
     /// The layout edges that are lift rides (set by the world).
     rides: HashSet<EdgeIdx>,
-    /// Ids of the edges of doors that are not fully open (set by the world).
-    closed_door_edges: HashSet<String>,
-    /// Passage width of the doors, by edge id (set by the world).
-    door_widths: HashMap<String, f64>,
+    /// The edges of doors that are not fully open (set by the world).
+    closed_door_edges: HashSet<EdgeIdx>,
+    /// Passage width of the doors, by edge (set by the world).
+    door_widths: HashMap<EdgeIdx, f64>,
     /// The last update blocked an edge because of a closed door.
     door_blocked: bool,
-    /// Ids of all edges that have a door (set by the world).
-    door_edges: HashSet<String>,
+    /// All edges that have a door (set by the world).
+    door_edges: HashSet<EdgeIdx>,
     /// Drive through nodes where possible (S66).
     pass_through: bool,
     /// The battery; `None`: no battery model, the state reports 100 %.
@@ -198,28 +233,28 @@ impl Robot {
 
     /// Tell the robot which edges have a door (all of them, open or not): it does
     /// not drive through the node in front of such an edge (S66).
-    pub fn set_door_edges(&mut self, edges: HashSet<String>) {
+    pub fn set_door_edges(&mut self, edges: HashSet<EdgeIdx>) {
         self.door_edges = edges;
     }
 
-    /// Tell the robot the passage width of the doors, by edge id: it refuses
-    /// orders with an edge of a door that is narrower than the robot.
-    pub fn set_door_widths(&mut self, widths: HashMap<String, f64>) {
+    /// Tell the robot the passage width of the doors, by edge: it refuses orders
+    /// with an edge of a door that is narrower than the robot.
+    pub fn set_door_widths(&mut self, widths: HashMap<EdgeIdx, f64>) {
         self.door_widths = widths;
     }
 
     /// Tell the robot which door edges it must not start now (the door is not
     /// fully open). Set by the world every step.
-    pub fn set_closed_door_edges(&mut self, closed: HashSet<String>) {
+    pub fn set_closed_door_edges(&mut self, closed: HashSet<EdgeIdx>) {
         if closed != self.closed_door_edges {
             self.closed_door_edges = closed;
             self.update_zone_requests();
         }
     }
 
-    /// The id of the edge the robot is driving on, if it has left the node.
-    pub fn driving_edge_id(&self) -> Option<&str> {
-        self.driver.driving_edge_id()
+    /// The edge the robot is driving on, if it has left the node.
+    pub fn driving_edge(&self) -> Option<EdgeIdx> {
+        self.driver.driving_edge()
     }
 
     /// How wide the robot is (metres), across its direction of travel.
@@ -235,35 +270,31 @@ impl Robot {
     /// `mobileRobotTypeEdgeProperties`), as text for the error.
     fn not_allowed(&self, graph: &Graph, route: &crate::order_route::OrderRoute) -> Option<String> {
         let (m, s) = (&self.spec.manufacturer, &self.spec.series_name);
-        let node = route.plan_nodes.iter().find(|n| {
-            graph
-                .node_idx(&n.node_id)
-                .is_some_and(|i| !graph.node_allows(i, m, s))
-        });
+        // (the numbers of a route are in the layout)
+        let node = route
+            .plan_nodes
+            .iter()
+            .find(|n| !graph.node_allows(n.node, m, s));
         if let Some(n) = node {
-            return Some(format!("node '{}'", n.node_id));
+            return Some(format!("node '{}'", graph.nodes[n.node].id));
         }
         route
             .plan_edges
             .iter()
-            .find(|e| {
-                graph
-                    .edge_idx(&e.edge_id)
-                    .is_some_and(|i| !graph.edge_allows(i, m, s))
-            })
-            .map(|e| format!("edge '{}'", e.edge_id))
+            .find(|e| !graph.edge_allows(e.edge, m, s))
+            .map(|e| format!("edge '{}'", graph.edges[e.edge].id))
     }
 
     /// The first edge of `edges` that leads through a door narrower than the robot.
-    fn too_narrow(&self, edges: &[crate::order_route::PlanEdge]) -> Option<String> {
+    fn too_narrow(&self, edges: &[crate::order_route::PlanEdge]) -> Option<EdgeIdx> {
         edges
             .iter()
             .find(|e| {
                 self.door_widths
-                    .get(&e.edge_id)
+                    .get(&e.edge)
                     .is_some_and(|&w| self.width() > w)
             })
-            .map(|e| e.edge_id.clone())
+            .map(|e| e.edge)
     }
 
     /// Tell the robot which edges of the layout are lift rides. Orders with such
@@ -299,9 +330,10 @@ impl Robot {
 
     /// Give the robot a zone set that is already **enabled**, as if the controller
     /// had sent it and enabled it (a shortcut for set-up and tests; the real way
-    /// is [`Robot::receive_zone_set`] and the `enableZoneSet` instant action). It
+    /// is [`Robot::take_zone_set`] and the `enableZoneSet` instant action). It
     /// will state RELEASE zone requests (see [`crate::zone_requests`]), by `timing`.
     pub fn set_zones(&mut self, zones: Zones, timing: ZoneRequestTiming) {
+        let zones = RobotZones::from_setup(&zones);
         self.zone_timing = timing;
         self.zone_sets.clear();
         self.zone_sets.push(StoredZoneSet {
@@ -319,29 +351,28 @@ impl Robot {
         }
     }
 
-    /// Receive a `zoneSet` message (S62). A zone set with an id the robot already
-    /// has is **not** taken over: error `DUPLICATE_ZONE_SET` (WARNING) in the
-    /// state for [`ZONE_SET_ERROR_MS`]. A zone set that does not fit the layout
-    /// (see [`Zones::new`]) is refused with `UNKNOWN_MAP_ID` or
+    /// Receive a zone set (S62). A zone set with an id the robot already has is
+    /// **not** taken over: error `DUPLICATE_ZONE_SET` (WARNING) in the state for
+    /// [`ZONE_SET_ERROR_MS`]. A zone set that does not fit the layout (see
+    /// [`RobotZones::from_message`]) is refused with `UNKNOWN_MAP_ID` or
     /// `VALIDATION_FAILURE`. A new zone set is stored **disabled** and is used
     /// only after the `enableZoneSet` instant action.
-    pub fn receive_zone_set(&mut self, graph: &Graph, msg: &vda5050::zone_set::ZoneSetMessage) {
-        let id = msg.zone_set.zone_set_id.clone();
+    pub fn take_zone_set(&mut self, graph: &Graph, set: &ZoneSet) {
+        let id = &set.id;
         let refuse = |t: ErrorType, text: String| RobotError {
             error_type: t,
-            references: vec![("zoneSetId".to_string(), id.clone())],
+            references: vec![("zoneSetId".to_string(), id.to_string())],
             description: Some(text),
         };
-        let until = self.now_ms + ZONE_SET_ERROR_MS;
-        if self.zone_sets.iter().any(|z| z.zones.zone_set_id == id) {
+        if self.zone_sets.iter().any(|z| z.zones.id == *id) {
             let e = refuse(
                 ErrorType::DuplicateZoneSet,
                 "a zone set with this zoneSetId exists already".to_string(),
             );
-            self.zone_set_errors.push((e, until));
+            self.refuse_zone_set(e);
             return;
         }
-        match Zones::new(graph, msg.zone_set.clone()) {
+        match RobotZones::from_message(graph, set) {
             Ok(zones) => self.zone_sets.push(StoredZoneSet {
                 zones,
                 enabled: false,
@@ -351,7 +382,40 @@ impl Robot {
                     botsim_model::zones::ZoneError::UnknownMap(_) => ErrorType::UnknownMapId,
                     _ => ErrorType::ValidationFailure,
                 };
-                self.zone_set_errors.push((refuse(t, e.to_string()), until));
+                self.refuse_zone_set(refuse(t, e.to_string()));
+            }
+        }
+    }
+
+    /// Report an error about a zone set that was not taken over, for a while.
+    fn refuse_zone_set(&mut self, error: RobotError) {
+        let until = self.now_ms.saturating_add(ZONE_SET_ERROR_MS);
+        self.zone_set_errors.push((error, until));
+    }
+
+    /// Something sent to the robot could not be read: its error is reported as if
+    /// the robot had refused it (an order's until an order is accepted, a zone
+    /// set's for [`ZONE_SET_ERROR_MS`]), and instant actions that could not be
+    /// read are listed `FAILED`. The instant actions that could be read are
+    /// carried out, in their places.
+    pub fn take_unread(&mut self, graph: &Graph, unread: &Unread) {
+        match unread {
+            Unread::Order(error) => self.errors.push(error.clone()),
+            Unread::ZoneSet(error) => self.refuse_zone_set(error.clone()),
+            Unread::InstantActions(entries) => {
+                for entry in entries {
+                    match entry {
+                        InstantEntry::Read(action) => self.take_instant_action(graph, action),
+                        InstantEntry::Unread { id, kind, error } => {
+                            self.instant.push(ActionState {
+                                id: id.clone(),
+                                kind: kind.clone(),
+                                status: ActionStatus::Failed,
+                            });
+                            self.errors.push(error.clone());
+                        }
+                    }
+                }
             }
         }
     }
@@ -359,12 +423,8 @@ impl Robot {
     /// Enable the stored zone set `id` (instant action `enableZoneSet`): the robot
     /// states RELEASE zone requests for its zones from now on, and every other zone
     /// set is disabled. `false` if the robot has no such zone set.
-    fn enable_zone_set(&mut self, graph: &Graph, id: &str) -> bool {
-        let Some(i) = self
-            .zone_sets
-            .iter()
-            .position(|z| z.zones.zone_set_id == id)
-        else {
+    fn enable_zone_set(&mut self, graph: &Graph, id: &ZoneSetId) -> bool {
+        let Some(i) = self.zone_sets.iter().position(|z| z.zones.id == *id) else {
             return false;
         };
         if self.zone_sets[i].enabled {
@@ -383,12 +443,8 @@ impl Robot {
 
     /// Delete the stored zone set `id` (instant action `deleteZoneSet`). `false` if
     /// the robot has no such zone set, or it is enabled (in use).
-    fn delete_zone_set(&mut self, id: &str) -> bool {
-        match self
-            .zone_sets
-            .iter()
-            .position(|z| z.zones.zone_set_id == id)
-        {
+    fn delete_zone_set(&mut self, id: &ZoneSetId) -> bool {
+        match self.zone_sets.iter().position(|z| z.zones.id == *id) {
             Some(i) if !self.zone_sets[i].enabled => {
                 self.zone_sets.remove(i);
                 true
@@ -397,28 +453,23 @@ impl Robot {
         }
     }
 
-    /// The robot's `zoneSets` as it states them, none if it has none.
-    pub fn zone_set_infos(&self, graph: &Graph) -> Vec<vda5050::state::ZoneSetInfo> {
-        use vda5050::state::{EnabledStatus, ZoneSetInfo};
+    /// The robot's zone sets as it states them, none if it has none.
+    pub fn zone_set_infos(&self) -> Vec<ZoneSetInfo> {
         self.zone_sets
             .iter()
             .map(|z| ZoneSetInfo {
-                zone_set_id: z.zones.zone_set_id.clone(),
-                map_id: graph.maps[z.zones.map].clone(),
-                zone_set_status: if z.enabled {
-                    EnabledStatus::Enabled
-                } else {
-                    EnabledStatus::Disabled
-                },
+                id: z.zones.id.clone(),
+                map: z.zones.map,
+                enabled: z.enabled,
             })
             .collect()
     }
 
-    /// The robot's `zoneRequests` as it states them (empty without zones).
-    pub fn zone_requests(&self) -> Vec<vda5050::state::ZoneRequest> {
+    /// The robot's zone requests as it states them (empty without zones).
+    pub fn zone_requests(&self) -> Vec<ZoneRequest> {
         self.zone_requests
             .as_ref()
-            .map(ZoneRequester::to_state)
+            .map(ZoneRequester::to_report)
             .unwrap_or_default()
     }
 
@@ -438,7 +489,7 @@ impl Robot {
         self.driver.set_stop_before_edges(
             p.remaining_edges
                 .iter()
-                .filter(|e| self.door_edges.contains(&e.edge_id))
+                .filter(|e| self.door_edges.contains(&e.edge))
                 .map(|e| e.sequence_id)
                 .collect(),
         );
@@ -460,7 +511,7 @@ impl Robot {
         let doors: Vec<u32> = p
             .remaining_edges
             .iter()
-            .filter(|e| self.closed_door_edges.contains(&e.edge_id))
+            .filter(|e| self.closed_door_edges.contains(&e.edge))
             .map(|e| e.sequence_id)
             .collect();
         self.door_blocked = !doors.is_empty();
@@ -474,17 +525,13 @@ impl Robot {
         self.now_ms = now_ms;
     }
 
-    /// Receive a `responses` message: the controller's answers to zone requests.
-    /// Answers to requests the robot does not have are ignored.
-    pub fn receive_responses(&mut self, msg: &vda5050::responses::Responses) {
+    /// Receive responses: the controller's answers to zone requests. Answers to
+    /// requests the robot does not have are ignored.
+    pub fn take_responses(&mut self, responses: &[Response]) {
         if let Some(zr) = self.zone_requests.as_mut() {
-            for r in &msg.responses {
-                // a lease that cannot be read is treated as no lease
-                let lease = r
-                    .lease_expiry
-                    .as_deref()
-                    .and_then(botsim_model::time::unix_ms_from_iso8601);
-                zr.respond(&r.request_id, r.grant_type, lease);
+            for r in responses {
+                let lease = r.lease_expiry.map(|time| time.0);
+                zr.respond(r.request.as_str(), r.grant, lease);
             }
         }
         self.update_zone_requests();
@@ -589,53 +636,43 @@ impl Robot {
         self.update_zone_requests();
     }
 
-    /// What [`Robot::state`] reports about the order, driving and actions, without
-    /// building the message.
+    /// What [`Robot::report`] says about the order, driving and actions, without
+    /// building the report.
     pub(crate) fn glance(&self) -> Glance<'_> {
         self.driver.glance()
     }
 
-    /// The state message.
-    pub fn state(&self, graph: &Graph, header: &Header) -> State {
-        let mut state = build_state(
-            graph,
-            header,
-            &self.driver.progress(),
-            &self.errors,
-            &self.instant,
-        );
+    /// The state report.
+    pub fn report(&self) -> State {
+        let mut state = build_state(&self.driver.progress(), &self.errors, &self.instant);
         if let Some(b) = &self.battery {
-            state.power_supply.state_of_charge = b.percent();
-            state.power_supply.charging = self.charging;
+            state.charge = b.percent();
+            state.charging = self.charging;
             if self.is_out_of_charge() {
                 // not one of the predefined types: the standard allows others
-                state.errors.push(vda5050::state::StateError {
-                    error_type: "BATTERY_EMPTY".to_string(),
-                    error_references: None,
-                    error_description: Some("the battery is empty, the robot cannot move".into()),
-                    error_description_translations: None,
-                    error_hint: Some("charge the robot".into()),
-                    error_hint_translations: None,
-                    error_level: vda5050::state::ErrorLevel::Fatal,
+                state.errors.push(Error {
+                    kind: ErrorKind::Other("BATTERY_EMPTY".into()),
+                    level: ErrorLevel::Fatal,
+                    references: Vec::new(),
+                    description: Some("the battery is empty, the robot cannot move".into()),
+                    hint: Some("charge the robot".into()),
                 });
             }
         }
-        // an empty array if there are zones but no request (as the standard says)
+        // an empty list if there are zones but no request (as the standard says)
         if let Some(zr) = &self.zone_requests {
             state.zone_requests = Some(self.zone_requests());
             state
                 .errors
-                .extend(zr.errors().iter().map(RobotError::to_state_error));
+                .extend(zr.errors().iter().map(RobotError::to_report));
         }
         // the zone sets stored on the robot, and errors about ones not taken over
-        if !self.zone_sets.is_empty() {
-            state.zone_sets = Some(self.zone_set_infos(graph));
-        }
+        state.zone_sets = self.zone_set_infos();
         state.errors.extend(
             self.zone_set_errors
                 .iter()
                 .filter(|(_, until)| *until > self.now_ms)
-                .map(|(e, _)| e.to_state_error()),
+                .map(|(e, _)| e.to_report()),
         );
         state
     }
@@ -647,36 +684,37 @@ impl Robot {
     }
 
     fn reject_order(&mut self, t: ErrorType, order: &Order, text: &str) -> Reception {
-        let e = RobotError::for_order(t, &order.order_id, order.order_update_id, text.to_string());
+        let id = order.order_id().as_str();
+        let e = RobotError::for_order(t, id, order.update_id(), text.to_string());
         self.reject(e)
     }
 
-    /// Receive an `order` message.
-    pub fn receive_order(&mut self, graph: &Graph, order: &Order) -> Reception {
+    /// Receive an order or order update.
+    pub fn take_order(&mut self, graph: &Graph, order: &Order) -> Reception {
+        let (order_id, update_id) = (order.order_id().as_str(), order.update_id());
         // 1. valid?
         let route = match route_from_order(graph, order) {
             Ok(r) => r,
             Err(e) => {
-                let err = RobotError::from_order_error(&e, &order.order_id, order.order_update_id);
+                let err = RobotError::from_order_error(&e, order_id, update_id);
                 return self.reject(err);
             }
         };
 
         if let Some(what) = self.not_allowed(graph, &route) {
             let e = DriveError::NotAllowedForType { what };
-            let err = RobotError::from_drive_error(&e, &order.order_id, order.order_update_id);
+            let err = RobotError::from_drive_error(&e, order_id, update_id);
             return self.reject(err);
         }
         if let Some(edge) = self.too_narrow(&route.plan_edges) {
+            let edge = graph.edges[edge].id.clone();
             let e = DriveError::DoorTooNarrow { edge };
-            let err = RobotError::from_drive_error(&e, &order.order_id, order.order_update_id);
+            let err = RobotError::from_drive_error(&e, order_id, update_id);
             return self.reject(err);
         }
 
         let current = self.driver.order().map(|(id, u)| (id.to_string(), u));
-        let is_update = current
-            .as_ref()
-            .is_some_and(|(id, _)| *id == order.order_id);
+        let is_update = current.as_ref().is_some_and(|(id, _)| id == order_id);
 
         if !is_update {
             // 2. a new order
@@ -687,7 +725,7 @@ impl Robot {
                     "another order is still active",
                 );
             }
-            if order.order_update_id != 0 {
+            if update_id != 0 {
                 return self.reject_order(
                     ErrorType::ValidationFailure,
                     order,
@@ -725,8 +763,7 @@ impl Robot {
                     Reception::Accepted
                 }
                 Err(e) => {
-                    let err =
-                        RobotError::from_drive_error(&e, &order.order_id, order.order_update_id);
+                    let err = RobotError::from_drive_error(&e, order_id, update_id);
                     self.reject(err)
                 }
             };
@@ -741,7 +778,7 @@ impl Robot {
                 "there is no order to update",
             );
         };
-        if order.order_update_id < current_update {
+        if update_id < current_update {
             return self.reject_order(
                 ErrorType::OutdatedOrderUpdate,
                 order,
@@ -755,7 +792,7 @@ impl Robot {
                 "the order was cancelled; no updates are accepted",
             );
         }
-        if order.order_update_id == current_update {
+        if update_id == current_update {
             return self.reject_order(
                 ErrorType::SameOrderUpdateId,
                 order,
@@ -772,60 +809,58 @@ impl Robot {
                 Reception::Accepted
             }
             Err(e) => {
-                let err = RobotError::from_drive_error(&e, &order.order_id, order.order_update_id);
+                let err = RobotError::from_drive_error(&e, order_id, update_id);
                 self.reject(err)
             }
         }
     }
 
-    /// Receive an `instantActions` message. Every action is listed in
-    /// `instantActionStates`. Supported: `cancelOrder` (optional parameter
+    /// Receive instant actions, in their order. Every action is listed among the
+    /// instant action states. Supported: `cancelOrder` (optional parameter
     /// `orderId`). It fails (`FAILED` + `NO_ORDER_TO_CANCEL`, reference `actionId`)
     /// if the robot is idle or the `orderId` is not the active order. Also
     /// (S62): `enableZoneSet` and `deleteZoneSet` (parameter `zoneSetId`); they
     /// finish at once, or fail with `INVALID_INSTANT_ACTION` if the robot has no
-    /// such zone set (or, for `deleteZoneSet`, it is enabled). Any other type fails
-    /// with `INVALID_INSTANT_ACTION`.
-    pub fn receive_instant_actions(&mut self, graph: &Graph, msg: &InstantActions) {
-        for a in &msg.actions {
-            self.instant.push(InstantActionState {
-                action_id: a.action_id.clone(),
-                action_type: a.action_type.clone(),
-                status: ActionStatus::Failed,
-            });
-            let idx = self.instant.len() - 1;
+    /// such zone set (or, for `deleteZoneSet`, it is enabled). `startCharging`
+    /// and `stopCharging`. Any other type fails with `INVALID_INSTANT_ACTION`.
+    pub fn take_instant_actions(&mut self, graph: &Graph, actions: &[InstantAction]) {
+        for action in actions {
+            self.take_instant_action(graph, action);
+        }
+    }
 
-            if a.action_type == "enableZoneSet" || a.action_type == "deleteZoneSet" {
-                let zone_set_id = a
-                    .action_parameters
-                    .iter()
-                    .flatten()
-                    .find(|p| p.key == "zoneSetId")
-                    .and_then(|p| p.value.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let done = if a.action_type == "enableZoneSet" {
-                    self.enable_zone_set(graph, &zone_set_id)
+    fn take_instant_action(&mut self, graph: &Graph, a: &InstantAction) {
+        let id = a.id.as_str();
+        self.instant.push(ActionState {
+            id: a.id.clone(),
+            kind: Some(a.kind.action_type()),
+            status: ActionStatus::Failed,
+        });
+        let idx = self.instant.len() - 1;
+
+        match &a.kind {
+            InstantKind::EnableZoneSet { zone_set } | InstantKind::DeleteZoneSet { zone_set } => {
+                let done = if matches!(a.kind, InstantKind::EnableZoneSet { .. }) {
+                    self.enable_zone_set(graph, zone_set)
                 } else {
-                    self.delete_zone_set(&zone_set_id)
+                    self.delete_zone_set(zone_set)
                 };
                 if done {
                     self.instant[idx].status = ActionStatus::Finished;
                 } else {
                     self.errors.push(action_error(
                         ErrorType::InvalidInstantAction,
-                        &a.action_id,
+                        id,
                         "the robot has no such zone set (or it is in use)",
                     ));
                 }
-                continue;
             }
-
-            if a.action_type == "startCharging" || a.action_type == "stopCharging" {
-                if a.action_type == "stopCharging" {
-                    self.charging_requested = false;
-                    self.instant[idx].status = ActionStatus::Finished;
-                } else if self.battery.is_some() && self.charger_power_w.is_some() {
+            InstantKind::StopCharging => {
+                self.charging_requested = false;
+                self.instant[idx].status = ActionStatus::Finished;
+            }
+            InstantKind::StartCharging => {
+                if self.battery.is_some() && self.charger_power_w.is_some() {
                     // charging runs while the robot stands on the charger and the
                     // battery is not full
                     self.charging_requested = true;
@@ -833,47 +868,39 @@ impl Robot {
                 } else {
                     self.errors.push(action_error(
                         ErrorType::InvalidInstantAction,
-                        &a.action_id,
+                        id,
                         "startCharging: the robot has no battery or does not stand on a charger",
                     ));
                 }
-                continue;
             }
-
-            if a.action_type != "cancelOrder" {
+            InstantKind::Other(_) => {
                 self.errors.push(action_error(
                     ErrorType::InvalidInstantAction,
-                    &a.action_id,
+                    id,
                     "unsupported instant action",
                 ));
-                continue;
             }
+            InstantKind::CancelOrder { order_id } => {
+                let active = self.driver.phase() != Phase::Finished;
+                let matches = match (order_id, self.driver.order()) {
+                    (Some(w), Some((id, _))) => w.as_str() == id,
+                    (Some(_), None) => false,
+                    (None, _) => true,
+                };
+                if !active || !matches {
+                    self.errors.push(action_error(
+                        ErrorType::NoOrderToCancel,
+                        id,
+                        "no active order to cancel",
+                    ));
+                    return;
+                }
 
-            let wanted = a
-                .action_parameters
-                .iter()
-                .flatten()
-                .find(|p| p.key == "orderId")
-                .and_then(|p| p.value.as_str());
-            let active = self.driver.phase() != Phase::Finished;
-            let matches = match (wanted, self.driver.order()) {
-                (Some(w), Some((id, _))) => w == id,
-                (Some(_), None) => false,
-                (None, _) => true,
-            };
-            if !active || !matches {
-                self.errors.push(action_error(
-                    ErrorType::NoOrderToCancel,
-                    &a.action_id,
-                    "no active order to cancel",
-                ));
-                continue;
+                self.driver.cancel();
+                self.instant[idx].status = ActionStatus::Running;
+                self.cancel_action = Some(idx);
+                self.update_cancel();
             }
-
-            self.driver.cancel();
-            self.instant[idx].status = ActionStatus::Running;
-            self.cancel_action = Some(idx);
-            self.update_cancel();
         }
     }
 

@@ -1,27 +1,33 @@
-//! Whatever the bridge cannot translate is counted, never dropped silently, and
-//! the run goes on safely.
+//! Whatever the route through `vda` cannot translate is counted, never dropped
+//! silently, reaches the robot's errors where VDA 5050 has an error for it, and
+//! the run goes on safely. Doors and lifts are outside VDA 5050: what names
+//! nothing there, the world refuses.
 
 use std::sync::Arc;
 
-use botsim_bridge::report::{Entry, What};
+use botsim_bridge::vda_route;
+use botsim_bridge::vda_route::report::{Entry, What};
 use botsim_core::actions::ActionTimes;
 use botsim_core::lift::{LiftSpec, LiftStop};
-use botsim_core::world::World;
+use botsim_core::world::{World, WorldError};
 use botsim_link::device::{DeviceHeader, DoorCommand, DoorNo, LiftCommand, LiftNo, ToDoor, ToLift};
 use botsim_link::ids::{ActionId, OrderId, RequestId, ZoneSetId};
 use botsim_link::instant::{InstantAction, InstantKind};
 use botsim_link::message::{Header, Millis, ToRobot, ToRobotBody};
 use botsim_link::order::Order;
 use botsim_link::response::{Grant, Response};
+use botsim_link::state::ActionStatus;
 use botsim_link::zone_set::{Zone, ZoneKind, ZoneSet};
 use botsim_model::job::Job;
-use botsim_model::robot::RobotId;
 use botsim_model::zones::Zones;
 use botsim_server::cycle::{Message, robot_no};
 use serde_json::json;
 
 mod setup;
 use setup::{DT, graph, id, line, robot_spec};
+#[path = "../../core/tests/vda_port/mod.rs"]
+mod vda_port;
+use vda_port::VdaWorld;
 
 /// A world with the robot ACME/R-001 on N0 of the line, started at `start_ms`.
 fn world(start_ms: i64) -> World {
@@ -60,23 +66,29 @@ fn counted(entries: &[Entry]) -> Vec<(What, &str, bool, u64)> {
         .collect()
 }
 
+/// What the route of `c` has counted.
+fn entries(c: &botsim_bridge::Bridged) -> &[Entry] {
+    c.untranslated().expect("on the route").entries()
+}
+
 #[test]
 fn with_a_state_refused_the_controller_only_takes_the_jobs() {
     // a world in the year 11476, which a VDA 5050 timestamp cannot say
     let mut w = world(300_000_000_000_000);
-    let mut c = botsim_bridge::controller(&w);
+    let mut c = vda_route::controller(&w);
     let mut jobs = Some(vec![job(&w)]);
     for _ in 0..40 {
         botsim_bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     assert_eq!((c.pending().count(), c.busy()), (1, 0));
-    assert_eq!(w.state(&id(1)).unwrap().order_id, "");
+    // (the robot never had an order)
+    assert_eq!(w.report(robot_no(0)).unwrap().state.order_id, None);
     assert_eq!(
-        counted(c.untranslated().entries()),
+        counted(entries(&c)),
         [(What::State, "ACME/R-001", true, 40)]
     );
-    let entry = &c.untranslated().entries()[0];
+    let entry = &entries(&c)[0];
     assert_eq!(entry.first_tick, 0);
     assert!(entry.reason.to_string().contains("timestamp"), "{entry:?}");
 }
@@ -84,7 +96,7 @@ fn with_a_state_refused_the_controller_only_takes_the_jobs() {
 #[test]
 fn a_part_of_a_state_that_cannot_be_read_is_left_out_and_counted() {
     let mut w = world(0);
-    let mut c = botsim_bridge::controller(&w);
+    let mut c = vda_route::controller(&w);
     let good = w.state(&id(1)).unwrap();
 
     let mut message = good.clone();
@@ -108,7 +120,7 @@ fn a_part_of_a_state_that_cannot_be_read_is_left_out_and_counted() {
     message.serial_number = "R-009".into();
     assert_eq!(c.read_state(&message, 6), None);
     assert_eq!(
-        counted(c.untranslated().entries()),
+        counted(entries(&c)),
         [
             (What::State, "ACME/R-001", false, 1),
             (What::State, "ACME/R-001", true, 1),
@@ -120,14 +132,27 @@ fn a_part_of_a_state_that_cannot_be_read_is_left_out_and_counted() {
 #[test]
 fn a_refused_message_is_not_sent_and_of_a_list_the_other_entries_go() {
     let mut w = world(0);
-    let mut c = botsim_bridge::controller(&w);
+    let mut c = vda_route::controller(&w);
 
-    // an order from a node the layout does not have
+    // an order from a node the layout does not have: the robot says why it did
+    // not get it
     let order = Order::new(OrderId::new("o"), 0, 0, 99, Vec::new(), 0, Vec::new()).unwrap();
     c.send(&mut w, &to_robot(ToRobotBody::Order(order)));
     w.step();
     let state = w.state(&id(1)).unwrap();
-    assert!(state.order_id.is_empty() && state.errors.is_empty());
+    assert!(state.order_id.is_empty());
+    let [error] = &state.errors[..] else {
+        panic!("one error: {:?}", state.errors);
+    };
+    assert_eq!(error.error_type, "NO_ROUTE_TO_TARGET");
+    let reference = &error.error_references.as_ref().unwrap()[0];
+    assert_eq!(
+        (
+            reference.reference_key.as_str(),
+            reference.reference_value.as_str()
+        ),
+        ("orderId", "o")
+    );
 
     // an instant action without an id beside a good one
     let actions = ["", "s"].map(|id| InstantAction {
@@ -144,6 +169,19 @@ fn a_refused_message_is_not_sent_and_of_a_list_the_other_entries_go() {
         .map(|a| a.action_id.as_str())
         .collect();
     assert_eq!(ids, ["s"]);
+    // (the robot lists the one without an id too, as failed, which a VDA 5050
+    // state cannot say)
+    let report = w.report(robot_no(0)).unwrap().state;
+    let listed: Vec<_> = report
+        .instant_actions
+        .iter()
+        .map(|a| (a.id.as_str(), a.status))
+        .collect();
+    assert_eq!(
+        listed,
+        [("", ActionStatus::Failed), ("s", ActionStatus::Finished)]
+    );
+    assert_eq!(report.errors.len(), 2);
 
     // a response without a request id beside a good one
     let responses = ["", "r"].map(|id| Response {
@@ -171,7 +209,7 @@ fn a_refused_message_is_not_sent_and_of_a_list_the_other_entries_go() {
     assert_eq!(w.state(&id(1)).unwrap().zone_sets, None);
 
     assert_eq!(
-        counted(c.untranslated().entries()),
+        counted(entries(&c)),
         [
             (What::Order, "ACME/R-001", true, 1),
             (What::InstantActions, "ACME/R-001", false, 1),
@@ -195,10 +233,10 @@ fn without_its_zone_set_a_site_with_zones_gets_no_robot_a_task() {
     w.set_site_zones(zones);
     w.add_robot(id(1), robot_spec(), ActionTimes::new(1.0), n0, 0.0)
         .unwrap();
-    let config = botsim_bridge::config(&w);
+    let config = vda_route::config(&w);
     assert!(config.zones.is_some() && config.zone_set.is_none());
 
-    let mut c = botsim_bridge::controller(&w);
+    let mut c = vda_route::controller(&w);
     let mut jobs = Some(vec![job(&w)]);
     for _ in 0..200 {
         botsim_bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
@@ -207,12 +245,11 @@ fn without_its_zone_set_a_site_with_zones_gets_no_robot_a_task() {
     assert_eq!((c.pending().count(), c.busy()), (1, 0));
     let state = w.state(&id(1)).unwrap();
     assert!(state.order_id.is_empty() && state.zone_sets.is_none());
-    assert_eq!(
-        counted(c.untranslated().entries()),
-        [(What::SiteZoneSet, "zs", true, 1)]
-    );
+    assert_eq!(counted(entries(&c)), [(What::SiteZoneSet, "zs", true, 1)]);
 }
 
+/// Doors and lifts are outside VDA 5050, so there is nothing to translate or to
+/// count: the world refuses a command that names nothing, and nothing happens.
 #[test]
 fn lift_and_door_messages_that_name_nothing_are_counted() {
     let g = graph(
@@ -244,22 +281,7 @@ fn lift_and_door_messages_that_name_nothing_are_counted() {
         door_hold_seconds: None,
     })
     .unwrap();
-    let mut c = botsim_bridge::controller(&w);
-
-    let status = w.lifts().remove(0);
     let time = Millis(0);
-    let read = c.read_lift(0, &status, None, time, 0).unwrap();
-    assert_eq!((read.header.device, read.header.seq), (LiftNo(0), 0));
-    // a floor the lift does not have, and a lift the site does not have
-    let mut high = status.clone();
-    high.floor = 9;
-    assert_eq!(c.read_lift(0, &high, None, time, 0), None);
-    assert_eq!(c.read_lift(5, &status, None, time, 0), None);
-    // a rider that is no robot of the fleet: the rest is read
-    let stranger = RobotId::new("ACME", "X");
-    let read = c.read_lift(0, &status, Some(&stranger), time, 0).unwrap();
-    assert_eq!((read.occupant, read.header.seq), (None, 1));
-
     let door = ToDoor {
         header: DeviceHeader {
             device: DoorNo(7),
@@ -268,47 +290,41 @@ fn lift_and_door_messages_that_name_nothing_are_counted() {
         },
         command: DoorCommand::Open,
     };
-    c.send(&mut w, &Message::Door(door));
     let to_lift = |device, command| {
         let header = DeviceHeader {
             device: LiftNo(device),
             seq: 0,
             time,
         };
-        Message::Lift(ToLift { header, command })
+        ToLift { header, command }
     };
-    c.send(&mut w, &to_lift(7, LiftCommand::Release));
-    c.send(
-        &mut w,
-        &to_lift(
-            0,
-            LiftCommand::Call {
-                map: 99,
-                car_door: 0,
-            },
-        ),
-    );
-    c.send(
-        &mut w,
-        &to_lift(
-            0,
-            LiftCommand::Call {
-                map: 1,
-                car_door: 9,
-            },
-        ),
-    );
-    assert!(w.lifts()[0].queue.is_empty() && w.lifts()[0].moving_to.is_none());
+    let call = |map, car_door| to_lift(0, LiftCommand::Call { map, car_door });
+    let no_lift = to_lift(7, LiftCommand::Release);
 
     assert_eq!(
-        counted(c.untranslated().entries()),
-        [
-            (What::LiftState, "L", true, 1),
-            (What::LiftState, "L", true, 1),
-            (What::LiftState, "L", false, 1),
-            (What::DoorCommand, "door number 7", true, 1),
-            (What::LiftCommand, "lift number 7", true, 1),
-            (What::LiftCommand, "L", true, 2),
-        ]
+        w.command_door(&door),
+        Err(WorldError::UnknownDoorNo(DoorNo(7)))
     );
+    assert_eq!(
+        w.command_lift(&no_lift),
+        Err(WorldError::UnknownLiftNo(LiftNo(7)))
+    );
+    assert!(matches!(
+        w.command_lift(&call(99, 0)),
+        Err(WorldError::UnknownMap(_))
+    ));
+    assert!(matches!(
+        w.command_lift(&call(1, 9)),
+        Err(WorldError::UnknownDoor(_))
+    ));
+
+    // the controller's connection drops them, on either route
+    for mut c in [botsim_bridge::controller(&w), vda_route::controller(&w)] {
+        c.send(&mut w, &Message::Door(door));
+        for command in [no_lift, call(99, 0), call(1, 9), call(1, 9)] {
+            c.send(&mut w, &Message::Lift(command));
+        }
+        assert!(c.untranslated().is_none_or(|u| u.is_empty()));
+    }
+    assert!(w.lifts()[0].queue.is_empty() && w.lifts()[0].moving_to.is_none());
 }

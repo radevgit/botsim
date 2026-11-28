@@ -13,6 +13,9 @@ use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;
 
+mod vda_port;
+use vda_port::VdaWorld;
+
 const DT: f64 = 0.05;
 
 /// A(0,0) → B(10,0), and two lone nodes just ahead of A: FAR(1.35, 0.55) and

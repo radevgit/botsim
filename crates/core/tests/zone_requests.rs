@@ -13,6 +13,9 @@ use vda5050::state::RequestStatus;
 use vda5050::zone_set::ZoneSet;
 use vdma_lif::Lif;
 
+mod vda_port;
+use vda_port::VdaWorld;
+
 const DT: f64 = 0.05;
 
 fn graph() -> Graph {
@@ -308,7 +311,7 @@ fn every_robot_numbers_its_own_requests_and_the_state_is_schema_valid() {
     );
 
     let schema: serde_json::Value =
-        serde_json::from_str(include_str!("data/vda5050_state.schema.json")).unwrap();
+        serde_json::from_str(include_str!("../../vda/tests/data/state.schema")).unwrap();
     let validator = jsonschema::options()
         .should_validate_formats(true)
         .build(&schema)

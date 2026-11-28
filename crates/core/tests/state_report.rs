@@ -1,7 +1,5 @@
 use botsim_core::actions::ActionTimes;
 use botsim_core::drive::{Driver, Phase};
-use botsim_core::order_route::route_from_order;
-use botsim_core::state_report::{Header, build_state};
 use botsim_model::graph::Graph;
 use botsim_model::spec::RobotSpec;
 use serde_json::Value;
@@ -10,6 +8,9 @@ use vda5050::order::Order;
 use vda5050::state::ActionStatus::{Finished, Running, Waiting};
 use vda5050::state::State;
 use vdma_lif::Lif;
+
+mod vda_port;
+use vda_port::{Header, build_state, route_from_order};
 
 const DT: f64 = 0.05;
 
@@ -65,7 +66,7 @@ fn state(d: &Driver) -> State {
 /// The message must be valid against the official VDA 5050 state schema.
 fn assert_schema_valid(s: &State) {
     let schema: Value =
-        serde_json::from_str(include_str!("data/vda5050_state.schema.json")).unwrap();
+        serde_json::from_str(include_str!("../../vda/tests/data/state.schema")).unwrap();
     let validator = jsonschema::options()
         .should_validate_formats(true)
         .build(&schema)

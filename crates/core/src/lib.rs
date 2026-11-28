@@ -15,6 +15,7 @@ pub mod motion;
 pub mod observer;
 pub mod order_route;
 pub mod robot;
+pub mod robot_zones;
 pub mod state_report;
 pub mod waiting;
 pub mod world;

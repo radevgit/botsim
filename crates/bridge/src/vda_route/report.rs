@@ -1,9 +1,8 @@
-//! What the bridge could not translate between the world and the controller.
-//! Nothing of it is dropped silently: each case is counted here.
+//! What the route through `vda` could not translate between the world and the
+//! controller. Nothing of it is dropped silently: each case is counted here.
 
 use std::fmt;
 
-use botsim_link::device::{DoorNo, LiftNo};
 use botsim_model::robot::RobotNo;
 use botsim_vda::report::Issue;
 use botsim_vda::translator::RobotTableError;
@@ -25,9 +24,6 @@ pub enum What {
     ZoneSet,
     /// The site's zone set, when the controller is set up.
     SiteZoneSet,
-    LiftState,
-    LiftCommand,
-    DoorCommand,
 }
 
 /// Whom it was of or for.
@@ -35,8 +31,6 @@ pub enum What {
 pub enum Subject {
     Site,
     Robot(RobotNo),
-    Lift(LiftNo),
-    Door(DoorNo),
 }
 
 /// Why it could not be translated.
@@ -46,9 +40,6 @@ pub enum Reason {
     Translator(Issue),
     /// The translator's table of robots did not take the robot.
     Table(RobotTableError),
-    /// A lift or door message names something that is not there; the text says
-    /// what.
-    NotThere(&'static str),
 }
 
 /// One case, with how often it came up.
@@ -56,8 +47,8 @@ pub enum Reason {
 pub struct Entry {
     pub what: What,
     pub subject: Subject,
-    /// The subject in words: `manufacturer/serialNumber` of a robot, the id of a
-    /// lift or door, or the number if there is no such one.
+    /// The subject in words: `manufacturer/serialNumber` of a robot (the number
+    /// if there is no such one), or the id of the site's zone set.
     pub name: String,
     /// Nothing of it went through; `false`: the rest did, without the part.
     pub refused: bool,
@@ -129,9 +120,6 @@ impl fmt::Display for What {
             What::Responses => "responses",
             What::ZoneSet => "zoneSet",
             What::SiteZoneSet => "site zone set",
-            What::LiftState => "lift state",
-            What::LiftCommand => "lift command",
-            What::DoorCommand => "door command",
         })
     }
 }
@@ -141,23 +129,34 @@ impl fmt::Display for Reason {
         match self {
             Reason::Translator(issue) => issue.fmt(f),
             Reason::Table(error) => error.fmt(f),
-            Reason::NotThere(what) => write!(f, "there is no such {what}"),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use botsim_vda::report::{Item, Problem};
+
     use super::*;
 
     #[test]
     fn equal_cases_are_counted_together_and_the_list_is_bounded() {
         let mut report = Untranslated::default();
         assert!(report.is_empty());
-        let door = |n| (What::DoorCommand, Subject::Door(DoorNo(n)));
+        let robot = |n| (What::Order, Subject::Robot(RobotNo::new(n, 0)));
+        let reason = || {
+            Reason::Translator(Issue {
+                problem: Problem::OutsideLayout {
+                    item: Item::Node,
+                    number: 9,
+                },
+                error: None,
+                references: Vec::new(),
+                entry: None,
+            })
+        };
         for tick in [3, 4, 9] {
-            let reason = Reason::NotThere("door");
-            report.note(door(0), true, reason, tick, || "d".to_string());
+            report.note(robot(0), true, reason(), tick, || "r".to_string());
         }
         assert_eq!(report.total(), 3);
         let [entry] = report.entries() else {
@@ -165,13 +164,12 @@ mod tests {
         };
         assert_eq!((entry.count, entry.first_tick), (3, 3));
         for n in 1..=2 * MOST_ENTRIES as u32 {
-            let reason = Reason::NotThere("door");
-            report.note(door(n), true, reason, 10, || n.to_string());
+            report.note(robot(n), true, reason(), 10, || n.to_string());
         }
         assert_eq!(report.entries().len(), MOST_ENTRIES);
         assert_eq!(report.total(), 3 + 2 * MOST_ENTRIES as u64);
         // a known case is still counted
-        report.note(door(0), true, Reason::NotThere("door"), 11, String::new);
+        report.note(robot(0), true, reason(), 11, String::new);
         assert_eq!(report.entries()[0].count, 4);
     }
 }
