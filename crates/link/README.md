@@ -6,7 +6,8 @@ never sent to a robot, and the translation to and from VDA 5050 messages is not 
 this crate but in `botsim-vda`.
 
 Library only; of the botsim crates it depends on `botsim-model` only, reads no
-files and uses no network. Only `botsim-vda` uses it yet.
+files and uses no network. The fleet server's controller (`botsim-baseline`) speaks
+it; `botsim-bridge` translates it for the simulator through `botsim-vda`.
 
 - Layout nodes, edges and maps are the numbers of the layout graph; a robot is a
   `RobotNo` (`botsim_model::robot`). Names are looked up elsewhere.

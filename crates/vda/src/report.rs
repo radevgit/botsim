@@ -67,7 +67,7 @@ pub enum Problem {
     OutOfRange { field: &'static str },
     /// An angle outside the range the message allows; it was brought into −π..π.
     AngleNormalized { field: &'static str, from: f64 },
-    /// An id that is empty, or an identity that cannot be in a topic.
+    /// An id that is empty.
     UnusableId { field: &'static str },
     /// A value that would be read as something else, for example an error type
     /// given as "other" with the name of a predefined one.

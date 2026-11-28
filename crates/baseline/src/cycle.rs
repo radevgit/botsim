@@ -1,39 +1,56 @@
 //! What the controller is given and what it gives back. It holds no robot, lift
 //! or door: the caller tells it the site once ([`Config`]), then runs it in
 //! cycles with what has arrived ([`Input`]) and sends what comes out
-//! ([`Output`]).
+//! ([`Output`]). What passes in the cycles is [`botsim_link`].
 //!
-//! **Order of robots, lifts and doors.** [`Config`] lists them in a fixed order.
-//! The controller numbers them by it (ties between robots go to the one listed
-//! first), and every list of an [`Input`] and an [`Output`] is in that order.
+//! **Numbers of robots, lifts and doors.** [`Config`] lists them in a fixed order,
+//! and they are named by their places in it: robot `i` is [`robot_no`]`(i)`, the
+//! `i`-th door is `DoorNo(i)`, the `i`-th lift `LiftNo(i)`. The controller also
+//! breaks ties between robots by this order (the one listed first wins).
+//!
+//! **Sequence numbers.** Every message sent carries one that counts from 0 for each
+//! robot and kind of message (order, instant actions, responses, zone set) on its
+//! own, and for each door and each lift.
 
+use std::sync::Arc;
+
+use botsim_link::device::{FromLift, ToDoor, ToLift};
+use botsim_link::message::{FromRobot, Millis, ToRobot};
+use botsim_link::zone_set::ZoneSet;
 use botsim_model::graph::Graph;
 use botsim_model::reservation::Reservation;
-use botsim_model::robot::RobotId;
+use botsim_model::robot::{RobotId, RobotNo};
 use botsim_model::spec::{Kinematics, RobotSpec, Shape, SpecError};
 use botsim_model::waiting::HeldBack;
 use botsim_model::zones::Zones;
 use vda5050::factsheet::Factsheet;
-use vda5050::instant_actions::InstantActions;
-use vda5050::order::Order;
-use vda5050::responses::Responses;
-use vda5050::state::State;
-use vda5050::zone_set::ZoneSetMessage;
 
 use crate::doors::Door;
 use crate::lifts::Lift;
 
+/// The number of the robot at place `index` of [`Config::robots`]: that slot, in
+/// its first generation (no robot joins or leaves yet).
+pub fn robot_no(index: usize) -> RobotNo {
+    // (a fleet of more robots than 32 bits can number does not fit in memory)
+    RobotNo::new(u32::try_from(index).unwrap_or(u32::MAX), 0)
+}
+
 /// The site and the fleet: what stays the same during a run.
 ///
-/// A lift stop or a zone set that names a node, a door of the lift or a map that
-/// is not there is left out.
+/// A lift stop that names a node or a door of the lift that is not there is left
+/// out, and so is a zone set for a map the layout does not have.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The layout.
     pub graph: Graph,
     pub robots: Vec<FleetRobot>,
-    /// The site's zone set, if it has one.
+    /// The site's zones, if it has any: where they are, for the zone rules.
     pub zones: Option<Zones>,
+    /// The message with the same zones, which the controller sends to every robot.
+    /// With [`Config::zones`] but without this, no robot is ready for a task: it
+    /// would drive into zones that it does not know. Not looked at without
+    /// [`Config::zones`].
+    pub zone_set: Option<Arc<ZoneSet>>,
     pub lifts: Vec<Lift>,
     pub doors: Vec<Door>,
     /// The seconds between two ticks of [`Time::tick`].
@@ -72,21 +89,30 @@ impl FleetRobot {
 pub struct Time {
     /// Counts the steps of [`Config::step_seconds`]; it does not go back.
     pub tick: u64,
-    /// Milliseconds since 1970-01-01T00:00:00Z, for the timestamps of the
-    /// messages.
+    /// Milliseconds since 1970-01-01T00:00:00Z, for the times of the messages.
     pub unix_ms: i64,
+}
+
+impl Time {
+    /// The time as the messages carry it.
+    pub(crate) fn millis(self) -> Millis {
+        Millis(self.unix_ms)
+    }
 }
 
 /// What has arrived for one cycle.
 #[derive(Debug, Clone, Copy)]
 pub struct Input<'a> {
     pub time: Time,
-    /// Every robot's state message, one for each of [`Config::robots`]. With any
-    /// other number the cycle does nothing but take the new jobs and the time.
-    pub states: &'a [State],
-    /// For each of [`Config::lifts`], the robot in its cabin, if the lift names
-    /// one; a missing entry counts as none.
-    pub lift_riders: &'a [Option<RobotId>],
+    /// Every robot's state report, one for each of [`Config::robots`] and in that
+    /// order: report `i` is from robot [`robot_no`]`(i)`. Otherwise the cycle does
+    /// nothing but take the new jobs and the time.
+    pub states: &'a [FromRobot],
+    /// The states of the lifts, in any order; each names its lift. Of several of
+    /// one lift the last counts. A lift without one has no robot in its cabin as
+    /// far as the controller knows; one of a lift the site does not have is not
+    /// looked at.
+    pub lifts: &'a [FromLift],
     /// Somebody watches the run: the reservations are wanted.
     pub watched: bool,
 }
@@ -94,23 +120,12 @@ pub struct Input<'a> {
 /// One message to send.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
-    /// To the robot it names, like the three that follow.
-    Order(Order),
-    InstantActions(InstantActions),
-    Responses(Responses),
-    ZoneSet(ZoneSetMessage),
-    /// The door with this id is wanted open.
-    OpenDoor(String),
-    /// The controller is done with the door.
-    ReleaseDoor(String),
-    /// Bring the cabin of a lift to the floor of a map and open a door.
-    CallLift {
-        lift: String,
-        map: String,
-        door: String,
-    },
-    /// The controller is done with the door of the lift with this id.
-    ReleaseLift(String),
+    /// To the robot its header names.
+    Robot(ToRobot),
+    /// To the door its header names.
+    Door(ToDoor),
+    /// To the lift its header names.
+    Lift(ToLift),
 }
 
 /// What a cycle gives back.

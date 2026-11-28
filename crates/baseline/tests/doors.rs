@@ -1,7 +1,7 @@
 //! The baseline controller uses doors (S51).
 
-use botsim_baseline::controller::Controller;
 use botsim_bridge as bridge;
+use botsim_bridge::Bridged as Controller;
 use botsim_core::actions::ActionTimes;
 use botsim_core::door::DoorSpec;
 use botsim_core::lift::DoorState;

@@ -1,8 +1,8 @@
 //! The baseline plans routes for each robot type separately (S55): a robot is only
 //! given edges its type may use, and jobs go to robots that can do them.
 
-use botsim_baseline::controller::Controller;
 use botsim_bridge as bridge;
+use botsim_bridge::Bridged as Controller;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;

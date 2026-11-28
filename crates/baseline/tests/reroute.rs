@@ -1,8 +1,9 @@
 //! Timeout re-routing of the baseline (S53): a robot that another robot has held
 //! up at the end of its released route for too long gets a route around it.
 
-use botsim_baseline::controller::{Controller, REROUTE_AFTER_SECONDS};
+use botsim_baseline::controller::REROUTE_AFTER_SECONDS;
 use botsim_bridge as bridge;
+use botsim_bridge::Bridged as Controller;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;

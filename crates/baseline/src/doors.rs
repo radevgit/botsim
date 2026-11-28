@@ -3,7 +3,7 @@
 //! A door guards layout edges (see `docs/rules.md` §7h). A robot does not start
 //! such an edge unless the door is fully open, and the door does not close on a
 //! robot that is on the edge. The controller opens and releases the door with
-//! messages to it ([`Message::OpenDoor`], [`Message::ReleaseDoor`]).
+//! messages to it ([`DoorCommand::Open`], [`DoorCommand::Release`]).
 //!
 //! **One robot uses a door at a time** (it "owns" it), first come first served:
 //! - A robot asks for the door when its release window would include a guarded
@@ -27,6 +27,8 @@
 
 use std::collections::HashMap;
 
+use botsim_link::device::{DeviceHeader, DoorCommand, DoorNo, ToDoor};
+use botsim_link::message::Millis;
 use botsim_model::graph::EdgeIdx;
 
 use crate::cycle::Message;
@@ -50,10 +52,11 @@ struct Owner {
 
 #[derive(Debug)]
 pub struct DoorDesk {
-    ids: Vec<String>,
     /// Layout edge → door index.
     door_of: HashMap<EdgeIdx, usize>,
     owners: Vec<Option<Owner>>,
+    /// For each door, the sequence number of the next command to it.
+    seqs: Vec<u32>,
 }
 
 impl DoorDesk {
@@ -67,7 +70,7 @@ impl DoorDesk {
         }
         DoorDesk {
             owners: vec![None; doors.len()],
-            ids: doors.iter().map(|s| s.id.clone()).collect(),
+            seqs: vec![0; doors.len()],
             door_of,
         }
     }
@@ -148,20 +151,34 @@ impl DoorDesk {
         }
     }
 
-    /// One control cycle. `at[i]` is the plan index of the last node of robot
-    /// `i`, `None` if it has no job. The commands to the doors go to `out`.
-    pub fn update(&mut self, at: &[Option<usize>], out: &mut Vec<Message>) {
+    /// One control cycle at `time`. `at[i]` is the plan index of the last node of
+    /// robot `i`, `None` if it has no job. The commands to the doors go to `out`.
+    pub fn update(&mut self, at: &[Option<usize>], time: Millis, out: &mut Vec<Message>) {
         for d in 0..self.owners.len() {
             let Some(o) = self.owners[d].clone() else {
                 continue;
             };
             // passed (at the end node of the edge) or the job is over: let go
-            if at[o.robot].is_none_or(|a| a > o.edge_index) {
-                out.push(Message::ReleaseDoor(self.ids[d].clone()));
+            let passed = at[o.robot].is_none_or(|a| a > o.edge_index);
+            if passed {
                 self.owners[d] = None;
-            } else {
-                out.push(Message::OpenDoor(self.ids[d].clone()));
             }
+            // (a site with more doors than 32 bits can number does not fit in
+            // memory)
+            let header = DeviceHeader {
+                device: DoorNo(u32::try_from(d).unwrap_or(u32::MAX)),
+                seq: self.seqs[d],
+                time,
+            };
+            self.seqs[d] = self.seqs[d].wrapping_add(1);
+            out.push(Message::Door(ToDoor {
+                header,
+                command: if passed {
+                    DoorCommand::Release
+                } else {
+                    DoorCommand::Open
+                },
+            }));
         }
     }
 }

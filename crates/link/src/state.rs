@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use botsim_model::errors::ErrorType;
 use botsim_model::graph::{EdgeIdx, MapIdx, NodeIdx};
+use botsim_model::waiting::stands_waiting;
 
 use crate::ids::{ActionId, ActionType, OrderId, RequestId, ZoneId, ZoneSetId};
 use crate::shape::ShapeError;
@@ -39,6 +40,24 @@ pub struct State {
     /// The zone sets stored on the robot.
     pub zone_sets: Vec<ZoneSetInfo>,
     pub errors: Vec<Error>,
+}
+
+impl State {
+    /// Is this robot waiting, judged from its report
+    /// ([`stands_waiting`])? Whether it has a job is for the caller to know.
+    pub fn is_waiting(&self) -> bool {
+        let acting = self
+            .actions
+            .iter()
+            .any(|a| a.status == ActionStatus::Running);
+        stands_waiting(self.driving, self.field_violation, acting)
+    }
+
+    /// Half the `sequenceId` of the last node, the number of legs of the order
+    /// behind the robot; 0 without a last node.
+    pub fn last_step(&self) -> u32 {
+        self.route.last_node().map_or(0, |n| n.step)
+    }
 }
 
 /// Where a robot is on its order: the last node it reached and what is still ahead.

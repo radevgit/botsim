@@ -190,6 +190,13 @@ fn run(options: &Options) -> Result<String, String> {
         }
     }
     .map_err(|e| e.to_string())?;
+    if let Some(untranslated) = &result.untranslated {
+        eprintln!(
+            "warning: {} cases could not be translated between the world and the controller; \
+             see \"untranslated\" in the summary",
+            untranslated.total
+        );
+    }
     if let Some((file, handle)) = recording {
         handle
             .finish()

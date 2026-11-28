@@ -2,7 +2,7 @@
 //!
 //! A job whose route has a **ride** (a layout edge between two stops of one
 //! lift, see `docs/rules.md` §7g) needs the lift. The controller handles it
-//! with messages to the lift ([`Message::CallLift`], [`Message::ReleaseLift`]);
+//! with messages to the lift ([`LiftCommand::Call`], [`LiftCommand::Release`]);
 //! the robot only drives and waits.
 //!
 //! **One robot uses a lift at a time** (it "owns" it), first come first served:
@@ -36,10 +36,11 @@
 
 use std::collections::HashMap;
 
-use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
-use botsim_model::robot::RobotId;
+use botsim_link::device::{DeviceHeader, FromLift, LiftCommand, LiftNo, ToLift};
+use botsim_link::message::Millis;
+use botsim_model::graph::{EdgeIdx, Graph, MapIdx, NodeIdx};
 
-use crate::cycle::Message;
+use crate::cycle::{Message, robot_no};
 use crate::order_builder::Plan;
 
 /// A lift, as the controller is told of it.
@@ -84,15 +85,16 @@ struct Owner {
 #[derive(Debug)]
 struct Stop {
     node: NodeIdx,
-    map_id: String,
-    door_id: String,
+    /// The map of the floor the stop is on.
+    map: MapIdx,
+    /// The cabin door that opens here: its place in [`Lift::doors`].
+    car_door: u32,
     /// The lay-by for robots that wait for the lift.
     waiting: Option<NodeIdx>,
 }
 
 #[derive(Debug)]
 struct LiftInfo {
-    id: String,
     stops: Vec<Stop>,
 }
 
@@ -105,8 +107,7 @@ impl LiftInfo {
 
 /// What the lift handling needs to know about a robot each cycle.
 #[derive(Debug, Clone, Copy)]
-pub struct LiftRobot<'a> {
-    pub id: &'a RobotId,
+pub struct LiftRobot {
     /// Plan index of the robot's last node; `None` if it has no job.
     pub at: Option<usize>,
     /// The layout node the robot stands on, if any.
@@ -121,6 +122,8 @@ pub struct LiftDesk {
     /// Every ride → the waiting node of its entrance, for the route search.
     waiting: HashMap<EdgeIdx, Option<NodeIdx>>,
     owners: Vec<Option<Owner>>,
+    /// For each lift, the sequence number of the next command to it.
+    seqs: Vec<u32>,
 }
 
 impl LiftDesk {
@@ -129,17 +132,19 @@ impl LiftDesk {
     /// does not have, is left out.
     pub fn new(graph: &Graph, lifts: &[Lift]) -> LiftDesk {
         let stop = |lift: &Lift, st: &LiftStop| {
+            let map = graph.nodes.get(st.node)?.map;
+            graph.maps.get(map)?;
+            lift.doors.get(st.door)?;
             Some(Stop {
                 node: st.node,
-                map_id: graph.maps.get(graph.nodes.get(st.node)?.map)?.clone(),
-                door_id: lift.doors.get(st.door)?.clone(),
+                map,
+                car_door: u32::try_from(st.door).ok()?,
                 waiting: st.waiting,
             })
         };
         let lifts: Vec<LiftInfo> = lifts
             .iter()
             .map(|l| LiftInfo {
-                id: l.id.clone(),
                 stops: l.stops.iter().filter_map(|st| stop(l, st)).collect(),
             })
             .collect();
@@ -157,6 +162,7 @@ impl LiftDesk {
         }
         LiftDesk {
             owners: vec![None; lifts.len()],
+            seqs: vec![0; lifts.len()],
             lifts,
             rides,
             waiting,
@@ -256,13 +262,15 @@ impl LiftDesk {
         }
     }
 
-    /// One control cycle: call, release and send the cabins of the lifts that
-    /// have an owner. `riders` names, lift by lift, the robot in each cabin as
-    /// far as the lift says; the commands to the lifts go to `out`.
+    /// One control cycle at `time`: call, release and send the cabins of the lifts
+    /// that have an owner. `states` are what the lifts report (see
+    /// [`Input::lifts`](crate::cycle::Input::lifts)), `robots[i]` is robot `i`; the
+    /// commands to the lifts go to `out`.
     pub fn update(
         &mut self,
-        riders: &[Option<RobotId>],
+        states: &[FromLift],
         robots: &[LiftRobot],
+        time: Millis,
         out: &mut Vec<Message>,
     ) {
         for l in 0..self.owners.len() {
@@ -281,33 +289,49 @@ impl LiftDesk {
                 continue;
             };
             let r = robots[o.robot];
-            let call = |s: &Stop| Message::CallLift {
-                lift: info.id.clone(),
-                map: s.map_id.clone(),
-                door: s.door_id.clone(),
+            // (a site with more lifts than 32 bits can number does not fit in
+            // memory)
+            let device = LiftNo(u32::try_from(l).unwrap_or(u32::MAX));
+            let seq = &mut self.seqs[l];
+            let mut send = |command| {
+                let header = DeviceHeader {
+                    device,
+                    seq: *seq,
+                    time,
+                };
+                *seq = seq.wrapping_add(1);
+                out.push(Message::Lift(ToLift { header, command }));
             };
-            let release = || Message::ReleaseLift(info.id.clone());
+            let call = |s: &Stop| LiftCommand::Call {
+                map: s.map,
+                car_door: s.car_door,
+            };
 
             let Some(at) = r.at else {
                 // the job is over: the door is let go and the lift is free
-                out.push(release());
+                send(LiftCommand::Release);
                 self.owners[l] = None;
                 continue;
             };
             if o.stage == Stage::Calling {
-                if riders.get(l).and_then(Option::as_ref) == Some(r.id) {
-                    out.push(release());
-                    out.push(call(stop_b));
+                let rider = states
+                    .iter()
+                    .rev()
+                    .find(|s| s.header.device == device)
+                    .and_then(|s| s.occupant);
+                if rider == Some(robot_no(o.robot)) {
+                    send(LiftCommand::Release);
+                    send(call(stop_b));
                     o.stage = Stage::Riding;
                 } else {
-                    out.push(call(stop_a));
+                    send(call(stop_a));
                 }
             }
             if o.stage == Stage::Riding && at > o.ride {
                 o.stage = Stage::Exiting;
             }
             if o.stage == Stage::Exiting && r.node != Some(b) {
-                out.push(release());
+                send(LiftCommand::Release);
                 self.owners[l] = None;
                 continue;
             }

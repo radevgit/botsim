@@ -5,6 +5,11 @@ throughput, waiting, collisions, deadlocks, where each robot ended). Without
 `--timing` the same scenario and files always give the same output. The scenario
 file format is in [botsim-scenario](../scenario/README.md).
 
+The summary has the key `untranslated` only if something could not be translated
+between the simulator's messages, lifts and doors and the controller
+([botsim-bridge](../bridge/README.md)), for example a zone with an empty id: what
+it was, of whom, why and how often. A line on the error output says so too.
+
 Run the commands from the root of the repository.
 
 ```sh

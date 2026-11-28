@@ -3,8 +3,9 @@
 //! new order (a door too narrow), a refused update (a curve a car-like robot cannot
 //! drive, S70) and `ORIENTATION_UNREACHABLE`, which names no order.
 
-use botsim_baseline::controller::{Controller, NODE_TOLERANCE};
+use botsim_baseline::controller::NODE_TOLERANCE;
 use botsim_bridge as bridge;
+use botsim_bridge::Bridged as Controller;
 use botsim_core::actions::ActionTimes;
 use botsim_core::door::DoorSpec;
 use botsim_core::world::World;
@@ -241,9 +242,10 @@ fn a_refused_update_is_cancelled_and_given_up_once_the_robot_has_stopped() {
 /// A controller that takes the differential robot of `w` for an omnidirectional
 /// one, so that its orders carry the layout's orientations.
 fn mistaken(w: &World) -> Controller {
-    let mut config = bridge::config(w);
-    config.robots[0].kinematics = Kinematics::Omnidirectional;
-    Controller::new(&config)
+    bridge::with_controller(w, |mut config| {
+        config.robots[0].kinematics = Kinematics::Omnidirectional;
+        botsim_baseline::controller::Controller::new(&config)
+    })
 }
 
 #[test]

@@ -1,6 +1,6 @@
-use botsim_baseline::controller::Controller;
 use botsim_baseline::reservations::Reservations;
 use botsim_bridge as bridge;
+use botsim_bridge::Bridged as Controller;
 use botsim_core::actions::ActionTimes;
 use botsim_core::jobs::JobGenerator;
 use botsim_core::world::World;

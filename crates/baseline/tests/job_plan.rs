@@ -1,21 +1,27 @@
+use botsim_baseline::cycle::robot_no;
 use botsim_baseline::order_builder::{
     OrderHeader, Plan, RELEASE_WINDOW, build_order as try_build_order,
 };
 use botsim_core::actions::ActionTimes;
 use botsim_core::robot::Reception::Accepted;
 use botsim_core::world::World;
+use botsim_link::ids::OrderId;
+use botsim_link::message::Millis;
 use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::unix_ms_from_utc;
 use botsim_router::route::shortest_path;
 use vda5050::factsheet::Factsheet;
 use vda5050::state::ActionStatus::{Finished, Running};
 
 mod common;
 use common::graph;
+mod translate;
 
-/// The order message; the tests build only valid ones.
+/// The order message as VDA 5050, for the robot of these tests; they build only
+/// valid ones.
 fn build_order(
     g: &Graph,
     h: &OrderHeader,
@@ -23,7 +29,19 @@ fn build_order(
     from: usize,
     through: usize,
 ) -> vda5050::order::Order {
-    try_build_order(g, h, p, from, through).unwrap()
+    let message = try_build_order(g, h, p, from, through).unwrap();
+    translate::vda_order(g, &RobotId::new("ACME", "R-001"), &message)
+}
+
+/// The header of the order `order_id`, or of its update, to that robot.
+fn header(order_id: &OrderId, update: u32) -> OrderHeader<'_> {
+    OrderHeader {
+        robot: robot_no(0),
+        seq: 1 + update,
+        time: Millis(unix_ms_from_utc(2026, 11, 20, 10, 0, 0)),
+        order_id,
+        order_update_id: update,
+    }
 }
 
 const DT: f64 = 0.05;
@@ -115,14 +133,8 @@ fn a_plan_along_a_found_route_picks_and_drops_also_where_the_places_fall_togethe
 fn the_order_carries_the_actions_with_ids_and_hard_blocking() {
     let g = chain();
     let p = Plan::for_job(&g, g.node_idx("N0").unwrap(), &job(&g, "N2", "N5")).unwrap();
-    let r = RobotId::new("ACME", "R-001");
-    let h = OrderHeader {
-        robot: &r,
-        header_id: 1,
-        timestamp: "2026-11-20T10:00:00.000Z",
-        order_id: "j1",
-        order_update_id: 0,
-    };
+    let j1 = OrderId::new("j1");
+    let h = header(&j1, 0);
     let o = build_order(&g, &h, &p, 0, p.released_through(0, RELEASE_WINDOW));
     let acts = |i: usize| -> Vec<(String, String)> {
         o.nodes[i]
@@ -161,13 +173,8 @@ fn a_robot_runs_a_whole_job_in_the_world() {
     )
     .unwrap();
 
-    let header = |update| OrderHeader {
-        robot: &r,
-        header_id: 1 + update,
-        timestamp: "2026-11-20T10:00:00.000Z",
-        order_id: "j1",
-        order_update_id: update,
-    };
+    let j1 = OrderId::new("j1");
+    let header = |update| header(&j1, update);
     let o = build_order(
         w.graph(),
         &header(0),

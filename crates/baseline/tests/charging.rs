@@ -1,8 +1,8 @@
 //! The baseline sends a free robot with a low battery to a free charger and starts
 //! the charging there (charging brief, step 2, first part).
 
-use botsim_baseline::controller::Controller;
 use botsim_bridge as bridge;
+use botsim_bridge::Bridged as Controller;
 use botsim_core::actions::ActionTimes;
 use botsim_core::battery::{Battery, BatterySpec};
 use botsim_core::world::World;

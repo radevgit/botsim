@@ -20,13 +20,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use botsim_link::state::State;
 use botsim_model::collision::{Body, overlap, place};
 use botsim_model::graph::{EdgeIdx, EdgeOrientation, Graph, NodeIdx};
 use botsim_model::reservation::Reservation;
 use botsim_model::safety::LATERAL_MARGIN;
 use botsim_model::spec::Shape;
-use botsim_model::waiting::is_waiting;
-use vda5050::state::State;
 
 use crate::conflicts::{
     ConflictInput, ConflictTable, Held, NodeConflictInput, NodeNodeConflictInput,
@@ -251,7 +250,7 @@ impl BaselinePolicy {
                                 .iter()
                                 .take(w.released_through + 1)
                                 .any(|&n| n == node)
-                        }) && self.node_of(&states[h]) != Some(node)
+                        }) && self.node_of(&states[h].state) != Some(node)
                     }
                     (None, Some((_, f))) => route_of(fleet, h).is_some_and(|w| {
                         w.route
@@ -278,12 +277,12 @@ impl BaselinePolicy {
                     continue;
                 }
                 let (Some(px), Some(ph)) = (
-                    states[i].mobile_robot_position.as_ref(),
-                    states[h].mobile_robot_position.as_ref(),
+                    states[i].state.position.as_ref(),
+                    states[h].state.position.as_ref(),
                 ) else {
                     continue;
                 };
-                if !stands_still(&states[h]) || px.map_id != ph.map_id {
+                if !stands_still(&states[h].state) || px.map != ph.map {
                     continue;
                 }
                 // X is ahead of H, within 4 m and 60° of H's heading, and heads the same
@@ -300,7 +299,7 @@ impl BaselinePolicy {
                 let same_route = same_route_after(fleet, i, h, node)
                     || swept.is_some_and(|(_, f)| self.meet_and_go_on(fleet, i, h, f));
                 // (not by who holds the node: X may have taken it over earlier)
-                let on_h_way = self.node_of(&states[i]).is_some_and(|n| {
+                let on_h_way = self.node_of(&states[i].state).is_some_and(|n| {
                     route_of(fleet, h).is_some_and(|w| {
                         w.route
                             .nodes
@@ -394,13 +393,13 @@ impl BaselinePolicy {
     fn stands_in_way(&self, fleet: &Fleet, x: usize, h: usize, until: Held) -> bool {
         let (Some(work), Some(px), Some(ph)) = (
             route_of(fleet, h),
-            fleet.states[x].mobile_robot_position.as_ref(),
-            fleet.states[h].mobile_robot_position.as_ref(),
+            fleet.states[x].state.position.as_ref(),
+            fleet.states[h].state.position.as_ref(),
         ) else {
             return false;
         };
         let (route, released) = (work.route, work.released_through);
-        let at = ((fleet.states[h].last_node_sequence_id / 2) as usize).min(released);
+        let at = (fleet.states[h].state.last_step() as usize).min(released);
         // the plan index of the last node of the way (where h is, if it has
         // passed what it holds)
         let end = match until {
@@ -454,9 +453,8 @@ impl BaselinePolicy {
 
     /// The layout node a robot stands on, from its reported position.
     fn node_of(&self, state: &State) -> Option<NodeIdx> {
-        let p = state.mobile_robot_position.as_ref()?;
-        let map = self.graph.map_idx(&p.map_id)?;
-        self.node_grid.node_near(map, p.x, p.y, NODE_TOLERANCE)
+        let p = state.position.as_ref()?;
+        self.node_grid.node_near(p.map, p.x, p.y, NODE_TOLERANCE)
     }
 }
 
@@ -484,7 +482,11 @@ impl TrafficPolicy for BaselinePolicy {
     }
 
     fn cycle_start(&mut self, fleet: &Fleet) {
-        self.standing = fleet.states.iter().map(|s| self.node_of(s)).collect();
+        self.standing = fleet
+            .states
+            .iter()
+            .map(|s| self.node_of(&s.state))
+            .collect();
     }
 
     fn place(&mut self, ask: &Ask) -> Release {
@@ -580,7 +582,7 @@ impl TrafficPolicy for BaselinePolicy {
         // Timeout re-routing (S53): the robot stands at the end of its released
         // route and wants to go on, but another robot holds the way (not a lift
         // or a door, which have their own rules).
-        let stuck = at == from && wanted > from && rt == from && is_waiting(ask.state);
+        let stuck = at == from && wanted > from && rt == from && ask.state.is_waiting();
         self.blocked_seconds[i] = if stuck {
             self.blocked_seconds[i] + ask.elapsed
         } else {
@@ -647,11 +649,8 @@ impl TrafficPolicy for BaselinePolicy {
             .states
             .iter()
             .map(|s| RobotView {
-                requests: s.zone_requests.clone().unwrap_or_default(),
-                position: s
-                    .mobile_robot_position
-                    .as_ref()
-                    .and_then(|p| self.graph.map_idx(&p.map_id).map(|m| (m, p.x, p.y))),
+                requests: s.state.zone_requests.clone().unwrap_or_default(),
+                position: s.state.position.as_ref().map(|p| (p.map, p.x, p.y)),
             })
             .collect();
         grants.decide(&views)
@@ -702,11 +701,10 @@ impl TrafficPolicy for BaselinePolicy {
 
 /// Does the robot neither drive (forwards or sideways) nor turn?
 fn stands_still(state: &State) -> bool {
-    state.velocity.as_ref().is_none_or(|v| {
-        [v.vx, v.vy, v.omega]
-            .iter()
-            .all(|c| c.unwrap_or(0.0).abs() < 0.05)
-    })
+    state
+        .velocity
+        .as_ref()
+        .is_none_or(|v| [v.vx, v.vy, v.omega].iter().all(|c| c.abs() < 0.05))
 }
 
 /// The route of robot `i`, if it has one.
@@ -910,20 +908,58 @@ mod test_graph;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cycle::robot_no;
+    use botsim_link::ids::OrderId;
+    use botsim_link::message::{FromRobot, Header, Millis};
+    use botsim_link::state::{EmergencyStop, LastNode, OperatingMode, Position, Route, Velocity};
     use botsim_model::robot::RobotId;
 
     /// A state of a standing robot; the release rule does not look into it here.
     fn standing() -> State {
-        serde_json::from_str(
-            r#"{"headerId":0,"timestamp":"2026-11-22T10:00:00.000Z","version":"3.0.0",
-            "manufacturer":"ACME","serialNumber":"H","orderId":"job-1","orderUpdateId":0,
-            "lastNodeId":"A","lastNodeSequenceId":0,"nodeStates":[],"edgeStates":[],
-            "driving":false,"actionStates":[],"instantActionStates":[],
-            "powerSupply":{"stateOfCharge":100.0,"charging":false},
-            "operatingMode":"AUTOMATIC","errors":[],
-            "safetyState":{"activeEmergencyStop":"NONE","fieldViolation":false}}"#,
-        )
-        .unwrap()
+        let at_a = Some(LastNode { node: 0, step: 0 });
+        State {
+            order_id: Some(OrderId::new("job-1")),
+            update_id: 0,
+            route: Route::new(at_a, Vec::new(), 0).unwrap(),
+            position: None,
+            velocity: None,
+            driving: false,
+            field_violation: false,
+            emergency_stop: EmergencyStop::None,
+            operating_mode: OperatingMode::Automatic,
+            charge: 100.0,
+            charging: false,
+            actions: Vec::new(),
+            instant_actions: Vec::new(),
+            zone_requests: None,
+            zone_sets: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    /// The report of robot `i` that says `state`.
+    fn report(i: usize, state: State) -> FromRobot {
+        FromRobot {
+            header: Header {
+                robot: robot_no(i),
+                seq: 0,
+                time: Millis(0),
+            },
+            state,
+        }
+    }
+
+    /// [`standing`] at a place of map M.
+    fn standing_at(x: f64, y: f64, theta: f64) -> State {
+        let mut state = standing();
+        state.position = Some(Position {
+            map: 0,
+            x,
+            y,
+            theta,
+            localized: true,
+        });
+        state
     }
 
     /// Go-first with H on A (heading east), released to B, and X on a side road to B
@@ -959,20 +995,15 @@ mod tests {
             robots: &[robot("H"), robot("X")],
             zones: None,
         });
-        let at = |x: f64, y: f64, theta: f64| {
-            let mut state = standing();
-            state.mobile_robot_position = serde_json::from_str(&format!(
-                r#"{{"x":{x},"y":{y},"theta":{theta},"mapId":"M","localized":true}}"#
-            ))
-            .unwrap();
-            state
-        };
         // X faces along its road to B
         let heading = (-x_at.1).atan2(3.0 - x_at.0);
-        let states = [at(0.0, 0.0, 0.0), at(x_at.0, x_at.1, heading)];
+        let states = [
+            report(0, standing_at(0.0, 0.0, 0.0)),
+            report(1, standing_at(x_at.0, x_at.1, heading)),
+        ];
         let ask = |robot: usize, from, limit, elapsed| Ask {
             robot,
-            state: &states[robot],
+            state: &states[robot].state,
             route: if robot == 0 { &h_route } else { &x_route },
             at: 0,
             released_through: from,
@@ -1064,19 +1095,11 @@ mod tests {
             type_b: "ACME/X1".into(),
             pairs: vec![(pair.0.into(), pair.1.into())],
         }]);
-        let at = |x: f64, y: f64, theta: f64| {
-            let mut state = standing();
-            state.mobile_robot_position = serde_json::from_str(&format!(
-                r#"{{"x":{x},"y":{y},"theta":{theta},"mapId":"M","localized":true}}"#
-            ))
-            .unwrap();
-            state
-        };
         let heading = (-0.85f64).atan2(3.0 - 1.8);
         let states = [
-            at(0.0, 0.0, 0.0),
-            at(1.8, 0.85, heading),
-            at(s_at.0, s_at.1, 0.0),
+            report(0, standing_at(0.0, 0.0, 0.0)),
+            report(1, standing_at(1.8, 0.85, heading)),
+            report(2, standing_at(s_at.0, s_at.1, 0.0)),
         ];
         let view = |route, released_through| {
             Some(RouteView {
@@ -1087,7 +1110,7 @@ mod tests {
         };
         // a question about one of the two routes, from node 0
         fn ask<'a>(
-            states: &'a [State],
+            states: &'a [FromRobot],
             route: &'a Plan,
             robot: usize,
             (released_through, limit): (usize, usize),
@@ -1095,7 +1118,7 @@ mod tests {
         ) -> Ask<'a> {
             Ask {
                 robot,
-                state: &states[robot],
+                state: &states[robot].state,
                 route,
                 at: 0,
                 released_through,
@@ -1104,7 +1127,7 @@ mod tests {
             }
         }
         let routes = [view(&h_route, 2), view(&x_route, 0), None];
-        fn fleet<'a>(states: &'a [State], routes: &'a [Option<RouteView<'a>>]) -> Fleet<'a> {
+        fn fleet<'a>(states: &'a [FromRobot], routes: &'a [Option<RouteView<'a>>]) -> Fleet<'a> {
             Fleet {
                 tick: 0,
                 elapsed: 0.05,
@@ -1258,9 +1281,9 @@ mod tests {
             zones: None,
         });
         // three seconds with B released ahead, at the given velocity
-        let mut still_after = |velocity: &str| {
+        let mut still_after = |vx: f64, vy: f64, omega: f64| {
             let mut state = standing();
-            state.velocity = serde_json::from_str(velocity).unwrap();
+            state.velocity = Some(Velocity { vx, vy, omega });
             policy.release(&Ask {
                 robot: 0,
                 state: &state,
@@ -1272,9 +1295,9 @@ mod tests {
             });
             policy.still_seconds[0]
         };
-        assert_eq!(still_after(r#"{"vx":0.0,"vy":0.0,"omega":0.0}"#), 3.0);
-        assert_eq!(still_after(r#"{"vx":0.0,"vy":0.0,"omega":-0.6}"#), 0.0);
-        assert_eq!(still_after(r#"{"vx":0.0,"vy":0.8,"omega":0.0}"#), 0.0);
+        assert_eq!(still_after(0.0, 0.0, 0.0), 3.0);
+        assert_eq!(still_after(0.0, 0.0, -0.6), 0.0);
+        assert_eq!(still_after(0.0, 0.8, 0.0), 0.0);
     }
 
     /// After go-first has given a node on the released way of H to another robot,

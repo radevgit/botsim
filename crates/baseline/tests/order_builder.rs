@@ -1,18 +1,25 @@
+use std::sync::LazyLock;
+
+use botsim_baseline::cycle::robot_no;
 use botsim_baseline::order_builder::{
     OrderHeader, Plan, RELEASE_WINDOW, build_order as try_build_order,
 };
 use botsim_core::actions::ActionTimes;
 use botsim_core::robot::Reception::Accepted;
 use botsim_core::world::World;
+use botsim_link::ids::OrderId;
+use botsim_link::message::Millis;
 use botsim_model::graph::Graph;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::time::unix_ms_from_utc;
 use botsim_router::route::shortest_path;
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 
 mod common;
 use common::graph;
+mod translate;
 
 const DT: f64 = 0.05;
 
@@ -36,12 +43,14 @@ fn robot() -> RobotId {
     RobotId::new("ACME", "R-001")
 }
 
-fn header<'a>(robot: &'a RobotId, update: u32) -> OrderHeader<'a> {
+/// The header of an order of job 1 to [`robot`], the first of its fleet.
+fn header(update: u32) -> OrderHeader<'static> {
+    static JOB_1: LazyLock<OrderId> = LazyLock::new(|| OrderId::new("job-1"));
     OrderHeader {
-        robot,
-        header_id: 1 + update,
-        timestamp: "2026-11-20T10:00:00.000Z",
-        order_id: "job-1",
+        robot: robot_no(0),
+        seq: 1 + update,
+        time: Millis(unix_ms_from_utc(2026, 11, 20, 10, 0, 0)),
+        order_id: &JOB_1,
         order_update_id: update,
     }
 }
@@ -75,14 +84,7 @@ fn the_window_is_two_nodes() {
 fn a_new_order_releases_the_robot_node_and_two_more() {
     let g = chain();
     let p = plan(&g, "N0", "N6");
-    let r = robot();
-    let o = build_order(
-        &g,
-        &header(&r, 0),
-        &p,
-        0,
-        p.released_through(0, RELEASE_WINDOW),
-    );
+    let o = build_order(&g, &header(0), &p, 0, p.released_through(0, RELEASE_WINDOW));
 
     assert_eq!((o.order_id.as_str(), o.order_update_id), ("job-1", 0));
     assert_eq!(
@@ -118,15 +120,8 @@ fn a_new_order_releases_the_robot_node_and_two_more() {
 fn an_update_starts_at_the_decision_node_and_keeps_the_numbering() {
     let g = chain();
     let p = plan(&g, "N0", "N6");
-    let r = robot();
     // robot is at N2 (the decision node): release through N4, N5 and N6 stay horizon
-    let o = build_order(
-        &g,
-        &header(&r, 1),
-        &p,
-        2,
-        p.released_through(2, RELEASE_WINDOW),
-    );
+    let o = build_order(&g, &header(1), &p, 2, p.released_through(2, RELEASE_WINDOW));
     assert_eq!(o.order_update_id, 1);
     assert_eq!(
         nodes(&o),
@@ -152,35 +147,28 @@ fn an_update_starts_at_the_decision_node_and_keeps_the_numbering() {
 #[test]
 fn a_short_route_has_no_horizon_and_a_one_node_order_is_valid() {
     let g = chain();
-    let r = robot();
     let p = plan(&g, "N0", "N2");
-    let o = build_order(
-        &g,
-        &header(&r, 0),
-        &p,
-        0,
-        p.released_through(0, RELEASE_WINDOW),
-    );
+    let o = build_order(&g, &header(0), &p, 0, p.released_through(0, RELEASE_WINDOW));
     assert!(o.nodes.iter().all(|n| n.released) && o.edges.iter().all(|e| e.released));
 
     let p = plan(&g, "N4", "N4"); // already there: just the start node
-    let o = build_order(&g, &header(&r, 0), &p, 0, 0);
+    let o = build_order(&g, &header(0), &p, 0, 0);
     assert_eq!(nodes(&o), vec![("N4", 0, true)]);
     assert!(o.edges.is_empty());
 }
 
-/// The order message; the tests build only valid ones.
+/// The order message as VDA 5050; the tests build only valid ones.
 fn build_order(g: &Graph, h: &OrderHeader, p: &Plan, from: usize, through: usize) -> Order {
-    try_build_order(g, h, p, from, through).unwrap()
+    let message = try_build_order(g, h, p, from, through).unwrap();
+    translate::vda_order(g, &robot(), &message)
 }
 
 #[test]
 fn the_first_node_must_be_released() {
     let g = chain();
     let p = plan(&g, "N0", "N6");
-    let r = robot();
     // from node 4, released only through node 2: no message
-    assert!(try_build_order(&g, &header(&r, 1), &p, 4, 2).is_none());
+    assert!(try_build_order(&g, &header(1), &p, 4, 2).is_none());
 }
 
 #[test]
@@ -204,7 +192,7 @@ fn a_robot_drives_the_order_and_the_update_in_the_world() {
     // the order is accepted by the robot as it is
     let o = build_order(
         w.graph(),
-        &header(&r, 0),
+        &header(0),
         &p,
         0,
         p.released_through(0, RELEASE_WINDOW),
@@ -223,7 +211,7 @@ fn a_robot_drives_the_order_and_the_update_in_the_world() {
     for (update, from) in [(1, 2), (2, 4)] {
         let u = build_order(
             w.graph(),
-            &header(&r, update),
+            &header(update),
             &p,
             from,
             p.released_through(from, RELEASE_WINDOW),

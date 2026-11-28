@@ -10,8 +10,9 @@
 //! Not yet: deadlocks, controller time per step.
 
 use botsim_baseline::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
-use botsim_baseline::controller::Controller;
 use botsim_baseline::policy::TrafficPolicy;
+use botsim_bridge::Bridged;
+use botsim_bridge::report::Untranslated;
 use botsim_core::lift::DoorState;
 use botsim_core::world::World;
 use botsim_dispatcher::ChargePolicy;
@@ -70,6 +71,55 @@ pub struct Summary {
     /// differs from run to run and so breaks identical output.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timing: Option<TimingSummary>,
+    /// What could not be translated between the world and the controller; left out
+    /// when all could.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub untranslated: Option<UntranslatedSummary>,
+}
+
+/// What could not be translated between the world's VDA 5050 messages, lifts and
+/// doors and the controller (see `botsim_bridge::report`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct UntranslatedSummary {
+    /// How many cases came up, counting each time.
+    pub total: u64,
+    /// The different cases in the order they came up first (not all, if there are
+    /// very many).
+    pub cases: Vec<UntranslatedCase>,
+}
+
+/// One case of [`UntranslatedSummary`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct UntranslatedCase {
+    /// What was being translated, e.g. `state` or `order`.
+    pub what: String,
+    /// The robot, lift, door or zone set.
+    pub of: String,
+    /// Nothing of it went through; `false`: the rest did, without the part.
+    pub refused: bool,
+    pub reason: String,
+    /// The simulated time when it came up first.
+    pub first_time: f64,
+    pub count: u64,
+}
+
+/// `None` if there was nothing that could not be translated.
+fn untranslated_summary(report: &Untranslated, dt: f64) -> Option<UntranslatedSummary> {
+    (!report.is_empty()).then(|| UntranslatedSummary {
+        total: report.total(),
+        cases: report
+            .entries()
+            .iter()
+            .map(|e| UntranslatedCase {
+                what: e.what.to_string(),
+                of: e.name.clone(),
+                refused: e.refused,
+                reason: e.reason.to_string(),
+                first_time: seconds(e.first_tick, dt),
+                count: e.count,
+            })
+            .collect(),
+    })
 }
 
 /// The batteries of the run (charging brief).
@@ -323,7 +373,7 @@ fn run_controller<P: TrafficPolicy>(
     scenario: &Scenario,
     mut world: World,
     measure_time: bool,
-    make: impl FnOnce(&World) -> Controller<P>,
+    make: impl FnOnce(&World) -> Bridged<P>,
 ) -> Result<Summary, ScenarioError> {
     let ticks = ticks_for(scenario.duration, scenario.time_step);
     let mut generator = scenario.job_generator(world.graph())?;
@@ -466,6 +516,9 @@ fn run_controller<P: TrafficPolicy>(
         .collect();
     Ok(Summary {
         timing: measure_time.then(|| clock.report()),
+        untranslated: controller
+            .as_ref()
+            .and_then(|c| untranslated_summary(c.untranslated(), dt)),
         scenario: scenario.name.clone(),
         deadlock_count: deadlocks.len(),
         deadlocks,

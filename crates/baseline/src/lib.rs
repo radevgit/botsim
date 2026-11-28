@@ -1,7 +1,8 @@
 //! The bundled baseline controller: nearest free robot, first come first
 //! served, node-by-node release (see the brief). It knows no simulator: it is
-//! given the site and, cycle by cycle, the robots' state messages as data, and
-//! gives back the messages to send (see [`cycle`]).
+//! given the site and, cycle by cycle, the reports of the robots and lifts as
+//! data, and gives back the messages to send (see [`cycle`]), all of them
+//! [`botsim_link`]'s.
 
 pub mod baseline_policy;
 pub mod conflicts;

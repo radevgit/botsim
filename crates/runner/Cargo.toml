@@ -12,6 +12,7 @@ botsim-baseline = { path = "../baseline" }
 botsim-bridge = { path = "../bridge" }
 botsim-core = { path = "../core" }
 botsim-dispatcher = { path = "../dispatcher" }
+botsim-link = { path = "../link" }
 botsim-model = { path = "../model" }
 botsim-record = { path = "../record" }
 botsim-scenario = { path = "../scenario" }

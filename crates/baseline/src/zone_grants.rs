@@ -16,11 +16,12 @@
 
 use std::collections::HashSet;
 
+use botsim_link::ids::RequestId;
+use botsim_link::response::Grant;
+use botsim_link::state::{ZoneRequest, ZoneRequestType};
 use botsim_model::zones::Zones;
-use vda5050::responses::GrantType;
-use vda5050::state::{ZoneRequest, ZoneRequestType};
 
-/// What the controller knows of one robot (from its state message).
+/// What the controller knows of one robot (from its state report).
 #[derive(Debug, Clone)]
 pub struct RobotView {
     pub requests: Vec<ZoneRequest>,
@@ -32,14 +33,14 @@ pub struct RobotView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answer {
     pub robot: usize,
-    pub request_id: String,
-    pub grant: GrantType,
+    pub request_id: RequestId,
+    pub grant: Grant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Entry {
     robot: usize,
-    request: String,
+    request: RequestId,
     zone: usize,
 }
 
@@ -50,7 +51,7 @@ pub struct ZoneGrants {
     queue: Vec<Entry>,
     granted: Vec<Entry>,
     /// Requests that were told QUEUED already.
-    told_queued: HashSet<(usize, String)>,
+    told_queued: HashSet<(usize, RequestId)>,
     /// `(waiting robot, robot that keeps a zone from it)`, as of the last decision.
     kept_from: Vec<(usize, usize)>,
 }
@@ -92,15 +93,16 @@ impl ZoneGrants {
         let mut live: Vec<Entry> = Vec::new();
         for (i, r) in robots.iter().enumerate() {
             for q in &r.requests {
-                if q.request_type != ZoneRequestType::Access
-                    || q.zone_set_id != self.zones.zone_set_id
+                if q.kind != ZoneRequestType::Access
+                    || q.zone_set.as_str() != self.zones.zone_set_id
                 {
                     continue;
                 }
-                if let Some(z) = self.zones.zones.iter().position(|z| z.zone_id == q.zone_id) {
+                let zones = &self.zones.zones;
+                if let Some(z) = zones.iter().position(|z| z.zone_id == q.zone.as_str()) {
                     live.push(Entry {
                         robot: i,
-                        request: q.request_id.clone(),
+                        request: q.id.clone(),
                         zone: z,
                     });
                 }
@@ -149,7 +151,7 @@ impl ZoneGrants {
                 answers.push(Answer {
                     robot: e.robot,
                     request_id: e.request.clone(),
-                    grant: GrantType::Granted,
+                    grant: Grant::Granted,
                 });
                 self.granted.push(e);
             } else {
@@ -172,7 +174,7 @@ impl ZoneGrants {
                     answers.push(Answer {
                         robot: e.robot,
                         request_id: e.request.clone(),
-                        grant: GrantType::Queued,
+                        grant: Grant::Queued,
                     });
                 }
                 self.queue.push(e);

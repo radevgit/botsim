@@ -1,8 +1,10 @@
-//! Turn a route into VDA 5050 `order` messages with a release window.
+//! Turn a route into order messages ([`botsim_link::order`], VDA 5050 `order`)
+//! with a release window.
 //!
 //! A [`Plan`] is the whole route: node `i` has `sequenceId` 2·i and edge `i`
 //! (from node `i` to node `i + 1`) has 2·i + 1, so the numbering stays the same
-//! in every update of the order (VDA 5050 §6.1).
+//! in every update of the order (VDA 5050 §6.1). An order that starts at plan node
+//! `from` therefore has the first step `from`.
 //!
 //! **Release window** ([`RELEASE_WINDOW`] = 2; S29 chose 3, then the user changed
 //! it to 2 after seeing it): the robot's node and the next 2 nodes are released
@@ -19,12 +21,13 @@
 //! **Edge orientation** ([`build_order_with`]): for omnidirectional robots each edge
 //! carries the LIF's orientation for the type. Not yet: `maximumSpeed`.
 
+use botsim_link::ids::{ActionId, ActionType, OrderId};
+use botsim_link::message::{Header, Millis, ToRobot, ToRobotBody};
+use botsim_link::order::{Action, Blocking, Leg, NodeAction, Order, OrientationType};
 use botsim_model::graph::{EdgeIdx, EdgeOrientation, Graph, NodeIdx};
 use botsim_model::job::Job;
-use botsim_model::protocol::PROTOCOL_VERSION;
-use botsim_model::robot::RobotId;
+use botsim_model::robot::RobotNo;
 use botsim_router::route::shortest_path;
-use vda5050::order::{Action, BlockingType, Edge, Node, Order, OrientationType};
 
 /// How many nodes ahead of the robot are released.
 pub const RELEASE_WINDOW: usize = 2;
@@ -118,10 +121,12 @@ impl Plan {
 /// What identifies and numbers one message.
 #[derive(Debug, Clone)]
 pub struct OrderHeader<'a> {
-    pub robot: &'a RobotId,
-    pub header_id: u32,
-    pub timestamp: &'a str,
-    pub order_id: &'a str,
+    /// The robot the order goes to.
+    pub robot: RobotNo,
+    /// The message's sequence number ([`Header::seq`]).
+    pub seq: u32,
+    pub time: Millis,
+    pub order_id: &'a OrderId,
     pub order_update_id: u32,
 }
 
@@ -137,7 +142,7 @@ pub fn build_order(
     plan: &Plan,
     from: usize,
     released_through: usize,
-) -> Option<Order> {
+) -> Option<ToRobot> {
     build_order_with(graph, h, plan, from, released_through, None)
 }
 
@@ -153,38 +158,17 @@ pub fn build_order_with(
     from: usize,
     released_through: usize,
     orient: Option<(&str, &str)>,
-) -> Option<Order> {
+) -> Option<ToRobot> {
     let released_through = released_through.min(plan.last());
     if from > released_through {
         return None; // the first node must be released
     }
 
-    // `None` if a sequence number does not fit the message's 32 bits
-    let nodes = (from..=plan.last())
+    let legs = (from..plan.last())
         .map(|i| {
-            Some(Node {
-                node_id: graph.nodes[plan.nodes[i]].id.clone(),
-                sequence_id: u32::try_from(2 * i).ok()?,
-                node_descriptor: None,
-                released: i <= released_through,
-                node_position: None,
-                actions: plan.actions[i]
-                    .iter()
-                    .map(|t| Action {
-                        action_type: t.clone(),
-                        action_id: format!("{t}-{i}"),
-                        action_descriptor: None,
-                        blocking_type: BlockingType::Hard,
-                        action_parameters: None,
-                        retriable: None,
-                    })
-                    .collect(),
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
-    let edges = (from..plan.last())
-        .map(|i| {
-            let given = orient.and_then(|(m, s)| graph.edge_orientation(plan.edges[i], m, s));
+            let edge = *plan.edges.get(i)?;
+            graph.edges.get(edge)?;
+            let given = orient.and_then(|(m, s)| graph.edge_orientation(edge, m, s));
             let (orientation_type, orientation) = match given {
                 Some(EdgeOrientation::Tangential(a)) => {
                     (Some(OrientationType::Tangential), Some(a))
@@ -192,39 +176,47 @@ pub fn build_order_with(
                 Some(EdgeOrientation::Global(a)) => (Some(OrientationType::Global), Some(a)),
                 None => (None, None),
             };
-            Some(Edge {
-                edge_id: graph.edges[plan.edges[i]].id.clone(),
-                sequence_id: u32::try_from(2 * i + 1).ok()?,
-                edge_descriptor: None,
-                // an edge is released together with the node it leads to
-                released: i < released_through,
-                maximum_speed: None,
-                maximum_mobile_robot_height: None,
-                minimum_load_handling_device_height: None,
-                // (JSON has no number that is not finite: such an angle is not sent)
+            Some(Leg {
+                edge,
+                end: *plan.nodes.get(i + 1)?,
+                // (an angle that is not finite is not sent)
                 orientation: orientation.filter(|a| a.is_finite()),
                 orientation_type,
-                direction: None,
-                reach_orientation_before_entering: None,
-                maximum_rotation_speed: None,
-                trajectory: None,
-                length: None,
-                corridor: None,
-                actions: Vec::new(),
             })
         })
         .collect::<Option<Vec<_>>>()?;
+    let mut actions = Vec::new();
+    for i in from..=plan.last() {
+        for t in plan.actions.get(i)? {
+            actions.push(NodeAction {
+                node: u32::try_from(i - from).ok()?,
+                action: Action {
+                    id: ActionId::new(format!("{t}-{i}")),
+                    kind: ActionType::new(t.as_str()),
+                    blocking: Blocking::Hard,
+                },
+            });
+        }
+    }
+    // (an order checks that every sequence number fits the message's 32 bits)
+    let order = Order::new(
+        h.order_id.clone(),
+        h.order_update_id,
+        u32::try_from(from).ok()?,
+        *plan.nodes.get(from)?,
+        legs,
+        // (an edge is released together with the node it leads to)
+        u32::try_from(released_through - from).ok()?,
+        actions,
+    )
+    .ok()?;
 
-    Some(Order {
-        header_id: h.header_id,
-        timestamp: h.timestamp.to_string(),
-        version: PROTOCOL_VERSION.to_string(),
-        manufacturer: h.robot.manufacturer.clone(),
-        serial_number: h.robot.serial_number.clone(),
-        order_id: h.order_id.to_string(),
-        order_update_id: h.order_update_id,
-        order_description: None,
-        nodes,
-        edges,
+    Some(ToRobot {
+        header: Header {
+            robot: h.robot,
+            seq: h.seq,
+            time: h.time,
+        },
+        body: ToRobotBody::Order(order),
     })
 }

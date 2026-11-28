@@ -14,16 +14,17 @@ use botsim_dispatcher::baseline::BaselineDispatcher;
 use botsim_dispatcher::{
     Answer, ChargePolicy, Control, Counts, Cycle, Dispatcher, Purpose, Robot, Site, Task, Work,
 };
+use botsim_link::message::{FromRobot, ToRobotBody};
 use botsim_model::errors::ErrorType;
 use botsim_model::graph::{Graph, NodeIdx};
 use botsim_model::job::Job;
 use serde_json::{Value, json};
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
-use vda5050::state::State;
 
 mod common;
 use common::graph;
+mod translate;
 
 const DT: f64 = 0.05;
 
@@ -54,6 +55,7 @@ fn config() -> Config {
         graph: line(),
         robots: vec![FleetRobot::from_factsheet(&f).unwrap()],
         zones: None,
+        zone_set: None,
         lifts: Vec::new(),
         doors: Vec::new(),
         step_seconds: DT,
@@ -82,8 +84,8 @@ impl Report {
         }
     }
 
-    /// The state message.
-    fn state(&self) -> State {
+    /// The report that says what the robot's state message says.
+    fn state(&self) -> FromRobot {
         let (step, node) = self.at;
         let actions: Vec<Value> = self
             .cancel
@@ -92,7 +94,7 @@ impl Report {
             .collect();
         let config = config();
         let robot = &config.robots[0].id;
-        serde_json::from_value(json!({
+        let message = serde_json::from_value(json!({
             "headerId": 0,
             "timestamp": "2026-11-20T10:00:00.000Z",
             "version": "3.0.1",
@@ -114,7 +116,11 @@ impl Report {
             "errors": self.errors,
             "safetyState": {"activeEmergencyStop": "NONE", "fieldViolation": false},
         }))
-        .unwrap()
+        .unwrap();
+        let translator = translate::translator(&config.graph, robot);
+        let read = translator.state_from_vda(&message).unwrap();
+        assert!(read.issues.is_empty(), "{:?}", read.issues);
+        read.message
     }
 }
 
@@ -139,20 +145,23 @@ fn cycle<P: TrafficPolicy>(
                 unix_ms: 1_000 * tick as i64,
             },
             states: &states,
-            lift_riders: &[],
+            lifts: &[],
             watched: true,
         },
         jobs,
     )
 }
 
-fn orders(out: &Output) -> Vec<&Order> {
+/// The orders sent, as VDA 5050 `order` messages.
+fn orders(out: &Output) -> Vec<Order> {
+    let config = config();
     out.messages
         .iter()
         .filter_map(|m| match m {
-            Message::Order(o) => Some(o),
+            Message::Robot(m) if matches!(m.body, ToRobotBody::Order(_)) => Some(m),
             _ => None,
         })
+        .map(|m| translate::vda_order(&config.graph, &config.robots[0].id, m))
         .collect()
 }
 
@@ -161,11 +170,14 @@ fn actions(out: &Output) -> Vec<&str> {
     out.messages
         .iter()
         .filter_map(|m| match m {
-            Message::InstantActions(m) => Some(m),
+            Message::Robot(m) => match &m.body {
+                ToRobotBody::InstantActions(actions) => Some(actions),
+                _ => None,
+            },
             _ => None,
         })
-        .flat_map(|m| &m.actions)
-        .map(|a| a.action_id.as_str())
+        .flatten()
+        .map(|a| a.id.as_str())
         .collect()
 }
 
@@ -198,7 +210,7 @@ fn the_controller_runs_a_job_from_states_written_by_hand() {
         ("job-1", 0)
     );
     assert_eq!(sent[0].timestamp, "1970-01-01T00:00:00.000Z");
-    assert_eq!(released(sent[0]), ["A", "B", "C"]);
+    assert_eq!(released(&sent[0]), ["A", "B", "C"]);
     assert_eq!(out.held_back, Some(vec![None]));
     assert_eq!(out.reservations.as_ref().map(Vec::len), Some(1));
     // the robot has not answered: nothing to say
@@ -222,7 +234,7 @@ fn without_a_state_of_every_robot_a_cycle_only_takes_the_jobs() {
             unix_ms: 0,
         },
         states: &[],
-        lift_riders: &[],
+        lifts: &[],
         watched: true,
     };
     let out = c.step(&input, [job(1, A, C)]);
@@ -298,7 +310,7 @@ fn a_refused_update_takes_its_release_back() {
     cycle(&mut c, 0, &Report::new("", 0, 0, A), [job(1, A, E)]);
     let out = cycle(&mut c, 1, &Report::new("job-1", 0, 1, B), []);
     assert_eq!(orders(&out)[0].order_update_id, 1);
-    assert_eq!(released(orders(&out)[0]), ["C", "D"]);
+    assert_eq!(released(&orders(&out)[0]), ["C", "D"]);
     // not shown yet, and no error: nothing is taken back
     cycle(&mut c, 2, &Report::new("job-1", 0, 1, B), []);
     let mut refused = Report::new("job-1", 0, 1, B);

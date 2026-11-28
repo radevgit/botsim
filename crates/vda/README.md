@@ -6,7 +6,8 @@ messages, in both directions. Inside the program the fleet server and the robots
 translates. It adds no custom fields.
 
 Library only; of the botsim crates it depends on `botsim-link` and `botsim-model`
-only, reads no files and uses no network. No crate uses it yet.
+only, reads no files and uses no network. `botsim-bridge` uses it between the fleet
+server and the simulator.
 
 The VDA 5050 side is the message types of the
 [`vda5050`](https://crates.io/crates/vda5050) crate. JSON text and MQTT topics are
@@ -22,6 +23,9 @@ the table that says which `RobotId` a `RobotNo` stands for (`add_robot`,
 |---|---|---|
 | Fleet server | `to_robot_to_vda` | `state_from_vda` |
 | Robot | `state_to_vda` | `order_from_vda`, `instant_actions_from_vda`, `responses_from_vda`, `zone_set_from_vda` |
+
+A zone set outside a message (a site's configuration) is read with
+`zone_set_content_from_vda`.
 
 ## What cannot be translated
 
@@ -39,8 +43,14 @@ which a robot refuses it, where there is one.
 | state: route ahead | cut at the first bad step |
 | state: position, velocity, action type, single list entries | left out |
 
-An id is unusable if it is empty; a `manufacturer` or `serialNumber` also if it has
-one of `/ + # $`. An empty `orderId` in a state means no order.
+An id is unusable if it is empty. An empty `orderId` in a state means no order.
+
+A robot's `manufacturer` and `serialNumber` are taken as they are. Whether they can
+be levels of an MQTT topic (not empty, none of `/ + # $`) is for whoever uses MQTT:
+`identity_fits_topic`.
+
+A charge at most 1e-9 above 100 is rounding: it is written and read as 100, without a
+report.
 
 Outgoing, an edge `orientation` or a position `theta` outside ±3.1416 rad (the range
 of the schemas) is brought into −π..π and reported.

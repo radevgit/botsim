@@ -1,9 +1,10 @@
 # botsim-baseline
 
-The bundled fleet controller. It talks to the robots only through VDA 5050
-messages (and to doors and lifts through messages of its own). It is a simple
-reference that other traffic rules are measured against, and is kept as it is:
-only bugs are fixed.
+The bundled fleet controller. It talks to the robots, doors and lifts only through
+the messages of [botsim-link](../link/README.md), which for robots have the meaning
+of VDA 5050; real VDA 5050 messages come from the translator,
+[botsim-vda](../vda/README.md). It is a simple reference that other traffic rules
+are measured against, and is kept as it is: only bugs are fixed.
 
 It knows no simulator: it is given data and gives back messages.
 
@@ -16,12 +17,15 @@ controller.completed(), rejected(), pending(), metrics(seconds)
 ```
 
 `config` (`cycle::Config`) holds the layout, the robots with their identity and
-type from their factsheets (`FleetRobot::from_factsheet`), the zone set, the
-lifts and the doors. The order of the robots decides ties.
+type from their factsheets (`FleetRobot::from_factsheet`), the zones and the zone
+set to send for them, the lifts and the doors. Robots, lifts and doors are named
+in the messages by their places in these lists; the order of the robots also
+decides ties.
 
-`input` (`cycle::Input`) holds the time, every robot's `state` message and who is
-in each lift. The result (`cycle::Output`) holds the messages in the order to
-send them, why each robot is held back, and the reservations if somebody watches.
+`input` (`cycle::Input`) holds the time, every robot's state report, in the fleet's
+order, and the states of the lifts (who is in them). The result (`cycle::Output`)
+holds the messages to robots, doors and lifts in the order to send them, why each
+robot is held back, and the reservations if somebody watches.
 
 To run it against the simulator use [botsim-bridge](../bridge/README.md).
 

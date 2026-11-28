@@ -14,9 +14,10 @@ use botsim::summary::{self, Summary};
 use botsim_baseline::order_builder::Plan;
 use botsim_baseline::policy::{Ask, Fleet, Release, Setup, TrafficPolicy};
 use botsim_baseline::zone_grants::Answer;
+use botsim_link::ids::{RequestId, ZoneId};
+use botsim_link::response::Grant;
+use botsim_link::state::ZoneRequestType;
 use botsim_model::graph::NodeIdx;
-use vda5050::responses::GrantType;
-use vda5050::state::ZoneRequestType;
 
 /// What the policy was asked, seen by the test after the run.
 #[derive(Debug, Default)]
@@ -35,9 +36,9 @@ struct OneAtATime {
     /// Node → the robot that holds it.
     held: HashMap<NodeIdx, usize>,
     /// Zone requests waiting, first seen first: (robot, request id, zone id).
-    queue: Vec<(usize, String, String)>,
+    queue: Vec<(usize, RequestId, ZoneId)>,
     /// Requests granted whose robot still states them: (robot, request id, zone id).
-    granted: Vec<(usize, String, String)>,
+    granted: Vec<(usize, RequestId, ZoneId)>,
 }
 
 impl OneAtATime {
@@ -111,16 +112,17 @@ impl TrafficPolicy for OneAtATime {
     }
 
     fn zone_answers(&mut self, fleet: &Fleet) -> Vec<Answer> {
-        let stated: Vec<(usize, String, String)> = fleet
+        let stated: Vec<(usize, RequestId, ZoneId)> = fleet
             .states
             .iter()
             .enumerate()
             .flat_map(|(robot, s)| {
-                s.zone_requests
+                s.state
+                    .zone_requests
                     .iter()
                     .flatten()
-                    .filter(|r| r.request_type == ZoneRequestType::Access)
-                    .map(move |r| (robot, r.request_id.clone(), r.zone_id.clone()))
+                    .filter(|r| r.kind == ZoneRequestType::Access)
+                    .map(move |r| (robot, r.id.clone(), r.zone.clone()))
             })
             .collect();
         // a request that is gone frees its zone
@@ -145,7 +147,7 @@ impl TrafficPolicy for OneAtATime {
             answers.push(Answer {
                 robot: r.0,
                 request_id: r.1.clone(),
-                grant: GrantType::Granted,
+                grant: Grant::Granted,
             });
             self.granted.push(r);
         }

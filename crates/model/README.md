@@ -17,7 +17,7 @@ depends on no other botsim crate, reads no files and uses no network.
 | `angle` | normalising and subtracting angles |
 | `zones` | the zones of a map (VDA 5050 `zoneSet`), checked (`Zones`) |
 | `collision` | robot bodies placed in the world: overlap and gap |
-| `waiting` | when a robot counts as waiting (`is_waiting`), and why a controller holds one back (`HeldBack`, `WaitReason`) |
+| `waiting` | when a robot counts as waiting (`stands_waiting`), and why a controller holds one back (`HeldBack`, `WaitReason`) |
 | `reservation` | what a controller has reserved for a robot (`Reservation`) |
 | `protocol` | the VDA 5050 version in the message headers |
 | `errors` | the predefined VDA 5050 error types (`ErrorType`): names and levels |

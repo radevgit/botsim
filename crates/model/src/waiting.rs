@@ -1,25 +1,15 @@
 //! Waiting: when a robot counts as waiting, and what a controller says about a
-//! robot it holds back. The controller reads the first from state messages; the
-//! simulator (`botsim_core::waiting`) uses both to decide who waits for whom.
+//! robot it holds back. The controller asks the first of state reports
+//! (`botsim_link::state::State::is_waiting`); the simulator (`botsim_core::waiting`)
+//! uses both to decide who waits for whom.
 //!
 //! **Waiting** (user decision S32): the time a robot **stands still while it has a
 //! job** and is **not busy with an action** (`pick`, `drop`, …). That is the time
 //! traffic control costs.
 
-use vda5050::state::{ActionStatus, State};
-
-/// Is this robot waiting, judged from its state message? Standing still means
-/// not driving and not turning on the spot (`driving` covers both); any running
-/// action makes it busy. Whether the robot has a job is for the caller to know.
-pub fn is_waiting(state: &State) -> bool {
-    let acting = state
-        .action_states
-        .iter()
-        .any(|a| a.action_status == ActionStatus::Running);
-    stands_waiting(state.driving, state.safety_state.field_violation, acting)
-}
-
-/// The rule of [`is_waiting`], on the three things it reads.
+/// Is a robot waiting? Standing still means not driving and not turning on the spot
+/// (`driving` covers both); `acting` says that an action is running, which makes it
+/// busy. Whether the robot has a job is for the caller to know.
 pub fn stands_waiting(driving: bool, field_violation: bool, acting: bool) -> bool {
     // a robot stopped by an obstacle or a disturbance (protective field
     // violation) is not waiting for the controller

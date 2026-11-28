@@ -21,11 +21,16 @@ const NODE_SEQUENCE_ID: &str = "nodeStates[].sequenceId";
 const EDGE_SEQUENCE_ID: &str = "edgeStates[].sequenceId";
 const THETA: &str = "mobileRobotPosition.theta";
 
-/// The charge in percent, as the schema allows it.
+/// How far above 100 percent a charge may be by rounding and still be a full one.
+const CHARGE_ROUNDING: f64 = 1e-9;
+
+/// The charge in percent, as the schema allows it. A hair above 100 (a share
+/// computed as `100 · part / whole` can come out so) is taken as 100, without a
+/// report.
 fn charge(value: f64) -> Result<f64, Problem> {
     let value = finite(value, CHARGE)?;
-    if (0.0..=100.0).contains(&value) {
-        Ok(value)
+    if (0.0..=100.0 + CHARGE_ROUNDING).contains(&value) {
+        Ok(value.min(100.0))
     } else {
         Err(Problem::OutOfRange { field: CHARGE })
     }

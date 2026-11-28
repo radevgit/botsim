@@ -3,8 +3,8 @@
 //! refuses the order, and the baseline (which does not plan around what a robot
 //! cannot turn) does not get the job done.
 
-use botsim_baseline::controller::Controller;
 use botsim_bridge as bridge;
+use botsim_bridge::Bridged as Controller;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::errors::ErrorType;

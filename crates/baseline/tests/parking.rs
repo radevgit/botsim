@@ -1,8 +1,8 @@
 //! Idle robots go to a free parking place and leave it for a job (U13). Parking
 //! places are the interaction nodes of the stations of type `parking`.
 
-use botsim_baseline::controller::Controller;
 use botsim_bridge as bridge;
+use botsim_bridge::Bridged as Controller;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::{Graph, GraphStation};

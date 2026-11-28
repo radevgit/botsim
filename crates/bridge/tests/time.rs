@@ -1,12 +1,15 @@
 //! The controller's messages carry the time of the world.
 
-use botsim_baseline::cycle::{Input, Message, Time};
+use std::sync::Arc;
+
+use botsim_baseline::cycle::{Input, Message, Time, robot_no};
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_vda::translator::{RobotMessage, Translator};
 use vda5050::factsheet::Factsheet;
 use vdma_lif::Lif;
 
@@ -38,14 +41,15 @@ fn the_timestamp_made_from_the_time_of_a_cycle_is_the_worlds() {
             }
             // a controller that has just started sends an order at once
             let mut c = botsim_bridge::controller(&w);
-            let states = [w.state(&id).unwrap()];
+            let state = w.state(&id).unwrap();
+            let states = [c.read_state(&state, w.tick()).unwrap()];
             let input = Input {
                 time: Time {
                     tick: w.tick(),
                     unix_ms: w.now_ms(),
                 },
                 states: &states,
-                lift_riders: &[],
+                lifts: &[],
                 watched: false,
             };
             let job = Job {
@@ -55,8 +59,14 @@ fn the_timestamp_made_from_the_time_of_a_cycle_is_the_worlds() {
                 created_tick: w.tick(),
             };
             let out = c.step(&input, [job]);
-            let [Message::Order(order)] = &out.messages[..] else {
-                panic!("one order expected: {:?}", out.messages);
+            let [Message::Robot(message)] = &out.messages[..] else {
+                panic!("one message expected: {:?}", out.messages);
+            };
+            let mut translator = Translator::new(Arc::new(w.graph().clone()));
+            translator.add_robot(robot_no(0), id.clone()).unwrap();
+            let written = translator.to_robot_to_vda(message).unwrap().message;
+            let RobotMessage::Order(order) = written else {
+                panic!("an order expected: {written:?}");
             };
             assert_eq!(order.timestamp, w.timestamp(), "dt {dt}, step {steps}");
         }

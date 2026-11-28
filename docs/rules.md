@@ -58,7 +58,12 @@ LIF 2.0 (layouts).
 ## 1b. The controller's messages (VDA 5050)
 
 The controller sees the robots only through these messages (S61 lists what is
-and is not a message yet):
+and is not a message yet). Inside the program it speaks their compact form,
+`botsim-link`; the translator `botsim-vda` makes the VDA 5050 messages of it
+for the simulated robots and reads their state messages. What cannot be
+translated is counted and shown in the summary (`untranslated`, left out when
+everything can); a state that is refused whole counts as one that cannot be had,
+and then the controller only takes the new jobs in that cycle.
 
 | Direction | Message | State |
 |---|---|---|
@@ -71,6 +76,8 @@ and is not a message yet):
 | from the robot | `visualization` | **not planned** (S66 discussion): it is the standard's optional topic for a high-rate position and path feed to outside visualization tools (never used by fleet control for logic). Viewers and recorders use the observer port (§7b), which shows the whole world; the message would only matter once an MQTT adapter feeds an outside tool |
 
 Lift and door commands are not VDA 5050; they have their own ports (§7f, §7h).
+The controller's messages to lifts and doors, and the lift states it gets, are
+`botsim-link`'s too and name each lift and door by its number.
 
 ## 2. Robot motion
 

@@ -2,7 +2,7 @@
 //!
 //! A [dispatcher](botsim_dispatcher) gives tasks to robots, with their first
 //! routes. The **controller** carries them out: it re-plans routes, runs lifts and
-//! doors, and builds and sends the VDA 5050 messages. The **policy**, behind
+//! doors, and builds and sends the messages ([`botsim_link`]). The **policy**, behind
 //! [`TrafficPolicy`] (brief `traffic_policy_slot.md`), says how far each route is
 //! released and answers RELEASE zone requests. It never plans paths and never talks
 //! to a robot.
@@ -30,12 +30,13 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
 
+use botsim_link::message::FromRobot;
+use botsim_link::state::State;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::reservation::Reservation;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::Shape;
 use botsim_model::zones::Zones;
-use vda5050::state::State;
 
 use crate::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
 use crate::order_builder::{Plan, RELEASE_WINDOW};
@@ -84,8 +85,8 @@ pub struct Fleet<'a> {
     pub tick: u64,
     /// Simulated seconds since the cycle before.
     pub elapsed: f64,
-    /// The state messages as received.
-    pub states: &'a [State],
+    /// The state reports as received.
+    pub states: &'a [FromRobot],
     /// `None` for a robot without a route.
     pub routes: &'a [Option<RouteView<'a>>],
 }
@@ -94,6 +95,7 @@ pub struct Fleet<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct Ask<'a> {
     pub robot: usize,
+    /// What the robot reported last.
     pub state: &'a State,
     /// The whole route.
     pub route: &'a Plan,

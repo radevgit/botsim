@@ -52,6 +52,22 @@ cargo run --release -p botsim -- --record run.jsonl scenarios/warehouse.toml
 cargo run --release -p botsim-viewer -- run.jsonl
 ```
 
+## How a run works
+
+```mermaid
+flowchart LR
+    scenario["Scenario file<br/>layout, robots, jobs"] --> run
+
+    subgraph run["botsim"]
+        sim["Simulator<br/>robots, doors, lifts"] -->|states| controller["Fleet controller<br/>jobs, routes, traffic"]
+        controller -->|orders| sim
+    end
+
+    run --> summary["Summary (JSON)"]
+    run --> recording["Recording"]
+    recording --> viewer["Replay viewer"]
+```
+
 ## Licence
 
 MIT

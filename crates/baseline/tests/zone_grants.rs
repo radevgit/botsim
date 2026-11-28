@@ -8,6 +8,9 @@ use botsim_core::jobs::JobGenerator;
 use botsim_core::observer::{Observer, Snapshot};
 use botsim_core::waiting::Wait;
 use botsim_core::world::World;
+use botsim_link::ids::{RequestId, ZoneId, ZoneSetId};
+use botsim_link::response::Grant::{self, Granted, Queued};
+use botsim_link::state::{RequestStatus, ZoneRequest, ZoneRequestType};
 use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
@@ -15,8 +18,6 @@ use botsim_model::spec::RobotSpec;
 use botsim_model::waiting::WaitReason;
 use botsim_model::zones::Zones;
 use vda5050::factsheet::Factsheet;
-use vda5050::responses::GrantType::{Granted, Queued};
-use vda5050::state::{RequestStatus, ZoneRequest, ZoneRequestType};
 use vda5050::zone_set::ZoneSet;
 
 mod common;
@@ -54,12 +55,11 @@ fn zones(g: &Graph) -> Zones {
 
 fn request(id: &str, zone: &str) -> ZoneRequest {
     ZoneRequest {
-        request_id: id.into(),
-        request_type: ZoneRequestType::Access,
-        zone_id: zone.into(),
-        zone_set_id: "zs".into(),
-        request_status: RequestStatus::Requested,
-        trajectory: None,
+        id: RequestId::new(id),
+        kind: ZoneRequestType::Access,
+        zone: ZoneId::new(zone),
+        zone_set: ZoneSetId::new("zs"),
+        status: RequestStatus::Requested,
     }
 }
 
@@ -78,10 +78,10 @@ fn inside(zone_x: f64, requests: Vec<ZoneRequest>) -> RobotView {
     }
 }
 
-fn answer(robot: usize, id: &str, grant: vda5050::responses::GrantType) -> Answer {
+fn answer(robot: usize, id: &str, grant: Grant) -> Answer {
     Answer {
         robot,
-        request_id: id.into(),
+        request_id: RequestId::new(id),
         grant,
     }
 }
@@ -193,7 +193,7 @@ fn a_robot_may_hold_a_second_zone_next_to_the_first() {
 fn other_zone_sets_and_unknown_zones_are_ignored() {
     let mut g = grants();
     let mut other_set = request("req-1", "a");
-    other_set.zone_set_id = "elsewhere".into();
+    other_set.zone_set = ZoneSetId::new("elsewhere");
     let unknown = request("req-2", "nope");
     let r = vec![robot(vec![other_set, unknown])];
     assert!(g.decide(&r).is_empty());

@@ -15,5 +15,7 @@ vda5050 = "0.1.0"
 vdma-lif = "0.1.0"
 
 [dev-dependencies]
+botsim-link = { path = "../link" }
+botsim-vda = { path = "../vda" }
 jsonschema = "0.61.2"
 serde_json = "1.0.154"

@@ -37,6 +37,7 @@ use std::path::Path;
 use botsim_baseline::order_builder::Plan;
 use botsim_baseline::policy::{Ask, Fleet, Release, Reroute, Setup, TrafficPolicy};
 use botsim_baseline::zone_grants::Answer;
+use botsim_link::ids::OrderId;
 use botsim_model::graph::NodeIdx;
 use botsim_space::{MapOptions, TypeRef};
 use botsim_traffic::{NotAdded, Piece, Report, Route, Spots, Traffic};
@@ -73,9 +74,10 @@ pub struct TrafficAdapter {
 struct Robot {
     /// Its number in the module.
     number: usize,
-    /// The order id its state showed when it got its route; `None` before it has
-    /// one. States that show it are not about the route.
-    order_before: Option<String>,
+    /// The order id its state showed when it got its route (`Some(None)`: it
+    /// showed none); `None` before it has one. States that show it are not about
+    /// the route.
+    order_before: Option<Option<OrderId>>,
     /// A new order the module has not started: it does not have the robot at the
     /// end of the order before.
     pending: Option<Route>,
@@ -150,7 +152,7 @@ impl TrafficAdapter {
     }
 
     /// Put a robot into the module with this route.
-    fn enter(&mut self, robot: usize, route: Route, order_before: Option<String>) {
+    fn enter(&mut self, robot: usize, route: Route, order_before: Option<Option<OrderId>>) {
         let number = match self.traffic.add(route) {
             Ok(number) => number,
             // nothing beyond its first node can be taken yet
@@ -224,7 +226,8 @@ impl TrafficPolicy for TrafficAdapter {
             .robots
             .iter()
             .zip(fleet.states)
-            .filter_map(|(robot, state)| {
+            .filter_map(|(robot, report)| {
+                let state = &report.state;
                 let robot = robot.as_ref()?;
                 let before = robot.order_before.as_ref()?;
                 // the module does not have the new order yet, or the state is not
@@ -234,7 +237,7 @@ impl TrafficPolicy for TrafficAdapter {
                 }
                 Some(Report {
                     robot: robot.number,
-                    reached: (state.last_node_sequence_id / 2) as usize,
+                    reached: state.last_step() as usize,
                     released: self.traffic.graph().released(robot.number)?,
                 })
             })

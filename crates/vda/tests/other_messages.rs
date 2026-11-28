@@ -287,6 +287,29 @@ fn an_incoming_zone_set_needs_a_known_map_and_finite_numbers() {
 }
 
 #[test]
+fn a_zone_set_on_its_own_is_translated_as_in_a_message() {
+    let t = translator();
+    let blocked = json!({"zoneId": "z", "zoneType": "BLOCKED", "vertices": []});
+    let message = zone_set_message("M", blocked.clone());
+    let ToRobotBody::ZoneSet(in_message) = t.zone_set_from_vda(&message).unwrap().message.body
+    else {
+        panic!("not a zone set");
+    };
+    assert_eq!(
+        t.zone_set_content_from_vda(&message.zone_set),
+        Ok((*in_message).clone())
+    );
+
+    let mut message = zone_set_message("M", blocked);
+    message.zone_set.zones[0].zone_id = String::new();
+    let issue = t.zone_set_content_from_vda(&message.zone_set).unwrap_err();
+    let problem = Problem::UnusableId {
+        field: "zones[].zoneId",
+    };
+    zone_set_refused(issue, problem, ErrorType::ValidationFailure, "zs");
+}
+
+#[test]
 fn polygons_and_ranges_of_an_incoming_zone_set_are_left_to_the_robot() {
     let zone = json!({"zoneId": "z", "zoneType": "PRIORITY", "priorityFactor": 5.0,
                       "vertices": [{"x": 0.0, "y": 0.0}]});

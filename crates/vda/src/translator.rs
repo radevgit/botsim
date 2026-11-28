@@ -39,8 +39,6 @@ struct Slot {
 /// Why the table of robots does not take a change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RobotTableError {
-    /// A `manufacturer` or `serialNumber` that is empty or has one of `/ + # $`.
-    UnusableIdentity(RobotId),
     /// The slot of the number holds the robot with this number.
     SlotTaken(RobotNo),
     /// The identity is in the table already, with this number.
@@ -55,11 +53,6 @@ impl fmt::Display for RobotTableError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let number = |no: &RobotNo| format!("{} (generation {})", no.slot(), no.generation());
         match self {
-            RobotTableError::UnusableIdentity(id) => write!(
-                f,
-                "'{}' / '{}' cannot be a robot's identity",
-                id.manufacturer, id.serial_number
-            ),
             RobotTableError::SlotTaken(no) => {
                 write!(f, "the slot is taken by robot number {}", number(no))
             }
@@ -76,9 +69,14 @@ impl fmt::Display for RobotTableError {
 
 impl std::error::Error for RobotTableError {}
 
-/// Can the text be a level of an MQTT topic (VDA 5050 §4.2)?
-fn usable_level(text: &str) -> bool {
-    !text.is_empty() && !text.contains(['/', '+', '#', '$'])
+/// Can the robot's `manufacturer` and `serialNumber` be levels of an MQTT topic
+/// (VDA 5050 §4.2): neither empty, and neither with one of `/ + # $`?
+///
+/// The [`Translator`] does not ask this: it takes every identity, because the
+/// translation does not need topics. Whoever sends messages over MQTT has to.
+pub fn identity_fits_topic(id: &RobotId) -> bool {
+    let level = |text: &str| -> bool { !text.is_empty() && !text.contains(['/', '+', '#', '$']) };
+    level(&id.manufacturer) && level(&id.serial_number)
 }
 
 impl Translator {
@@ -96,11 +94,9 @@ impl Translator {
     }
 
     /// From now on `no` stands for the robot `id`. A slot that a robot has left
-    /// takes only a later generation.
+    /// takes only a later generation. Any identity is taken (see
+    /// [`identity_fits_topic`]).
     pub fn add_robot(&mut self, no: RobotNo, id: RobotId) -> Result<(), RobotTableError> {
-        if !(usable_level(&id.manufacturer) && usable_level(&id.serial_number)) {
-            return Err(RobotTableError::UnusableIdentity(id));
-        }
         if let Some(slot) = self.slots.get(&no.slot()) {
             if slot.id.is_some() {
                 let holder = RobotNo::new(no.slot(), slot.generation);

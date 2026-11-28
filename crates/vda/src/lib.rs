@@ -12,6 +12,10 @@
 //! | Fleet server | [`to_robot_to_vda`](translator::Translator::to_robot_to_vda) | [`state_from_vda`](translator::Translator::state_from_vda) |
 //! | Robot | [`state_to_vda`](translator::Translator::state_to_vda) | [`order_from_vda`](translator::Translator::order_from_vda), [`instant_actions_from_vda`](translator::Translator::instant_actions_from_vda), [`responses_from_vda`](translator::Translator::responses_from_vda), [`zone_set_from_vda`](translator::Translator::zone_set_from_vda) |
 //!
+//! A zone set that is not in a message, such as the one of a site's configuration,
+//! is read with
+//! [`zone_set_content_from_vda`](translator::Translator::zone_set_content_from_vda).
+//!
 //! Whatever cannot be translated is reported as an [`Issue`](report::Issue), never
 //! a panic. A message is either refused whole (`Err`) or translated with the parts
 //! that had to be left out or changed listed beside it
@@ -27,9 +31,15 @@
 //!   velocity, the type of an action, and single entries of the action states, zone
 //!   requests, zone sets and errors.
 //!
-//! An id is unusable if it is empty; a `manufacturer` or `serialNumber` also if it
-//! has one of `/ + # $` (they are levels of the MQTT topic). An empty `orderId` in
-//! a state means that the robot never had an order.
+//! An id is unusable if it is empty. An empty `orderId` in a state means that the
+//! robot never had an order.
+//!
+//! A robot's `manufacturer` and `serialNumber` are taken as they are. Whether they
+//! can be levels of an MQTT topic is a rule of MQTT, which is not handled here:
+//! [`identity_fits_topic`](translator::identity_fits_topic) says it.
+//!
+//! A charge at most 1e-9 above 100 is rounding: it is written and read as 100,
+//! without a report.
 //!
 //! Outgoing, an edge `orientation` or a position `theta` outside the range the
 //! schemas allow (±3.1416 rad) is brought into −π..π, the same direction, and

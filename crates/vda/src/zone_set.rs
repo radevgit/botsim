@@ -104,7 +104,7 @@ impl Translator {
                 Problem::UnknownRobot(_) => Issue::new(problem),
                 _ => refuse(invalid(problem), id),
             })?;
-        let zone_set = self.zones_from_vda(set).map_err(|r| refuse(r, id))?;
+        let zone_set = self.zone_set_content_from_vda(set)?;
         Ok(Translated {
             message: ToRobot {
                 header,
@@ -112,6 +112,14 @@ impl Translator {
             },
             issues: Vec::new(),
         })
+    }
+
+    /// A zone set on its own, without a message around it (the fleet server reads
+    /// the site's zone set when it starts). It is taken whole or refused, as in a
+    /// message.
+    pub fn zone_set_content_from_vda(&self, set: &vda::ZoneSet) -> Result<ZoneSet, Issue> {
+        self.zones_from_vda(set)
+            .map_err(|r| refuse(r, &set.zone_set_id))
     }
 
     fn zones_from_vda(&self, set: &vda::ZoneSet) -> Result<ZoneSet, Refusal> {

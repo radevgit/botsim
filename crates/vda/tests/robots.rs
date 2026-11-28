@@ -4,7 +4,7 @@ mod common;
 
 use botsim_model::robot::{RobotId, RobotNo};
 use botsim_vda::report::Problem;
-use botsim_vda::translator::{RobotTableError, Translator};
+use botsim_vda::translator::{RobotTableError, Translator, identity_fits_topic};
 use common::*;
 
 fn id(serial: &str) -> RobotId {
@@ -83,23 +83,39 @@ fn a_number_never_seen_is_unknown() {
     }
 }
 
+/// Identities that cannot be levels of an MQTT topic.
+const NO_TOPIC: [(&str, &str); 6] = [
+    ("", "R-1"),
+    ("ACME", ""),
+    ("AC/ME", "R-1"),
+    ("ACME", "R+1"),
+    ("ACME", "R#1"),
+    ("$ACME", "R-1"),
+];
+
 #[test]
 fn an_identity_must_fit_a_topic() {
-    let mut t = Translator::new(graph());
-    for (manufacturer, serial) in [
-        ("", "R-1"),
-        ("ACME", ""),
-        ("AC/ME", "R-1"),
-        ("ACME", "R+1"),
-        ("ACME", "R#1"),
-        ("$ACME", "R-1"),
-    ] {
-        let id = RobotId::new(manufacturer, serial);
-        assert_eq!(
-            t.add_robot(ROBOT, id.clone()),
-            Err(RobotTableError::UnusableIdentity(id))
-        );
+    for (manufacturer, serial) in NO_TOPIC {
+        assert!(!identity_fits_topic(&RobotId::new(manufacturer, serial)));
     }
-    t.add_robot(ROBOT, RobotId::new("A C-ME_.:", "R-1"))
-        .unwrap();
+    assert!(identity_fits_topic(&RobotId::new("A C-ME_.:", "R-1")));
+}
+
+#[test]
+fn the_translator_takes_every_identity() {
+    for (manufacturer, serial) in NO_TOPIC {
+        let id = RobotId::new(manufacturer, serial);
+        let mut t = Translator::new(graph());
+        t.add_robot(ROBOT, id.clone()).unwrap();
+        // and translates the robot's messages, there and back
+        let message = from_robot(idle_state());
+        let out = t.state_to_vda(&message).unwrap().message;
+        assert_eq!(
+            (out.manufacturer.as_str(), out.serial_number.as_str()),
+            (manufacturer, serial)
+        );
+        let back = t.state_from_vda(&out).unwrap().message;
+        assert_eq!(back.header.robot, ROBOT);
+        assert_eq!(t.robot_no(&id), Some(ROBOT));
+    }
 }

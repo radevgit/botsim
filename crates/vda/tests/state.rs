@@ -350,6 +350,44 @@ fn an_angle_outside_the_range_is_written_as_the_same_direction() {
 }
 
 #[test]
+fn a_charge_a_hair_above_full_is_full_in_both_directions() {
+    let t = translator();
+    // what a full battery of 0.69 Wh shows as `100 · charge / capacity`
+    let capacity: f64 = 0.69;
+    let full = 100.0 * capacity / capacity;
+    assert!(full > 100.0, "{full}");
+    for charge in [full, 100.0 + 1e-9, 100.0] {
+        let mut m = message();
+        m.power_supply.state_of_charge = charge;
+        let read = t.state_from_vda(&m).unwrap();
+        assert_eq!(read.message.state.charge, 100.0);
+        assert!(read.issues.is_empty());
+
+        let mut state = full_state();
+        state.charge = charge;
+        let written = t.state_to_vda(&from_robot(state)).unwrap();
+        assert_eq!(written.message.power_supply.state_of_charge, 100.0);
+        assert!(written.issues.is_empty());
+    }
+    // further out is refused as before
+    let field = "powerSupply.stateOfCharge";
+    for charge in [100.0 + 3e-9, 100.000001, -1e-12] {
+        let mut m = message();
+        m.power_supply.state_of_charge = charge;
+        assert_eq!(
+            t.state_from_vda(&m).unwrap_err().problem,
+            Problem::OutOfRange { field }
+        );
+        let mut state = full_state();
+        state.charge = charge;
+        assert_eq!(
+            t.state_to_vda(&from_robot(state)).unwrap_err().problem,
+            Problem::OutOfRange { field }
+        );
+    }
+}
+
+#[test]
 fn a_report_with_an_unusable_charge_is_not_written() {
     let mut state = full_state();
     state.charge = 101.0;

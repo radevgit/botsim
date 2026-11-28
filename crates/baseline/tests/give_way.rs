@@ -4,8 +4,8 @@
 //! After a few seconds X, which is right in front of O and heads the same way, takes
 //! the node over and goes first.
 
-use botsim_baseline::controller::Controller;
 use botsim_bridge as bridge;
+use botsim_bridge::Bridged as Controller;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;

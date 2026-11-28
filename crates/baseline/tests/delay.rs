@@ -1,8 +1,8 @@
 //! The baseline with a message delay (S58): the controller reads old states and
 //! its orders arrive late.
 
-use botsim_baseline::controller::Controller;
 use botsim_bridge as bridge;
+use botsim_bridge::Bridged as Controller;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
