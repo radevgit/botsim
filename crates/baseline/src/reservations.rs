@@ -1,8 +1,8 @@
 //! Who holds which node and edge (S34).
 //!
-//! A node or an edge has at most one holder (a robot index). The baseline
-//! controller reserves them when it releases them to a robot and gives them back
-//! when the robot has driven on. Nothing here knows about routes or messages.
+//! A node or an edge has at most one holder (a robot index). The baseline's
+//! rules reserve them when they release them to a robot and give them back when
+//! the robot has driven on. Nothing here knows about routes or messages.
 
 use std::collections::{BTreeMap, HashMap};
 

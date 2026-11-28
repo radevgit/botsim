@@ -1,4 +1,5 @@
-//! The traffic policy: every "who may go now" decision of the controller.
+//! The traffic policy, the server's slot for the traffic rules: every "who may go
+//! now" decision of the controller.
 //!
 //! A [dispatcher](botsim_dispatcher) gives tasks to robots, with their first
 //! routes. The **controller** carries them out: it re-plans routes, runs lifts and
@@ -30,7 +31,9 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
 
+use botsim_link::ids::RequestId;
 use botsim_link::message::FromRobot;
+use botsim_link::response::Grant;
 use botsim_link::state::State;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::reservation::Reservation;
@@ -40,7 +43,6 @@ use botsim_model::zones::Zones;
 
 use crate::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
 use crate::order_builder::{Plan, RELEASE_WINDOW};
-use crate::zone_grants::Answer;
 
 /// One robot of the fleet, as far as it does not change.
 #[derive(Debug, Clone)]
@@ -130,7 +132,15 @@ pub struct Reroute {
     pub avoid: HashSet<NodeIdx>,
 }
 
-/// Who may go now. The bundled baseline rules are the first implementation.
+/// One answer to a RELEASE zone request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneAnswer {
+    pub robot: usize,
+    pub request_id: RequestId,
+    pub grant: Grant,
+}
+
+/// Who may go now. The caller chooses the rules when it makes a controller.
 pub trait TrafficPolicy: Debug {
     /// Once, before the first cycle.
     fn start(&mut self, setup: &Setup);
@@ -178,7 +188,7 @@ pub trait TrafficPolicy: Debug {
     fn idle(&mut self, _robot: usize, _node: NodeIdx) {}
 
     /// Answers to the RELEASE zone requests the states carry.
-    fn zone_answers(&mut self, fleet: &Fleet) -> Vec<Answer>;
+    fn zone_answers(&mut self, fleet: &Fleet) -> Vec<ZoneAnswer>;
 
     /// The robot that holds a node, for route load and for the dispatcher (free
     /// chargers and parking places).
@@ -253,7 +263,7 @@ impl<T: TrafficPolicy + ?Sized> TrafficPolicy for Box<T> {
     fn idle(&mut self, robot: usize, node: NodeIdx) {
         (**self).idle(robot, node);
     }
-    fn zone_answers(&mut self, fleet: &Fleet) -> Vec<Answer> {
+    fn zone_answers(&mut self, fleet: &Fleet) -> Vec<ZoneAnswer> {
         (**self).zone_answers(fleet)
     }
     fn node_holder(&self, node: NodeIdx) -> Option<usize> {

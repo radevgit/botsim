@@ -2,13 +2,13 @@
 //! edge reservations let two robots use them at the same time and the robots meet at
 //! the crossing. With the edge pair in the conflict table the second robot waits.
 
-use botsim_baseline::conflicts::ConflictInput;
 use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_server::conflicts::ConflictInput;
 use vda5050::factsheet::Factsheet;
 
 mod common;
@@ -55,7 +55,7 @@ fn run(conflicts: bool) -> (usize, usize) {
     w.set_safety_stop(false);
     let mut ctl = bridge::controller(&w);
     if conflicts {
-        let read = ctl.set_conflicts(&[ConflictInput {
+        let read = ctl.policy_mut().set_conflicts(&[ConflictInput {
             type_a: "ACME/X1".into(),
             type_b: "ACME/X1".into(),
             edges: vec![("A-B".into(), "C-D".into())],

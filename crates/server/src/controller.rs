@@ -1,6 +1,8 @@
-//! The baseline controller: jobs go first come first served to the nearest
-//! free robot; the route is released node by node with a window of
-//! [`RELEASE_WINDOW`](crate::order_builder::RELEASE_WINDOW) nodes.
+//! The server's control loop: it carries out the tasks a [dispatcher] gives out
+//! and releases each route as far as the traffic rules in its slot
+//! ([`TrafficPolicy`]) say.
+//!
+//! [dispatcher]: botsim_dispatcher
 //!
 //! It sees the robots only through their state reports and talks to them, the
 //! doors and the lifts only with messages, like any real controller. The messages
@@ -22,18 +24,14 @@
 //!   its reported position (within [`NODE_TOLERANCE`]); a robot that is not on a
 //!   node is not used.
 //! - **Tasks**: which robot gets which job, and which one drives to a charger or
-//!   a parking place, is decided by a [`Dispatcher`] (the baseline's: the oldest
-//!   job first, to the nearest robot; see
+//!   a parking place, is decided by a [`Dispatcher`] (by default the baseline's:
+//!   the oldest job first, to the nearest robot; see
 //!   [`botsim_dispatcher::baseline`]).
-//! - **Release**: when the robot reaches plan node `i`, the base is extended up
-//!   to node `i + 2` (an order update from the end of the base), as far as the
-//!   way is free.
-//! - **Reservations** (S34): a node, and the edge leading to it, are reserved
-//!   for a robot when they are released to it, and given back when the robot
-//!   has driven on to the next node. A robot is released only onto nodes and
-//!   edges nobody else holds; otherwise it waits at the end of its base and the
-//!   controller tries again every cycle. A robot without a job holds the node
-//!   it stands on.
+//! - **Release**: when the robot reaches plan node `i`, the base is extended (an
+//!   order update from the end of the base) as far as the traffic rules say, at
+//!   most to the end of their window (by default node `i + 2`,
+//!   [`RELEASE_WINDOW`](crate::order_builder::RELEASE_WINDOW)). The rules are
+//!   asked every cycle.
 //! - **Lifts** (S47): a route with a lift ride needs the lift; one robot uses a
 //!   lift at a time, the controller calls, releases and sends the cabin (see
 //!   [`crate::lifts`]).
@@ -43,20 +41,18 @@
 //! - **Done**: the robot stands on the last node, nothing is driving, and all
 //!   actions are finished.
 //!
-//! - **Re-routing** (S53): a robot that has stood at the end of its released
-//!   route for [`REROUTE_AFTER_SECONDS`] because another robot holds the way gets
-//!   a new route around the nodes others hold (an order update that changes the
-//!   unreleased part).
+//! - **Re-routing** (S53): when the traffic rules ask for another way, the robot
+//!   gets a new route around the nodes they name (an order update that changes
+//!   the unreleased part), if there is one.
 //!
-//! Not yet: deadlock resolution beyond that (robots can still wait for each other
-//! for ever when there is no way round), look-ahead beyond the window, robot types
-//! and edge rules, robots that fail.
+//! Not yet: robots that fail. Whether robots can wait for each other for ever is
+//! up to the traffic rules.
 //!
 //! **Parts:** this module carries out the tasks (messages, releases, re-planning,
 //! lifts, doors, what becomes of a robot's work). Who gets which task is a
-//! [`Dispatcher`]. Who may go now (reservations, conflicts, go-first, the wait
-//! timeout, zone answers) is a [`TrafficPolicy`] (brief `traffic_policy_slot.md`);
-//! the rules above that say so are the baseline's, [`crate::baseline_policy`].
+//! [`Dispatcher`]. Who may go now (what is held, conflicts, the wish for another
+//! way, zone answers) is a [`TrafficPolicy`] (brief `traffic_policy_slot.md`),
+//! which the caller chooses when it makes the controller.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -80,11 +76,6 @@ use botsim_router::load::{self, Load};
 use botsim_router::route::{Arrival, Mover, plan_path};
 use botsim_router::types::TypeRouting;
 
-use crate::baseline_policy::BaselinePolicy;
-pub use crate::baseline_policy::{
-    GIVE_WAY_AFTER_SECONDS, GIVE_WAY_HOLD_SECONDS, REROUTE_AFTER_SECONDS,
-};
-use crate::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
 use crate::cycle::{Config, Input, Message, Output, robot_no};
 use crate::doors::DoorDesk;
 use crate::lifts::{LiftDesk, LiftRobot};
@@ -92,7 +83,6 @@ use crate::metrics::{Metrics, summarize};
 use crate::node_grid::NodeGrid;
 use crate::order_builder::{OrderHeader, Plan, build_order_with};
 use crate::policy::{Ask, Fleet, PolicyRobot, RouteView, Setup, TrafficPolicy};
-use crate::reservations::Reservations;
 
 /// The time constant of the waiting average per node that the route cost uses
 /// (route with load).
@@ -242,11 +232,10 @@ impl Slot {
     }
 }
 
-/// The controller, with the traffic rules behind `P` (by default the baseline's,
-/// [`BaselinePolicy`]) and a [`Dispatcher`] (by default the baseline's,
-/// [`BaselineDispatcher`]).
+/// The controller, with the traffic rules behind `P` (the caller's choice) and a
+/// [`Dispatcher`] (by default the baseline's, [`BaselineDispatcher`]).
 #[derive(Debug)]
-pub struct Controller<P: TrafficPolicy = BaselinePolicy> {
+pub struct Controller<P: TrafficPolicy> {
     graph: Graph,
     /// Which robot gets which task; it holds the jobs not yet given out.
     dispatcher: Box<dyn Dispatcher>,
@@ -289,42 +278,6 @@ pub struct Controller<P: TrafficPolicy = BaselinePolicy> {
     /// For each node, how many robots stood waiting on it, as a moving average over
     /// [`WAIT_AVERAGE_SECONDS`] (1.0 = one robot waiting all the time).
     node_wait: Vec<f64>,
-}
-
-impl Controller {
-    /// A controller with the baseline's traffic rules for the fleet of `config`.
-    pub fn new(config: &Config) -> Controller {
-        Controller::with_policy(config, BaselinePolicy::new(&config.graph))
-    }
-
-    /// Swept-area reservation of the baseline rules, see
-    /// [`BaselinePolicy::set_conflicts`].
-    pub fn set_conflicts(&mut self, input: &[ConflictInput]) -> usize {
-        self.policy.set_conflicts(input)
-    }
-
-    /// Node-edge conflicts of the baseline rules, see
-    /// [`BaselinePolicy::set_node_conflicts`].
-    pub fn set_node_conflicts(&mut self, input: &[NodeConflictInput]) -> usize {
-        self.policy.set_node_conflicts(input)
-    }
-
-    /// Node-node conflicts of the baseline rules, see
-    /// [`BaselinePolicy::set_node_node_conflicts`].
-    pub fn set_node_node_conflicts(&mut self, input: &[NodeNodeConflictInput]) -> usize {
-        self.policy.set_node_node_conflicts(input)
-    }
-
-    /// Who holds which node and edge.
-    pub fn reservations(&self) -> &Reservations {
-        self.policy.table()
-    }
-
-    /// How many times a robot went first, ahead of the robot stuck behind it
-    /// (S77, [`GIVE_WAY_AFTER_SECONDS`]).
-    pub fn give_ways(&self) -> usize {
-        self.policy.give_ways()
-    }
 }
 
 impl<P: TrafficPolicy> Controller<P> {
@@ -493,8 +446,7 @@ impl<P: TrafficPolicy> Controller<P> {
     }
 
     /// How many times a robot's route was changed because the policy asked for it
-    /// (the baseline: another robot held the way for longer than
-    /// [`REROUTE_AFTER_SECONDS`]).
+    /// (the baseline: another robot held the way for too long).
     pub fn reroutes(&self) -> usize {
         self.reroutes
     }

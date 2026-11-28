@@ -8,7 +8,9 @@
 //! "A passes piece `p` before B passes piece `q`" says: B gets `q` released only
 //! after A has left `p`, that is after A has reached the node that follows `p`.
 //! While these edges form no cycle, some robot can always go on, so there is no
-//! deadlock; and every conflict that has an order is free of collisions.
+//! deadlock; and every conflict that has an order is free of collisions. This holds
+//! for the parts of the routes that are ordered only: robots can still wait for good
+//! at the ends of the parts taken (see [`crate::traffic`]).
 //!
 //! What is released stays: no new order may make a robot wait for a piece it has
 //! already been given (D4). At the end of its route a robot stays, so that pass is

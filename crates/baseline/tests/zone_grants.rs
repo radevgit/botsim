@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use botsim_baseline::zone_grants::{Answer, RobotView, ZoneGrants};
+use botsim_baseline::zone_grants::{RobotView, ZoneGrants};
 use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::jobs::JobGenerator;
@@ -17,6 +17,7 @@ use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
 use botsim_model::waiting::WaitReason;
 use botsim_model::zones::Zones;
+use botsim_server::policy::ZoneAnswer;
 use vda5050::factsheet::Factsheet;
 use vda5050::zone_set::ZoneSet;
 
@@ -78,8 +79,8 @@ fn inside(zone_x: f64, requests: Vec<ZoneRequest>) -> RobotView {
     }
 }
 
-fn answer(robot: usize, id: &str, grant: Grant) -> Answer {
-    Answer {
+fn answer(robot: usize, id: &str, grant: Grant) -> ZoneAnswer {
+    ZoneAnswer {
         robot,
         request_id: RequestId::new(id),
         grant,

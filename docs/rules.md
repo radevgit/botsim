@@ -684,27 +684,28 @@ how the controller uses them. Not enforced by the simulator yet.)
 The bundled controller talks to the robots only with VDA 5050 messages.
 
 **Controller, dispatcher and traffic policy (U9).** The **controller**
-(`botsim_baseline::controller`) carries out tasks: it re-plans routes when asked,
+(`botsim_server::controller`) carries out tasks: it re-plans routes when asked,
 runs lifts and doors, builds and sends the messages and keeps track of each robot's
 work. **Who gets which task** is a `Dispatcher` (`botsim_dispatcher`; the
 baseline's is `BaselineDispatcher`): jobs, charging and parking trips, and the
 routes they start with.
-**Who may go now** is a `TrafficPolicy` (`botsim_baseline::policy`): how far each
+**Who may go now** is a `TrafficPolicy` (`botsim_server::policy`): how far each
 route is released (robot by robot, in the order of the robots, after a `cycle_start`
 with all of them), the wish for another route (with nodes to avoid), what happens
 after the releases (go-first), idle robots, RELEASE zone answers, and who holds a node
 or edge. The controller never releases less than before nor past the window, a lift or
 a door, whatever the policy answers. The rules of this section about reservations,
 swept areas, go-first, the wait timeout and zone answers are the baseline's policy,
-`BaselinePolicy`. **They are frozen (U10):** only bug fixes (wrong behaviour against
-its own rules, panics, collisions caused by a bug); no new rules and no tuning,
-because the baseline is the reference other policies are measured against. The
-library runs a scenario with another policy with `botsim::summary::run_with_policy`
-(it gets the same conflict lists the baseline gets); the command line uses the
-baseline.
+`BaselinePolicy` (`botsim_baseline`). **They are frozen (U10):** only bug fixes
+(wrong behaviour against its own rules, panics, collisions caused by a bug); no new
+rules and no tuning, because the baseline is the reference other policies are
+measured against. The library runs a scenario with another policy with
+`botsim::summary::run_with_policy` (it gets the same conflict lists the baseline
+gets); the command line chooses with `--policy`.
 
-- **Free robot**: no job; it stays where it is (**S31**). Its position is the
-  layout node nearest to its reported position, within 0.1 m.
+- **Free robot**: no job. It stays where it is (**S31**) unless the dispatcher
+  sends it to a charger or a parking place (see below). Its position is the layout
+  node nearest to its reported position, within 0.1 m.
 - **Assignment**: jobs are served first come first served; each job goes to
   the nearest free robot (shortest route length to the pickup; a tie goes to
   the robot added first). A job no free robot can reach waits and does not
@@ -728,7 +729,8 @@ baseline.
   only overlaps of 5 cm or more). The runner reads the scenario's layout and factsheets again,
   takes the pairs that have **no node in common and are near a junction** (merge or
   diverge; parallel conflicts, which are layout faults, are left out) and gives them
-  to the controller (`Controller::set_conflicts`, `botsim_baseline::conflicts`). A
+  to the traffic policy (`TrafficPolicy::conflicts`, the lists of
+  `botsim_server::conflicts`; the baseline's: `BaselinePolicy::set_conflicts`). A
   robot is then released onto an edge (as for the nodes, in order, up to the window)
   only if no other robot **holds** an edge that conflicts with it for that pair of
   types; it waits at the end of its released route as for a held node. The whole
@@ -746,7 +748,7 @@ baseline.
     beside the end of a merge curve, warehouse 4, N908).
   - **Robots standing on a node (S109):** the node-edge conflicts of the map
     (`node_pairs`: a robot standing on a node against an edge that does not touch
-    it, near a junction) are used too (`Controller::set_node_conflicts`). A robot is
+    it, near a junction) are used too (`BaselinePolicy::set_node_conflicts`). A robot is
     not released onto an edge if another robot holds a node that the edge passes too
     close to for those two types, nor if it would end at a node next to an edge
     another robot holds. Holding a node counts as standing on it (a robot released
@@ -758,7 +760,7 @@ baseline.
   - **Two nodes (U16):** the map's node-node pairs (`node_node_pairs`: two
     different nodes too close for a robot on each, standing or turning there; all of
     them, also far from a junction) are used too
-    (`Controller::set_node_node_conflicts`). A robot is not released to a node while
+    (`BaselinePolicy::set_node_node_conflicts`). A robot is not released to a node while
     another robot holds a node too close to it for those two types. Go-first treats
     such a wait like a node-edge one if the other robot only **holds** that node
     (released to it, not there). While a robot **stands** on it (its reported
@@ -803,7 +805,7 @@ baseline.
   controller tries again every cycle. A node the route passes again later
   (e.g. a second lap of a ring) stays reserved while it is still ahead.
   Consequence of "stays where it is" (S31): a robot that has finished a job
-  keeps its node reserved, so it can block others until it gets a new job.
+  keeps its node reserved, so it can block others until it gets a new route.
 - **Lifts** (**S47**): a route with a lift ride (§7g) needs the lift. The
   controller moves the cabin with the lift's command port (§7f); the robot only
   drives and waits.
@@ -901,7 +903,7 @@ baseline.
   its own random stop (the state message does not tell it from a stop by the
   protective field), was gone first past and then drove into the taker (M1, 2
   collisions).
-  `Controller::give_ways()` counts it. **Not done head-on** (X heading
+  `BaselinePolicy::give_ways()` counts it. **Not done head-on** (X heading
   against H): there both would run into each other; that needs a back-off to
   another node (not built). **Lane change / merge (brief update, X-011/O-018):**
   "same way" also holds when X's route after the node is the one H takes after it

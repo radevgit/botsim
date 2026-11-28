@@ -3,13 +3,13 @@
 //! of each other; turning they are not. With the node-node conflict in the table
 //! the second robot waits.
 
-use botsim_baseline::conflicts::{ConflictInput, NodeNodeConflictInput};
 use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_server::conflicts::{ConflictInput, NodeNodeConflictInput};
 use vda5050::factsheet::Factsheet;
 
 mod common;
@@ -59,17 +59,19 @@ fn run(node_node_conflicts: bool) -> (usize, usize) {
     w.set_safety_stop(false);
     let mut ctl = bridge::controller(&w);
     // the table needs a (here empty) edge-edge input for the type
-    ctl.set_conflicts(&[ConflictInput {
+    ctl.policy_mut().set_conflicts(&[ConflictInput {
         type_a: "ACME/X1".into(),
         type_b: "ACME/X1".into(),
         edges: vec![],
     }]);
     if node_node_conflicts {
-        let read = ctl.set_node_node_conflicts(&[NodeNodeConflictInput {
-            type_a: "ACME/X1".into(),
-            type_b: "ACME/X1".into(),
-            pairs: vec![("P".into(), "Q".into())],
-        }]);
+        let read = ctl
+            .policy_mut()
+            .set_node_node_conflicts(&[NodeNodeConflictInput {
+                type_a: "ACME/X1".into(),
+                type_b: "ACME/X1".into(),
+                pairs: vec![("P".into(), "Q".into())],
+            }]);
         assert_eq!(read, 1);
     }
     let job = |id, pickup, drop| Job {

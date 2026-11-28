@@ -1,4 +1,4 @@
-//! The baseline controller's use of doors (S51).
+//! The controller's use of doors (S51).
 //!
 //! A door guards layout edges (see `docs/rules.md` §7h). A robot does not start
 //! such an edge unless the door is fully open, and the door does not close on a

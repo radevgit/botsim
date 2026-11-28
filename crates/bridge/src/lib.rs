@@ -1,5 +1,5 @@
-//! Runs the baseline controller against the simulated world. The controller knows
-//! no simulator ([`botsim_baseline::cycle`]) and the simulator no controller; this
+//! Runs the server's controller against the simulated world. The controller knows
+//! no simulator ([`botsim_server::cycle`]) and the simulator no controller; this
 //! crate passes the data between them:
 //! - [`config`]: the site and the fleet of a world, as the controller is told of
 //!   them (a robot's type comes from its factsheet message, S61);
@@ -30,11 +30,6 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use botsim_baseline::baseline_policy::BaselinePolicy;
-use botsim_baseline::controller::Controller;
-use botsim_baseline::cycle::{Config, FleetRobot, Input, Message, Time, robot_no};
-use botsim_baseline::doors::Door;
-use botsim_baseline::lifts::{Lift, LiftStop};
-use botsim_baseline::policy::TrafficPolicy;
 use botsim_core::lift::{DoorState, LiftSpec, LiftStatus};
 use botsim_core::world::World;
 use botsim_dispatcher::Dispatcher;
@@ -46,6 +41,11 @@ use botsim_link::zone_set::ZoneSet;
 use botsim_model::job::Job;
 use botsim_model::robot::{RobotId, RobotNo};
 use botsim_model::zones::Zones;
+use botsim_server::controller::Controller;
+use botsim_server::cycle::{Config, FleetRobot, Input, Message, Time, robot_no};
+use botsim_server::doors::Door;
+use botsim_server::lifts::{Lift, LiftStop};
+use botsim_server::policy::TrafficPolicy;
 use botsim_vda::report::Issue;
 use botsim_vda::translator::{RobotMessage, Translator};
 
@@ -94,9 +94,10 @@ pub fn with_controller<P: TrafficPolicy>(
     }
 }
 
-/// [`Controller::new`] for the fleet of `world`.
+/// [`botsim_baseline::controller()`], with the baseline's traffic rules, for the
+/// fleet of `world`.
 pub fn controller(world: &World) -> Bridged {
-    with_controller(world, |config| Controller::new(&config))
+    with_controller(world, |config| botsim_baseline::controller(&config))
 }
 
 /// [`Controller::with_policy`] for the fleet of `world`.

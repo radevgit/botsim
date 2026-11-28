@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-use botsim_baseline::cycle::{Message, robot_no};
 use botsim_bridge::report::{Entry, What};
 use botsim_core::actions::ActionTimes;
 use botsim_core::lift::{LiftSpec, LiftStop};
@@ -18,6 +17,7 @@ use botsim_link::zone_set::{Zone, ZoneKind, ZoneSet};
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::zones::Zones;
+use botsim_server::cycle::{Message, robot_no};
 use serde_json::json;
 
 mod setup;

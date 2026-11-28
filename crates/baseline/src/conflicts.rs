@@ -3,48 +3,16 @@
 //! Two edges that cross, merge or run close have no node in common, so the node
 //! and edge reservations do not stop two robots from using them at the same time.
 //! A [`ConflictTable`] lists, per pair of robot types, the pairs of edges whose swept
-//! outlines overlap (made by `botsim-space` from the layout and the factsheets);
-//! the controller releases a robot onto an edge only if no other robot holds an edge
-//! that conflicts with it.
+//! outlines overlap (it is read from [`botsim_server::conflicts`]); the baseline
+//! releases a robot onto an edge only if no other robot holds an edge that conflicts
+//! with it.
 
 use std::collections::HashMap;
 
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_server::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
 
 use crate::reservations::Reservations;
-
-/// The conflicting edge pairs of one pair of robot types, by edge id: the first edge
-/// is driven by a robot of `type_a`, the second by one of `type_b` (types as
-/// `manufacturer/seriesName`). Both orders of two different types are listed by the
-/// checker; a type with itself once. The controller reads each pair both ways.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ConflictInput {
-    pub type_a: String,
-    pub type_b: String,
-    pub edges: Vec<(String, String)>,
-}
-
-/// The node-edge conflicts of one pair of robot types, by id: a robot of `type_node`
-/// standing on a node against an edge (that does not touch the node) driven by a
-/// robot of `type_edge`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NodeConflictInput {
-    pub type_node: String,
-    pub type_edge: String,
-    /// (node id, edge id)
-    pub pairs: Vec<(String, String)>,
-}
-
-/// The node-node conflicts of one pair of robot types, by id: two different nodes
-/// too close for a robot of `type_a` on the first and one of `type_b` on the second,
-/// standing or turning there. The controller reads each pair both ways.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NodeNodeConflictInput {
-    pub type_a: String,
-    pub type_b: String,
-    /// (node id for `type_a`, node id for `type_b`)
-    pub pairs: Vec<(String, String)>,
-}
 
 /// What a robot holds that keeps another one off an edge (node-edge and node-node
 /// conflicts).

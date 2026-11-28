@@ -1,12 +1,12 @@
 # botsim-bridge
 
-Runs the [baseline controller](../baseline/README.md) against the simulated world
-of [botsim-core](../core/README.md). The two do not know each other: the
-controller is given data and gives back messages, and this crate passes them
-between it and the world. The `botsim` command and the tests both use it.
+Runs the controller of the [fleet server](../server/README.md) against the
+simulated world of [botsim-core](../core/README.md). The two do not know each
+other: the controller is given data and gives back messages, and this crate passes
+them between it and the world. The `botsim` command and the tests both use it.
 
 ```text
-bridge::controller(&world)                     the baseline rules for the world's fleet
+bridge::controller(&world)                     the rules of botsim-baseline for the world's fleet
 bridge::with_policy(&world, policy)            with other traffic rules
 bridge::with_dispatcher(&world, policy, d)     and another dispatcher
 bridge::with_controller(&world, make)          a controller made from the config

@@ -15,8 +15,9 @@
 //! ```
 //!
 //! [`TypeRef::from_factsheet`] makes a [`TypeRef`] from a VDA 5050 factsheet.
-//! Used by `botsim-check` (findings), the runner (makes the map for both controllers) and
-//! `botsim-traffic` (which pieces of two routes cannot be used at the same time).
+//! Used by `botsim-check` (findings), the runner (makes the map for the baseline's
+//! rules), `botsim-server` (makes the map for the traffic module) and `botsim-traffic`
+//! (which pieces of two routes cannot be used at the same time).
 
 pub mod conflict;
 pub mod places;

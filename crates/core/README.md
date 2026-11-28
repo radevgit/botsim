@@ -25,7 +25,8 @@ The layout graph (`Graph`), the robot types (`RobotSpec`) and the zones
    `send_instant_actions`, `send_responses` or `send_zone_set`, then `step`.
 4. Read `collisions`, `deadlocks`, `wait_totals` and `snapshot`.
 
-The [baseline controller](../baseline/README.md) is a ready controller, run
+The controller of the [fleet server](../server/README.md), with the
+[baseline's traffic rules](../baseline/README.md), is a ready controller, run
 against a world by [botsim-bridge](../bridge/README.md); the
 [scenario crate](../scenario/README.md) builds a world from a TOML file.
 

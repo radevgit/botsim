@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 
-use botsim_baseline::lifts::LiftDesk;
 use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::lift::{DoorState, LiftSpec, LiftStop};
@@ -13,6 +12,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_server::lifts::LiftDesk;
 use vda5050::factsheet::Factsheet;
 use vdma_lif::Lif;
 

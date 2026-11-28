@@ -5,11 +5,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use botsim_baseline::baseline_policy::BaselinePolicy;
-use botsim_baseline::controller::Controller;
-use botsim_baseline::cycle::{Config, FleetRobot, Input, Message, Output, Time};
-use botsim_baseline::order_builder::Plan;
-use botsim_baseline::policy::{Ask, Fleet, Release, Setup, TrafficPolicy};
-use botsim_baseline::zone_grants::Answer as ZoneAnswer;
 use botsim_dispatcher::baseline::BaselineDispatcher;
 use botsim_dispatcher::{
     Answer, ChargePolicy, Control, Counts, Cycle, Dispatcher, Purpose, Robot, Site, Task, Work,
@@ -18,6 +13,10 @@ use botsim_link::message::{FromRobot, ToRobotBody};
 use botsim_model::errors::ErrorType;
 use botsim_model::graph::{Graph, NodeIdx};
 use botsim_model::job::Job;
+use botsim_server::controller::Controller;
+use botsim_server::cycle::{Config, FleetRobot, Input, Message, Output, Time};
+use botsim_server::order_builder::Plan;
+use botsim_server::policy::{Ask, Fleet, Release, Setup, TrafficPolicy, ZoneAnswer};
 use serde_json::{Value, json};
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
@@ -201,7 +200,7 @@ fn job(id: u64, pickup: NodeIdx, drop: NodeIdx) -> Job {
 
 #[test]
 fn the_controller_runs_a_job_from_states_written_by_hand() {
-    let mut c = Controller::new(&config());
+    let mut c = botsim_baseline::controller(&config());
     let out = cycle(&mut c, 0, &Report::new("", 0, 0, A), [job(1, A, C)]);
     let sent = orders(&out);
     assert_eq!(sent.len(), 1);
@@ -227,7 +226,7 @@ fn the_controller_runs_a_job_from_states_written_by_hand() {
 
 #[test]
 fn without_a_state_of_every_robot_a_cycle_only_takes_the_jobs() {
-    let mut c = Controller::new(&config());
+    let mut c = botsim_baseline::controller(&config());
     let input = Input {
         time: Time {
             tick: 0,
@@ -334,7 +333,7 @@ fn an_accepted_update_makes_a_later_orientation_error_new() {
     // while two updates are on their way the robot reports an orientation error
     // for the last edge; accepting the first of them clears its errors, so the
     // error it reports then is a new one, from the second
-    let mut c = Controller::new(&config());
+    let mut c = botsim_baseline::controller(&config());
     cycle(&mut c, 0, &Report::new("", 0, 0, A), [job(1, A, E)]);
     let orientation = || vec![error("ORIENTATION_UNREACHABLE", "edgeId", "D-E")];
     let report = |update, step, node| {

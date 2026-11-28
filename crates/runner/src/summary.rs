@@ -3,20 +3,21 @@
 //! The summary has no wall-clock times or file paths, so the same scenario
 //! gives byte-identical output on every run and machine.
 //!
-//! With a `[jobs]` section the scenario creates jobs and the bundled baseline
-//! controller runs (see [`botsim_baseline::controller`]); without it the robots
-//! stand still. Metrics: throughput, waiting (avg, max), collisions.
+//! With a `[jobs]` section the scenario creates jobs and the server's controller
+//! runs ([`botsim_server::controller`]), by default with the baseline's traffic
+//! rules (`botsim-baseline`); without it the robots stand still. Metrics:
+//! throughput, waiting (avg, max), collisions.
 //!
 //! Not yet: deadlocks, controller time per step.
 
-use botsim_baseline::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
-use botsim_baseline::policy::TrafficPolicy;
 use botsim_bridge::Bridged;
 use botsim_bridge::report::Untranslated;
 use botsim_core::lift::DoorState;
 use botsim_core::world::World;
 use botsim_dispatcher::ChargePolicy;
 use botsim_model::job::Job;
+use botsim_server::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
+use botsim_server::policy::TrafficPolicy;
 use botsim_space::{MapOptions, TypeRef};
 use serde::Serialize;
 
@@ -353,7 +354,7 @@ pub fn run_with(
 
 /// Like [`run`], with the traffic rules of `policy` instead of the baseline's: the
 /// controller dispatches as usual and asks `policy` who may go now (see
-/// [`botsim_baseline::policy`]). The policy gets the same conflict lists the baseline
+/// [`botsim_server::policy`]). The policy gets the same conflict lists the baseline
 /// gets, computed by the runner (unless the scenario says
 /// `conflict_reservation = false`). Without a `[jobs]` section no controller runs and
 /// the policy is not used. To record the run, attach the observer to `world` first,

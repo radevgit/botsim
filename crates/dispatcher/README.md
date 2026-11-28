@@ -5,12 +5,12 @@ robot drives to a charger or a parking place.
 
 Library only; of the botsim crates it depends on `botsim-model` and
 `botsim-router` only, reads no files and uses no network. It knows no messages, no
-traffic rules and nothing of a simulation. `botsim-baseline` uses it.
+traffic rules and nothing of a simulation. `botsim-server` uses it.
 
 ## The interface
 
 The crate root holds the interface, so that another dispatcher can take the
-bundled one's place (`Controller::with_dispatcher` in `botsim-baseline`).
+bundled one's place (`Controller::with_dispatcher` in `botsim-server`).
 
 | Trait | Implemented by | |
 |---|---|---|

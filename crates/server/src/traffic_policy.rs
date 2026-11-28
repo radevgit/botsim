@@ -1,16 +1,18 @@
-//! `--policy traffic`: the traffic module (`botsim-traffic`) behind the policy slot
-//! of the controller ([`botsim_baseline::policy`]). This adapter only translates:
-//! who may go now is decided by the module.
+//! The traffic module (`botsim-traffic`) behind the server's slot for the traffic
+//! rules ([`crate::policy`]); `botsim --policy traffic` uses it. This adapter only
+//! translates: who may go now is decided by the module.
 //!
-//! **Robots.** The controller numbers them as in the world; the module in the order
-//! it gets them. A robot goes into the module standing on its node, the first time
-//! the controller says it has no job.
+//! **Robots.** The controller numbers them in the order of its fleet; the module in
+//! the order it gets them. A robot goes into the module standing on its node, the
+//! first time the controller says it has no job.
 //!
 //! **Conflicts.** The module orders every conflict of the map, so the adapter
-//! computes the whole map itself and leaves aside the shorter lists the runner makes
-//! for the baseline. With the scenario's safety stop on, a robot also waits for one
-//! its protective field reaches; the map then counts what the field of a standing
-//! robot reaches along an edge, so that the order covers that wait.
+//! computes the whole map itself, from the layout and the robot types it is given,
+//! and leaves aside the lists given to the policy
+//! ([`TrafficPolicy::conflicts`]). A robot whose safety stop is on also waits for
+//! one its protective field reaches; with [`MapOptions::protective_field`] the map
+//! counts what the field of a standing robot reaches along an edge, so that the
+//! order covers that wait.
 //!
 //! **Progress.** The controller's calls carry no order id. When a robot gets a
 //! route, its state still names the order before; such states are not about the new
@@ -32,26 +34,15 @@
 //! `edge_holder`) and the reservations for a watcher.
 
 use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
 
-use botsim_baseline::order_builder::Plan;
-use botsim_baseline::policy::{Ask, Fleet, Release, Reroute, Setup, TrafficPolicy};
-use botsim_baseline::zone_grants::Answer;
 use botsim_link::ids::OrderId;
 use botsim_model::graph::NodeIdx;
 use botsim_space::{MapOptions, TypeRef};
 use botsim_traffic::{NotAdded, Piece, Report, Route, Spots, Traffic};
+use vdma_lif::Lif;
 
-use crate::scenario::Scenario;
-
-/// What the module's conflict map counts for a scenario.
-fn map_options(scenario: &Scenario) -> MapOptions {
-    MapOptions {
-        clearance: scenario.conflict_clearance,
-        protective_field: scenario.safety_stop,
-        ..MapOptions::default()
-    }
-}
+use crate::order_builder::Plan;
+use crate::policy::{Ask, Fleet, Release, Reroute, Setup, TrafficPolicy, ZoneAnswer};
 
 /// The traffic module as a traffic policy.
 #[derive(Debug)]
@@ -84,31 +75,23 @@ struct Robot {
 }
 
 impl TrafficAdapter {
-    /// For a scenario read from `scenario_file`: reads its layout and factsheets
-    /// again and computes the conflict map of the fleet.
-    pub fn new(scenario: &Scenario, scenario_file: &Path) -> Result<TrafficAdapter, String> {
-        let base = scenario_file.parent().unwrap_or(Path::new("."));
-        let read = |path: &Path| {
-            let path = base.join(path);
-            std::fs::read_to_string(&path)
-                .map_err(|e| format!("cannot read {}: {e}", path.display()))
-        };
-        let lif: vdma_lif::Lif = serde_json::from_str(&read(&scenario.lif)?)
-            .map_err(|e| format!("{}: {e}", scenario.lif.display()))?;
-        let mut types: Vec<TypeRef> = Vec::new();
-        for group in &scenario.robots {
-            let file = group.factsheet.display();
-            let factsheet: vda5050::factsheet::Factsheet =
-                serde_json::from_str(&read(&group.factsheet)?)
-                    .map_err(|e| format!("{file}: {e}"))?;
-            let t = TypeRef::from_factsheet(&factsheet).map_err(|e| format!("{file}: {e}"))?;
-            if !types.iter().any(|x| x.name == t.name) {
-                types.push(t);
+    /// For the layout `lif` and the robot types of the fleet: computes their
+    /// conflict map as `options` says. Of several types of one name the first
+    /// counts. The error says why no map can be made.
+    pub fn new(
+        lif: &Lif,
+        types: &[TypeRef],
+        options: &MapOptions,
+    ) -> Result<TrafficAdapter, String> {
+        let mut named: Vec<TypeRef> = Vec::new();
+        for t in types {
+            if !named.iter().any(|x| x.name == t.name) {
+                named.push(t.clone());
             }
         }
-        let map = botsim_space::compute(&lif, &types, &map_options(scenario))
+        let map = botsim_space::compute(lif, &named, options)
             .ok_or("no conflict map: the layout cannot be turned into a graph")?;
-        let spots = Spots::new(&lif, &map).map_err(|e| e.to_string())?;
+        let spots = Spots::new(lif, &map).map_err(|e| e.to_string())?;
         Ok(TrafficAdapter {
             traffic: Traffic::new(spots),
             nodes: Vec::new(),
@@ -296,7 +279,7 @@ impl TrafficPolicy for TrafficAdapter {
         }
     }
 
-    fn zone_answers(&mut self, _fleet: &Fleet) -> Vec<Answer> {
+    fn zone_answers(&mut self, _fleet: &Fleet) -> Vec<ZoneAnswer> {
         Vec::new()
     }
 
@@ -314,23 +297,5 @@ impl TrafficPolicy for TrafficAdapter {
         self.robots
             .iter()
             .position(|r| r.as_ref().is_some_and(|r| r.number == other))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_map_counts_the_protective_field_only_with_the_safety_stop() {
-        let text = include_str!("../../../scenarios/m1_short.toml");
-        let mut scenario = Scenario::from_toml(text).expect("scenario");
-        assert!(scenario.safety_stop, "on unless a scenario says otherwise");
-        for safety_stop in [true, false] {
-            scenario.safety_stop = safety_stop;
-            let options = map_options(&scenario);
-            assert_eq!(options.protective_field, safety_stop);
-            assert_eq!(options.clearance, scenario.conflict_clearance);
-        }
     }
 }

@@ -1,5 +1,6 @@
 //! Decides the passing order of robots at every shared spot, from their full routes,
-//! so that they cannot collide or deadlock.
+//! so that they do not collide, under the conditions listed in the README; deadlocks
+//! are not ruled out.
 //!
 //! The module never plans paths and never talks to a robot. Built so far: the
 //! [spots], RELEASE zones among them, the [groups](mod@groups) of conflicts that

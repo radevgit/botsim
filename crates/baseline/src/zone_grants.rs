@@ -20,6 +20,7 @@ use botsim_link::ids::RequestId;
 use botsim_link::response::Grant;
 use botsim_link::state::{ZoneRequest, ZoneRequestType};
 use botsim_model::zones::Zones;
+use botsim_server::policy::ZoneAnswer;
 
 /// What the controller knows of one robot (from its state report).
 #[derive(Debug, Clone)]
@@ -27,14 +28,6 @@ pub struct RobotView {
     pub requests: Vec<ZoneRequest>,
     /// Map index and position, if the robot reported one.
     pub position: Option<(usize, f64, f64)>,
-}
-
-/// One answer to send.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Answer {
-    pub robot: usize,
-    pub request_id: RequestId,
-    pub grant: Grant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,7 +81,7 @@ impl ZoneGrants {
     }
 
     /// Look at all robots and return the answers to send now.
-    pub fn decide(&mut self, robots: &[RobotView]) -> Vec<Answer> {
+    pub fn decide(&mut self, robots: &[RobotView]) -> Vec<ZoneAnswer> {
         // the live ACCESS requests: (robot, request id, zone index)
         let mut live: Vec<Entry> = Vec::new();
         for (i, r) in robots.iter().enumerate() {
@@ -148,7 +141,7 @@ impl ZoneGrants {
                     .iter()
                     .any(|(r, zs)| *r != e.robot && zs.contains(&e.zone));
             if free {
-                answers.push(Answer {
+                answers.push(ZoneAnswer {
                     robot: e.robot,
                     request_id: e.request.clone(),
                     grant: Grant::Granted,
@@ -171,7 +164,7 @@ impl ZoneGrants {
                         .map(|r| (e.robot, r)),
                 );
                 if self.told_queued.insert((e.robot, e.request.clone())) {
-                    answers.push(Answer {
+                    answers.push(ZoneAnswer {
                         robot: e.robot,
                         request_id: e.request.clone(),
                         grant: Grant::Queued,

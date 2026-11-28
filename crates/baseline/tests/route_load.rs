@@ -88,7 +88,7 @@ fn lanes_used(weight: f64) -> [[bool; 2]; 2] {
         };
         bridge::step(&mut ctl, &mut w, new);
         w.step();
-        let r = ctl.reservations();
+        let r = ctl.policy().table();
         for (lane, node) in [u, l].into_iter().enumerate() {
             if let Some(h) = r.node_holder(node) {
                 used[h][lane] = true;

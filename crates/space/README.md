@@ -2,9 +2,9 @@
 
 Space on a layout: swept robot bodies along LIF edges and the **conflict map** of a layout
 for a mixed fleet. Library only; it knows nothing about findings or scenario files. Used by
-`botsim-check` (findings), the runner `botsim` (makes the map for the baseline controller
-and for traffic) and `botsim-traffic` (which pieces of two routes cannot be used at the same
-time).
+`botsim-check` (findings), the runner `botsim` (makes the map for the baseline's rules),
+`botsim-server` (makes the map for the traffic module) and `botsim-traffic` (which pieces of
+two routes cannot be used at the same time).
 
 ```rust
 use botsim_space::{MapOptions, TypeRef, compute};

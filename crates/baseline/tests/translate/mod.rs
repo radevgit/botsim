@@ -3,10 +3,10 @@
 
 use std::sync::Arc;
 
-use botsim_baseline::cycle::robot_no;
 use botsim_link::message::ToRobot;
 use botsim_model::graph::Graph;
 use botsim_model::robot::RobotId;
+use botsim_server::cycle::robot_no;
 use botsim_vda::translator::{RobotMessage, Translator};
 use vda5050::order::Order;
 

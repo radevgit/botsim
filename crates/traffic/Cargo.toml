@@ -1,6 +1,6 @@
 [package]
 name = "botsim-traffic"
-description = "Passing order for mixed VDA 5050 robot fleets, free of collisions and deadlocks"
+description = "Passing order at shared places for mixed VDA 5050 robot fleets"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

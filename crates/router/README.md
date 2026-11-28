@@ -3,7 +3,7 @@
 Route finding on a layout graph, for the fleet server.
 
 Library only; of the botsim crates it depends on `botsim-model` only, reads no
-files and uses no network. `botsim-dispatcher` and `botsim-baseline` use it.
+files and uses no network. `botsim-dispatcher` and `botsim-server` use it.
 
 - Layout nodes and edges are the numbers of the layout graph. What a search needs
   besides the graph (the edges a robot type may drive, costs, turn rules, rides,

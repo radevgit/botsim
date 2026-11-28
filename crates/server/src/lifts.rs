@@ -1,4 +1,4 @@
-//! The baseline controller's use of lifts (S47).
+//! The controller's use of lifts (S47).
 //!
 //! A job whose route has a **ride** (a layout edge between two stops of one
 //! lift, see `docs/rules.md` §7g) needs the lift. The controller handles it

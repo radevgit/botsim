@@ -1,6 +1,5 @@
 //! The fast paths added for scale (S52) must give the answers of the slow ones.
 
-use botsim_baseline::node_grid::NodeGrid;
 use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::jobs::Rng;
@@ -9,6 +8,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_server::node_grid::NodeGrid;
 use vda5050::factsheet::Factsheet;
 
 mod common;

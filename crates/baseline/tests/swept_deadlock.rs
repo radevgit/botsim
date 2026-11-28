@@ -2,7 +2,6 @@
 //! on, and B waits because its next edge passes too close to the node A stands on
 //! (M1, a station siding: nobody holds the node B wants).
 
-use botsim_baseline::conflicts::{ConflictInput, NodeConflictInput};
 use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::waiting::Wait;
@@ -11,6 +10,7 @@ use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
 use botsim_model::waiting::WaitReason;
+use botsim_server::conflicts::{ConflictInput, NodeConflictInput};
 use vda5050::factsheet::Factsheet;
 
 mod common;
@@ -40,12 +40,12 @@ fn a_cycle_through_a_node_edge_wait_is_reported_as_a_deadlock() {
     w.add_robot(b.clone(), spec, times, s, -up / 2.0).unwrap();
     w.set_deadlock_timeout(10.0);
     let mut ctl = bridge::controller(&w);
-    ctl.set_conflicts(&[ConflictInput {
+    ctl.policy_mut().set_conflicts(&[ConflictInput {
         type_a: "ACME/X1".into(),
         type_b: "ACME/X1".into(),
         edges: vec![],
     }]);
-    let read = ctl.set_node_conflicts(&[NodeConflictInput {
+    let read = ctl.policy_mut().set_node_conflicts(&[NodeConflictInput {
         type_node: "ACME/X1".into(),
         type_edge: "ACME/X1".into(),
         pairs: vec![("X".into(), "S-Y".into())],
@@ -64,7 +64,7 @@ fn a_cycle_through_a_node_edge_wait_is_reported_as_a_deadlock() {
         w.step();
     }
     assert!(ctl.completed().is_empty(), "both are stuck");
-    assert_eq!(ctl.reservations().node_holder(y), None, "nobody holds Y");
+    assert_eq!(ctl.policy().table().node_holder(y), None, "nobody holds Y");
     // both are release waits, each naming the other (B's for the swept area)
     let release = |blocker| {
         Some(Wait {

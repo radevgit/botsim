@@ -10,7 +10,7 @@
 //!
 //! Going ahead needs the other robot not yet released into those pieces and the
 //! new robot not ending on them. If a group can go neither way, the route is not
-//! taken: the dispatcher shall find another one (D9). The orders between the other
+//! taken: the controller shall find another one (D9). The orders between the other
 //! robots stay as they are. A new robot whose route is not taken stays all the
 //! same, standing on its first node, and the others wait for it there.
 //!
@@ -126,7 +126,7 @@ pub enum NotAdded {
         why: Box<NotAdded>,
         /// The robots that are released into a piece conflicting with that node
         /// and have not left it, lowest number first. The module cannot hold
-        /// them back: the dispatcher shall cancel them.
+        /// them back: the controller shall cancel them.
         released_there: Vec<usize>,
     },
 }
@@ -2459,7 +2459,7 @@ mod tests {
         assert!(before(&t, 2, 0, 1, 2));
         assert_eq!(t.reroute_needed(1).map(|r| r.avoid), Some(vec![node("X")]));
 
-        // the dispatcher cancels a, which stops before X
+        // the controller cancels a, which stops before X
         let stopped = Cancel {
             finished: true,
             nothing_left: true,

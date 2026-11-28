@@ -11,13 +11,12 @@ use std::rc::Rc;
 
 use botsim::scenario::Scenario;
 use botsim::summary::{self, Summary};
-use botsim_baseline::order_builder::Plan;
-use botsim_baseline::policy::{Ask, Fleet, Release, Setup, TrafficPolicy};
-use botsim_baseline::zone_grants::Answer;
 use botsim_link::ids::{RequestId, ZoneId};
 use botsim_link::response::Grant;
 use botsim_link::state::ZoneRequestType;
 use botsim_model::graph::NodeIdx;
+use botsim_server::order_builder::Plan;
+use botsim_server::policy::{Ask, Fleet, Release, Setup, TrafficPolicy, ZoneAnswer};
 
 /// What the policy was asked, seen by the test after the run.
 #[derive(Debug, Default)]
@@ -111,7 +110,7 @@ impl TrafficPolicy for OneAtATime {
         self.held.entry(node).or_insert(robot);
     }
 
-    fn zone_answers(&mut self, fleet: &Fleet) -> Vec<Answer> {
+    fn zone_answers(&mut self, fleet: &Fleet) -> Vec<ZoneAnswer> {
         let stated: Vec<(usize, RequestId, ZoneId)> = fleet
             .states
             .iter()
@@ -144,7 +143,7 @@ impl TrafficPolicy for OneAtATime {
             }
             let r = self.queue.remove(k);
             self.seen.borrow_mut().grants += 1;
-            answers.push(Answer {
+            answers.push(ZoneAnswer {
                 robot: r.0,
                 request_id: r.1.clone(),
                 grant: Grant::Granted,

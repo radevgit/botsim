@@ -3,7 +3,6 @@
 //! new order (a door too narrow), a refused update (a curve a car-like robot cannot
 //! drive, S70) and `ORIENTATION_UNREACHABLE`, which names no order.
 
-use botsim_baseline::controller::NODE_TOLERANCE;
 use botsim_bridge as bridge;
 use botsim_bridge::Bridged as Controller;
 use botsim_core::actions::ActionTimes;
@@ -14,6 +13,7 @@ use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::{Kinematics, RobotSpec};
+use botsim_server::controller::NODE_TOLERANCE;
 use vda5050::factsheet::Factsheet;
 use vdma_lif::Lif;
 
@@ -175,7 +175,7 @@ fn a_refused_new_order_is_given_up_in_the_cycle_the_state_shows_it() {
         assert_eq!((c.busy(), c.completed().len()), (0, 0), "delay {delay}");
         // the node the order had reserved is free again
         let n1 = w.graph().node_idx("N1").unwrap();
-        assert_eq!(c.reservations().node_holder(n1), None, "delay {delay}");
+        assert_eq!(c.policy().table().node_holder(n1), None, "delay {delay}");
         // the next order is refused too, and noticed too
         let second = job(&w, 2, "N0", "N1");
         until_rejected(&mut w, &mut c, second, 100);
@@ -244,7 +244,7 @@ fn a_refused_update_is_cancelled_and_given_up_once_the_robot_has_stopped() {
 fn mistaken(w: &World) -> Controller {
     bridge::with_controller(w, |mut config| {
         config.robots[0].kinematics = Kinematics::Omnidirectional;
-        botsim_baseline::controller::Controller::new(&config)
+        botsim_baseline::controller(&config)
     })
 }
 

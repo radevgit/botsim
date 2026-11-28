@@ -4,9 +4,10 @@ Who may go now, in a mixed fleet of VDA 5050 robots on a LIF layout: the module 
 passing order at every place that two robots cannot use at the same time, and releases
 each robot's route node by node according to it.
 
-It **never plans paths** and never talks to a robot. Routes come from a dispatcher; the
-dispatcher sends what is released and, when asked, looks for another way. The crate depends
-only on [`botsim-space`](../space/README.md) and `vdma-lif`, not on the simulator.
+It **never plans paths** and never talks to a robot. Routes come from the caller (in botsim
+the controller, first routes from the dispatcher); the controller sends what is released and,
+when asked, looks for another way. The crate depends only on
+[`botsim-space`](../space/README.md) and `vdma-lif`, not on the simulator.
 
 ## What it decides
 
@@ -86,8 +87,9 @@ conflict's group by hand.
 cargo run --release -p botsim -- --policy traffic scenarios/mixed_fleet.toml
 ```
 
-The adapter is [`runner/src/traffic_policy.rs`](../runner/src/traffic_policy.rs). It builds
-the conflict map of the whole fleet with the scenario's `conflict_clearance`. With the
+The adapter is [`server/src/traffic_policy.rs`](../server/src/traffic_policy.rs), behind the
+slot of the [fleet server](../server/README.md) for the traffic rules. It builds the conflict
+map of the whole fleet; `botsim` gives it the scenario's `conflict_clearance`. With the
 scenario's safety stop on, the map also counts what the protective field of a standing robot
 reaches along an edge (`MapOptions::protective_field`), so that the order covers the wait of
 a robot stopped by its field. `--timing` cannot be used with this policy.
@@ -97,7 +99,7 @@ a robot stopped by its field. `--timing` cannot be used with this policy.
 - **Deadlocks remain.** In botsim's M1 measurement (12 robots, 90 runs of two hours, at
   commit `dd988c4` with the safety field in the map) there were 19 deadlocks, and in 13 runs
   the whole fleet stopped. No collision. Against a ring the module can only ask for another
-  way; the dispatcher may have none, and botsim's gives none to a job with a lift or a door.
+  way; the controller may have none, and botsim's gives none to a job with a lift or a door.
 - **The way out is not kept free.** A robot that waits next to a station with one way in and
   out can keep the robot there from ever leaving.
 - **Two robots already standing in conflicting places** (the same node, one zone) get no new
@@ -109,7 +111,7 @@ a robot stopped by its field. `--timing` cannot be used with this policy.
   - RELEASE zones are not given to the module and zone requests are not answered: a scenario
     with such zones stalls (`ring_jobs`: no job done, 29 of 35 without its zones).
   - Refused or cancelled orders are not passed on.
-  - The dispatcher can only be told nodes to keep clear of; its holder queries and the
+  - The controller can only be told nodes to keep clear of; its holder queries and the
     reservations for a viewer are not answered.
 
 ## Tests

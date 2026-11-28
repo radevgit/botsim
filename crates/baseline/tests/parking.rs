@@ -181,7 +181,7 @@ fn a_pickup_at_the_last_released_node_is_not_added_to_the_order() {
     run(&mut w, &mut ctl, 2.0);
     // released: A, B and P
     let p = w.graph().node_idx("P").unwrap();
-    assert_eq!(ctl.reservations().node_holder(p), Some(0));
+    assert_eq!(ctl.policy().table().node_holder(p), Some(0));
 
     let j = job(&w, "P", "D");
     bridge::step(&mut ctl, &mut w, [j]);
@@ -202,10 +202,10 @@ fn a_parked_robot_holds_only_its_place_so_others_can_pass() {
     // the way it came, A → B → P, is free again; B is on the ring
     let node = |n: &str| w.graph().node_idx(n).unwrap();
     let (a, b, p) = (node("A"), node("B"), node("P"));
-    assert_eq!(ctl.reservations().node_holder(a), None);
-    assert_eq!(ctl.reservations().node_holder(b), None);
-    assert_eq!(ctl.reservations().node_holder(p), Some(0));
-    assert_eq!(ctl.reservations().held_by(0), (1, 0), "one node, no edge");
+    assert_eq!(ctl.policy().table().node_holder(a), None);
+    assert_eq!(ctl.policy().table().node_holder(b), None);
+    assert_eq!(ctl.policy().table().node_holder(p), Some(0));
+    assert_eq!(ctl.policy().table().held_by(0), (1, 0), "one node, no edge");
 }
 
 #[test]

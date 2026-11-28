@@ -4,7 +4,7 @@
 //! stderr with exit code 1; a wrong command line gives exit code 2.
 //!
 //! `--policy` says who decides which robot may go: the bundled baseline rules (the
-//! default) or the traffic module (see `botsim::traffic_policy`). `--timing`
+//! default) or the traffic module (see `botsim::traffic_setup`). `--timing`
 //! cannot be used with `traffic` yet.
 //!
 //! `--timing` adds the real time the controller took per step (it differs from
@@ -25,7 +25,7 @@ use std::process::ExitCode;
 
 use botsim::scenario::Scenario;
 use botsim::summary;
-use botsim::traffic_policy::TrafficAdapter;
+use botsim::traffic_setup;
 use botsim_record::{GeometryFile, LayoutLine, LayoutRobot, Recorder};
 
 const USAGE: &str = "usage: botsim [--policy baseline|traffic] [--timing] \
@@ -185,7 +185,7 @@ fn run(options: &Options) -> Result<String, String> {
     let result = match options.policy {
         Policy::Baseline => summary::run_with(&scenario, world, options.timing),
         Policy::Traffic => {
-            let adapter = TrafficAdapter::new(&scenario, path)?;
+            let adapter = traffic_setup::adapter(&scenario, path)?;
             summary::run_with_policy(&scenario, world, Box::new(adapter))
         }
     }

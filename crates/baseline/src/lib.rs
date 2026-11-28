@@ -1,18 +1,23 @@
-//! The bundled baseline controller: nearest free robot, first come first
-//! served, node-by-node release (see the brief). It knows no simulator: it is
-//! given the site and, cycle by cycle, the reports of the robots and lifts as
-//! data, and gives back the messages to send (see [`cycle`]), all of them
-//! [`botsim_link`]'s.
+//! The baseline's traffic rules for the botsim fleet server: first come, first
+//! served, node-by-node release (see [`baseline_policy`]). They are the first
+//! rules behind the server's slot ([`botsim_server::policy`]) and the reference
+//! other rules are measured against.
+//!
+//! The control loop that asks them is [`botsim_server::controller`];
+//! [`controller()`] makes one with these rules.
 
 pub mod baseline_policy;
 pub mod conflicts;
-pub mod controller;
-pub mod cycle;
-pub mod doors;
-pub mod lifts;
-pub mod metrics;
-pub mod node_grid;
-pub mod order_builder;
-pub mod policy;
 pub mod reservations;
 pub mod zone_grants;
+
+use botsim_server::controller::Controller;
+use botsim_server::cycle::Config;
+
+use crate::baseline_policy::BaselinePolicy;
+
+/// A controller for the fleet of `config` with the baseline's traffic rules and
+/// dispatcher.
+pub fn controller(config: &Config) -> Controller<BaselinePolicy> {
+    Controller::with_policy(config, BaselinePolicy::new(&config.graph))
+}

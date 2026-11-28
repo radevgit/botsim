@@ -6,9 +6,8 @@ use std::rc::Rc;
 
 use botsim::scenario::Scenario;
 use botsim::summary;
-use botsim_baseline::conflicts::NodeNodeConflictInput;
-use botsim_baseline::policy::{Ask, Fleet, Release, Setup, TrafficPolicy};
-use botsim_baseline::zone_grants::Answer;
+use botsim_server::conflicts::NodeNodeConflictInput;
+use botsim_server::policy::{Ask, Fleet, Release, Setup, TrafficPolicy, ZoneAnswer};
 
 /// A policy that keeps what it is given and lets no robot go.
 #[derive(Debug, Default)]
@@ -34,7 +33,7 @@ impl TrafficPolicy for Listen {
         }
     }
 
-    fn zone_answers(&mut self, _fleet: &Fleet) -> Vec<Answer> {
+    fn zone_answers(&mut self, _fleet: &Fleet) -> Vec<ZoneAnswer> {
         Vec::new()
     }
 }

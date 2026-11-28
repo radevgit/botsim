@@ -104,7 +104,7 @@ fn a_robot_holds_its_node_and_a_job_moves_the_reservations_along() {
 
     run(&mut w, &mut c, vec![], 1);
     assert_eq!(
-        c.reservations().node_holder(n0),
+        c.policy().table().node_holder(n0),
         Some(0),
         "idle robot holds its node"
     );
@@ -112,10 +112,10 @@ fn a_robot_holds_its_node_and_a_job_moves_the_reservations_along() {
     run(&mut w, &mut c, vec![j], 6000);
     assert_eq!(c.completed().len(), 1);
     // done: it holds only the node it stands on
-    assert_eq!(c.reservations().held_by(0), (1, 0));
-    assert_eq!(c.reservations().node_holder(n2), Some(0));
-    assert_eq!(c.reservations().node_holder(n0), None);
-    assert_eq!(c.reservations().node_holder(n1), None);
+    assert_eq!(c.policy().table().held_by(0), (1, 0));
+    assert_eq!(c.policy().table().node_holder(n2), Some(0));
+    assert_eq!(c.policy().table().node_holder(n0), None);
+    assert_eq!(c.policy().table().node_holder(n1), None);
 }
 
 #[test]

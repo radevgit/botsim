@@ -91,7 +91,7 @@ fn second_robot_takes_the_lower_lane(wait_weight: f64) -> bool {
         // (only in the 8 s after the job starts: after 10 s of waiting the re-route
         // takes the lower lane in any case)
         if (1200..1360).contains(&tick) {
-            took_l |= ctl.reservations().node_holder(l) == Some(1);
+            took_l |= ctl.policy().table().node_holder(l) == Some(1);
         }
     }
     took_l

@@ -1,8 +1,9 @@
 # botsim
 
-Headless simulator for mixed robot fleets: robots execute VDA 5050 orders on a
-LIF layout, and a controller is measured on throughput, waiting, deadlocks and
-collisions. Work in progress.
+Simulator for mixed robot fleets with dispatching and traffic control (VDA 5050)
+
+It runs headless: robots execute orders on a LIF layout, and the controller is
+measured on throughput, waiting, deadlocks and collisions. Work in progress.
 
 [![botsim warehouse simulation](https://img.youtube.com/vi/wbVRCgwhrG8/maxresdefault.jpg)](https://www.youtube.com/watch?v=wbVRCgwhrG8)
 
@@ -20,7 +21,9 @@ botsim/
 │   ├── scenario/      scenario file (TOML): loading, building the world
 │   ├── router/        route search on the layout graph
 │   ├── dispatcher/    jobs to robots, charging and parking trips
-│   ├── baseline/      bundled baseline fleet controller
+│   ├── server/        fleet server: control loop, slot for the traffic rules,
+│   │                  traffic adapter
+│   ├── baseline/      first come, first served traffic rules, kept as reference
 │   ├── bridge/        runs the controller against the simulated world
 │   ├── traffic/       passing order at shared spots (--policy traffic)
 │   ├── space/         swept robot outlines and the conflict map

@@ -27,15 +27,17 @@ use botsim_model::reservation::Reservation;
 use botsim_model::safety::LATERAL_MARGIN;
 use botsim_model::spec::Shape;
 
-use crate::conflicts::{
-    ConflictInput, ConflictTable, Held, NodeConflictInput, NodeNodeConflictInput,
+use botsim_server::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
+use botsim_server::controller::NODE_TOLERANCE;
+use botsim_server::node_grid::NodeGrid;
+use botsim_server::order_builder::Plan;
+use botsim_server::policy::{
+    Ask, Fleet, PolicyRobot, Release, Reroute, RouteView, Setup, TrafficPolicy, ZoneAnswer,
 };
-use crate::controller::NODE_TOLERANCE;
-use crate::node_grid::NodeGrid;
-use crate::order_builder::Plan;
-use crate::policy::{Ask, Fleet, PolicyRobot, Release, Reroute, RouteView, Setup, TrafficPolicy};
+
+use crate::conflicts::{ConflictTable, Held};
 use crate::reservations::Reservations;
-use crate::zone_grants::{Answer, RobotView, ZoneGrants};
+use crate::zone_grants::{RobotView, ZoneGrants};
 
 /// A robot that has been held at the end of its released route this long by
 /// other robots gets a new route around them (S53, my choice: well before the
@@ -641,7 +643,7 @@ impl TrafficPolicy for BaselinePolicy {
     }
 
     /// Answer the RELEASE zone requests the robots state (see [`crate::zone_grants`]).
-    fn zone_answers(&mut self, fleet: &Fleet) -> Vec<Answer> {
+    fn zone_answers(&mut self, fleet: &Fleet) -> Vec<ZoneAnswer> {
         let Some(grants) = self.zone_grants.as_mut() else {
             return Vec::new();
         };
@@ -908,11 +910,11 @@ mod test_graph;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cycle::robot_no;
     use botsim_link::ids::OrderId;
     use botsim_link::message::{FromRobot, Header, Millis};
     use botsim_link::state::{EmergencyStop, LastNode, OperatingMode, Position, Route, Velocity};
     use botsim_model::robot::RobotId;
+    use botsim_server::cycle::robot_no;
 
     /// A state of a standing robot; the release rule does not look into it here.
     fn standing() -> State {

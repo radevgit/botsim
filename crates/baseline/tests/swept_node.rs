@@ -2,13 +2,13 @@
 //! edge that does not touch the node; a second robot drives the edge and meets the
 //! first. With the node-edge conflict in the table the second robot waits.
 
-use botsim_baseline::conflicts::{ConflictInput, NodeConflictInput};
 use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_server::conflicts::{ConflictInput, NodeConflictInput};
 use vda5050::factsheet::Factsheet;
 
 mod common;
@@ -49,7 +49,7 @@ fn run(node_conflicts: bool) -> (usize, usize) {
     let mut ctl = bridge::controller(&w);
     // the table needs a (here empty) edge-edge input for the type
     assert_eq!(
-        ctl.set_conflicts(&[ConflictInput {
+        ctl.policy_mut().set_conflicts(&[ConflictInput {
             type_a: "ACME/X1".into(),
             type_b: "ACME/X1".into(),
             edges: vec![],
@@ -57,7 +57,7 @@ fn run(node_conflicts: bool) -> (usize, usize) {
         0
     );
     if node_conflicts {
-        let read = ctl.set_node_conflicts(&[NodeConflictInput {
+        let read = ctl.policy_mut().set_node_conflicts(&[NodeConflictInput {
             type_node: "ACME/X1".into(),
             type_edge: "ACME/X1".into(),
             pairs: vec![("S".into(), "C-D".into())],

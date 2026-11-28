@@ -1,0 +1,27 @@
+[package]
+name = "botsim-server"
+description = "The botsim fleet server: control loop, the slot for the traffic rules and the traffic module behind it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors = ["radevgit"]
+
+[dependencies]
+botsim-dispatcher = { path = "../dispatcher" }
+botsim-link = { path = "../link" }
+botsim-model = { path = "../model" }
+botsim-router = { path = "../router" }
+botsim-space = { path = "../space" }
+botsim-traffic = { path = "../traffic" }
+# (the factsheets of the setup)
+vda5050 = "0.1.0"
+# (the layout the traffic adapter is made from)
+vdma-lif = "0.1.0"
+
+[dev-dependencies]
+botsim-core = { path = "../core" }
+# (the tests translate between VDA 5050 and the controller's messages)
+botsim-vda = { path = "../vda" }
+serde_json = "1.0.154"

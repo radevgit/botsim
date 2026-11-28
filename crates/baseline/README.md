@@ -1,70 +1,26 @@
 # botsim-baseline
 
-The bundled fleet controller. It talks to the robots, doors and lifts only through
-the messages of [botsim-link](../link/README.md), which for robots have the meaning
-of VDA 5050; real VDA 5050 messages come from the translator,
-[botsim-vda](../vda/README.md). It is a simple reference that other traffic rules
-are measured against, and is kept as it is: only bugs are fixed.
-
-It knows no simulator: it is given data and gives back messages.
+First come, first served traffic rules for the [fleet
+server](../server/README.md): the first rules behind its slot. They are a simple
+reference that other traffic rules are measured against, and are kept as they are:
+only bugs are fixed.
 
 ## Using it
 
 ```text
-Controller::new(&config)               the baseline rules for a site and fleet
-controller.step(&input, new_jobs)      one cycle; returns the messages to send
-controller.completed(), rejected(), pending(), metrics(seconds)
+botsim_baseline::controller(&config)    a controller with these rules for a site and fleet
+BaselinePolicy::new(&graph)             the rules alone, for Controller::with_dispatcher
 ```
 
-`config` (`cycle::Config`) holds the layout, the robots with their identity and
-type from their factsheets (`FleetRobot::from_factsheet`), the zones and the zone
-set to send for them, the lifts and the doors. Robots, lifts and doors are named
-in the messages by their places in these lists; the order of the robots also
-decides ties.
+How the controller is run is told in [botsim-server](../server/README.md).
 
-`input` (`cycle::Input`) holds the time, every robot's state report, in the fleet's
-order, and the states of the lifts (who is in them). The result (`cycle::Output`)
-holds the messages to robots, doors and lifts in the order to send them, why each
-robot is held back, and the reservations if somebody watches.
-
-To run it against the simulator use [botsim-bridge](../bridge/README.md).
-
-A refusal of an order shows only in the robot's state; see the
-[rules](../../docs/rules.md), §1a.
-
-Optional: `set_charging`, `set_load_weight`, `set_wait_weight`, and the conflict
-lists of the layout (`set_conflicts`, then `set_node_conflicts` and
+Optional: the conflict lists of the layout
+(`controller.policy_mut().set_conflicts(..)`, then `set_node_conflicts` and
 `set_node_node_conflicts`), which the [runner](../runner/README.md) makes with
-[botsim-space](../space/README.md).
-
-## Parts
-
-- The **controller** (`controller`) carries out the tasks: it builds the
-  messages, releases routes, finds another route when asked (with
-  [botsim-router](../router/README.md)), runs lifts and doors and keeps track of
-  each robot's work.
-- The **dispatcher** says which robot gets which job, and which one drives to a
-  charger or a parking place. It is the trait `Dispatcher` of
-  [botsim-dispatcher](../dispatcher/README.md), which also holds the baseline's.
-  Another one can replace it:
-  `Controller::with_dispatcher(&config, policy, dispatcher)`.
-- The **traffic policy** says who may go now: how far each route is released,
-  and the answers to zone requests. It is the trait `policy::TrafficPolicy`.
-  Another policy can replace the baseline's:
-  `Controller::with_policy(&config, policy)`. A policy must implement `start`,
-  `place`, `release` and `zone_answers`.
+[botsim-space](../space/README.md). `policy().table()` says who holds which node
+and edge, `policy().give_ways()` how often a robot went first.
 
 ## The rules
-
-Jobs and routes:
-
-- The oldest job first, to the nearest robot (by route length) that is free or
-  on its way to a parking place.
-- Shortest route over the edges the robot type may use; optionally longer ways
-  round busy places.
-- A free robot with a low battery goes to a free charger.
-- An idle robot goes to a free station of type `parking`, if the layout has one.
-- One robot at a time uses a lift or a door.
 
 Traffic:
 
@@ -77,6 +33,17 @@ Traffic:
   its way (and further conditions hold).
 - A robot blocked for 10 s asks for another route.
 - A RELEASE zone is granted to one robot at a time, first come first served.
+
+Jobs and routes are not these rules' business: the server's controller and its
+dispatcher (the baseline's unless another is given) do them.
+
+- The oldest job first, to the nearest robot (by route length) that is free or
+  on its way to a parking place.
+- Shortest route over the edges the robot type may use; optionally longer ways
+  round busy places.
+- A free robot with a low battery goes to a free charger.
+- An idle robot goes to a free station of type `parking`, if the layout has one.
+- One robot at a time uses a lift or a door.
 
 ## What it does not do
 

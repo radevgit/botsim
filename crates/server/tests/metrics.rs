@@ -1,6 +1,6 @@
 //! The figures of the jobs done.
 
-use botsim_baseline::metrics::summarize;
+use botsim_server::metrics::summarize;
 
 #[test]
 fn summarize_gives_throughput_average_and_maximum() {

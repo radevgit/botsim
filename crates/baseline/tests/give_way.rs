@@ -169,12 +169,12 @@ fn a_robot_heading_across_the_curve_of_a_stopped_robot_goes_first() {
         "{} {} gw={} dl={:?} {:?}",
         at("O"),
         at("X"),
-        c.give_ways(),
+        c.policy().give_ways(),
         w.deadlocks(),
         c.rejected()
     );
     assert_eq!(c.completed().len(), 2, "{dbg}");
-    assert!(c.give_ways() >= 1, "nobody gave way");
+    assert!(c.policy().give_ways() >= 1, "nobody gave way");
     assert!(w.deadlocks().is_empty(), "{:?}", w.deadlocks());
     assert!(w.collisions().is_empty());
 }
@@ -183,7 +183,7 @@ fn a_robot_heading_across_the_curve_of_a_stopped_robot_goes_first() {
 fn the_robot_in_front_goes_first_and_both_jobs_are_done() {
     let (w, c) = run(200.0);
     assert_eq!(c.completed().len(), 2, "{:?}", c.rejected());
-    assert!(c.give_ways() >= 1, "nobody gave way");
+    assert!(c.policy().give_ways() >= 1, "nobody gave way");
     assert!(w.deadlocks().is_empty(), "{:?}", w.deadlocks());
     assert!(w.collisions().is_empty());
 }
