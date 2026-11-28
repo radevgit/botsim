@@ -1,7 +1,7 @@
 //! The fast paths added for scale (S52) must give the answers of the slow ones.
 
-use botsim_baseline::controller::Controller;
 use botsim_baseline::node_grid::NodeGrid;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::jobs::Rng;
 use botsim_core::world::World;
@@ -132,10 +132,10 @@ fn a_job_that_cannot_be_done_waits_and_does_not_hold_up_the_others() {
     let n1 = w.graph().node_idx("N1").unwrap();
     w.add_robot(RobotId::new("ACME", "R-2"), spec, times, n1, 0.0)
         .unwrap();
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(jobs);
     for _ in 0..6000 {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     let done: Vec<u64> = c.completed().iter().map(|d| d.job.id).collect();

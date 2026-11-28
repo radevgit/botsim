@@ -116,21 +116,25 @@ pub struct Task {
     /// The edges to drive, one after the other.
     pub edges: Vec<EdgeIdx>,
     /// [`Purpose::Job`]: the first `pickup_at` edges lead to the pickup, the rest
-    /// from there to the drop. Not used for a trip.
+    /// from there to the drop. The route must fit the [`job`](Task::job): its
+    /// pickup node after those edges, its drop node at the end. Not used for a
+    /// trip.
     pub pickup_at: usize,
 }
 
 /// What became of a task given to the controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answer {
-    /// The robot has it (or its order is on the way to it).
+    /// The order is on its way to the robot. If the robot refuses it, the
+    /// dispatcher hears of it later ([`Dispatcher::given_up`]).
     Taken,
-    /// The robot refused it. The task is gone: the controller notes a refused job
-    /// and gives it to nobody else.
+    /// The controller could not send it. The task is gone: the controller notes a
+    /// refused job and gives it to nobody else.
     Refused,
     /// The controller cannot do what was asked (an unknown robot, one that cannot
-    /// take the task, or a route that does not start at the right node or does not
-    /// connect). Nothing has happened.
+    /// take the task, a route that does not start at the right node or does not
+    /// connect, a job that does not fit its route, or an addition to a trip whose
+    /// pickup is the node it starts at). Nothing has happened.
     Invalid,
 }
 
@@ -171,7 +175,8 @@ pub struct Counts {
 /// - The calls are serial: one at a time, from the one thread that dispatches.
 /// - A task is carried out before [`give`](Control::give) or
 ///   [`extend`](Control::extend) returns: the message is sent, and the traffic
-///   rules, lifts and doors know of it (a refused new order gives back its claims).
+///   rules, lifts and doors know of it (an order that cannot be sent gives back its
+///   claims).
 ///   So the next [`node_holder`](Control::node_holder) and
 ///   [`route_cost`](Control::route_cost) see the effect.
 /// - The [`Robot`] list is **not** updated during a dispatch: the dispatcher itself
@@ -191,8 +196,10 @@ pub trait Control {
     fn give(&mut self, robot: usize, task: Task) -> Answer;
 
     /// Give a job to a robot on its way to a parking place ([`Work::Parking`]):
-    /// `task` starts at the trip's last released node and has [`Purpose::Job`]. The
-    /// released part of the trip stays in front of it.
+    /// `task` starts at the trip's last released node, has [`Purpose::Job`] and its
+    /// pickup beyond that node ([`Task::pickup_at`] at least 1: a robot does not
+    /// run the actions of the node an update starts at). The released part of the
+    /// trip stays in front of it.
     fn extend(&mut self, robot: usize, task: Task) -> Answer;
 
     /// A robot without a task is to start charging where it stands; `trip` is the

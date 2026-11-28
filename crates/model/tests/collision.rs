@@ -1,6 +1,6 @@
 use std::f64::consts::FRAC_PI_2;
 
-use botsim_core::collision::{overlap, place};
+use botsim_model::collision::{overlap, place};
 use botsim_model::spec::Shape;
 
 const RECT: Shape = Shape::Rect {

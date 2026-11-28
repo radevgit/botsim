@@ -1,8 +1,9 @@
 //! The robot's `factsheet` message (S61).
 
 use botsim_core::actions::ActionTimes;
-use botsim_core::world::{PROTOCOL_VERSION, World};
+use botsim_core::world::World;
 use botsim_model::graph::Graph;
+use botsim_model::protocol::PROTOCOL_VERSION;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
 use botsim_model::time::unix_ms_from_utc;

@@ -8,15 +8,14 @@ The same inputs and seed give the same run.
 
 ## Main types
 
-The layout graph (`Graph`) and the robot types (`RobotSpec`) are in
-[botsim-model](../model/README.md).
+The layout graph (`Graph`), the robot types (`RobotSpec`) and the zones
+(`Zones`) are in [botsim-model](../model/README.md).
 
 | Type | |
 |---|---|
 | `world::World` | the world: add robots, doors and lifts, send them messages, step, read states and results |
 | `jobs::JobGenerator` | seeded random transport jobs (pickup node, drop node) |
 | `observer::Observer` | a read-only view of the run, e.g. for a recording or a viewer |
-| `metrics` | throughput and waiting from the jobs a controller reports as done |
 
 ## Using it
 
@@ -26,7 +25,8 @@ The layout graph (`Graph`) and the robot types (`RobotSpec`) are in
    `send_instant_actions`, `send_responses` or `send_zone_set`, then `step`.
 4. Read `collisions`, `deadlocks`, `wait_totals` and `snapshot`.
 
-The [baseline controller](../baseline/README.md) is a ready controller; the
+The [baseline controller](../baseline/README.md) is a ready controller, run
+against a world by [botsim-bridge](../bridge/README.md); the
 [scenario crate](../scenario/README.md) builds a world from a TOML file.
 
 ## What it simulates

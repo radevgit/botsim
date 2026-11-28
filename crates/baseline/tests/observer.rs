@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::observer::{Blocking, Observer, Snapshot};
 use botsim_core::world::World;
@@ -66,10 +66,10 @@ fn head_on(ticks: u64) -> Vec<Snapshot> {
     }
     let log = Rc::new(RefCell::new(Vec::new()));
     w.set_observer(Box::new(Recorder(log.clone())));
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(jobs);
     for _ in 0..ticks {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     log.take()

@@ -1,15 +1,17 @@
 //! The baseline controller uses doors (S51).
 
 use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::door::DoorSpec;
 use botsim_core::lift::DoorState;
-use botsim_core::waiting::{Wait, WaitReason};
+use botsim_core::waiting::Wait;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::waiting::WaitReason;
 use vda5050::factsheet::Factsheet;
 
 mod common;
@@ -84,7 +86,7 @@ fn run(w: &mut World, c: &mut Controller, jobs: Vec<Job>, ticks: u64) -> usize {
     let mut jobs = Some(jobs);
     let mut on_edge = 0;
     for _ in 0..ticks {
-        c.step(w, jobs.take().unwrap_or_default());
+        bridge::step(c, w, jobs.take().unwrap_or_default());
         w.step();
         for n in 1..=2 {
             let x = w.pose(&id(n)).map(|p| p.x);
@@ -109,7 +111,7 @@ fn run(w: &mut World, c: &mut Controller, jobs: Vec<Job>, ticks: u64) -> usize {
 fn a_robot_goes_through_a_door_for_a_job_and_the_door_is_closed_afterwards() {
     let g = chain();
     let mut w = world(&["N0"], None);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let on_edge = run(&mut w, &mut c, vec![job(&g, 1, "N0", "N5")], 5000);
     assert_eq!(c.completed().len(), 1);
     assert!(on_edge > 0, "the robot drove through the door edge");
@@ -127,7 +129,7 @@ fn the_robot_waits_for_the_door_and_the_job_takes_that_long() {
     let g = chain();
     let done = |open: f64| {
         let mut w = world_with(&["N0"], None, open);
-        let mut c = Controller::new(&w);
+        let mut c = bridge::controller(&w);
         run_no_check(&mut w, &mut c, vec![job(&g, 1, "N0", "N5")], 6000);
         c.completed()[0].finished_tick
     };
@@ -141,7 +143,7 @@ fn the_robot_waits_for_the_door_and_the_job_takes_that_long() {
 fn run_no_check(w: &mut World, c: &mut Controller, jobs: Vec<Job>, ticks: u64) {
     let mut jobs = Some(jobs);
     for _ in 0..ticks {
-        c.step(w, jobs.take().unwrap_or_default());
+        bridge::step(c, w, jobs.take().unwrap_or_default());
         w.step();
     }
 }
@@ -152,7 +154,7 @@ fn two_robots_take_turns_at_the_door() {
     // not need the same node at the end)
     let g = chain();
     let mut w = world(&["N0", "N1"], None);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let jobs = vec![job(&g, 1, "N1", "N5"), job(&g, 2, "N0", "N4")];
     let on_edge = run(&mut w, &mut c, jobs, 12000);
     assert_eq!(c.completed().len(), 2, "{:?}", c.rejected());
@@ -167,7 +169,7 @@ fn a_robot_wider_than_the_door_has_its_job_refused() {
     // the robot is 0.8 m wide
     let g = chain();
     let mut w = world(&["N0"], Some(0.7));
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     run_no_check(&mut w, &mut c, vec![job(&g, 1, "N0", "N5")], 200);
     assert_eq!(c.rejected().len(), 1);
     assert!(c.completed().is_empty());
@@ -175,7 +177,7 @@ fn a_robot_wider_than_the_door_has_its_job_refused() {
 
     // a job that does not use the door is fine
     let mut w = world(&["N0"], Some(0.7));
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     run_no_check(&mut w, &mut c, vec![job(&g, 1, "N0", "N2")], 3000);
     assert_eq!(c.completed().len(), 1);
 }
@@ -187,21 +189,21 @@ fn with_delayed_messages_a_refused_job_is_given_up_when_the_state_shows_the_refu
     let g = chain();
     let mut w = world(&["N0"], Some(0.7));
     w.set_message_delay(10);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(vec![job(&g, 1, "N0", "N5")]);
-    c.step(&mut w, jobs.take().unwrap());
+    bridge::step(&mut c, &mut w, jobs.take().unwrap());
     assert_eq!(c.busy(), 1, "the controller cannot know yet");
     for _ in 0..40 {
         w.step();
-        c.step(&mut w, vec![]);
+        bridge::step(&mut c, &mut w, vec![]);
     }
     assert_eq!(c.rejected().len(), 1);
     assert_eq!(c.busy(), 0);
     // what had been reserved for the job is free again: the next job goes through
-    c.step(&mut w, vec![job(&g, 2, "N0", "N2")]);
+    bridge::step(&mut c, &mut w, vec![job(&g, 2, "N0", "N2")]);
     for _ in 0..4000 {
         w.step();
-        c.step(&mut w, vec![]);
+        bridge::step(&mut c, &mut w, vec![]);
     }
     assert_eq!(c.completed().len(), 1);
     assert_eq!(c.rejected().len(), 1);
@@ -213,7 +215,7 @@ fn a_door_works_with_delayed_messages() {
     let g = chain();
     let mut w = world(&["N0", "N1"], None);
     w.set_message_delay(10);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let jobs = vec![job(&g, 1, "N1", "N5"), job(&g, 2, "N0", "N4")];
     let on_edge = run(&mut w, &mut c, jobs, 15000);
     assert_eq!(c.completed().len(), 2, "{:?}", c.rejected());
@@ -227,7 +229,7 @@ fn the_same_run_gives_the_same_result() {
     let run_once = || {
         let g = chain();
         let mut w = world(&["N0", "N1"], None);
-        let mut c = Controller::new(&w);
+        let mut c = bridge::controller(&w);
         let jobs = vec![job(&g, 1, "N1", "N5"), job(&g, 2, "N0", "N4")];
         run_no_check(&mut w, &mut c, jobs, 12000);
         c.completed()
@@ -279,7 +281,7 @@ fn robots_going_opposite_ways_through_a_door_in_a_one_lane_corridor_do_not_pass(
         let times = ActionTimes::new(1.0).with("pick", 5.0).with("drop", 5.0);
         w.add_robot(id(i + 1), spec.clone(), times, n, 0.0).unwrap();
     }
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     run_no_check(&mut w, &mut c, jobs, 20000);
     assert!(c.completed().len() < 2, "{} done", c.completed().len());
     assert!(w.collisions().is_empty());
@@ -317,7 +319,7 @@ fn a_robot_that_waits_for_a_door_names_its_owner() {
         let times = ActionTimes::new(1.0).with("pick", 1.0).with("drop", 1.0);
         w.add_robot(id(i + 1), spec.clone(), times, n, 0.0).unwrap();
     }
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(jobs);
     let for_the_door = Wait {
         reason: WaitReason::Door,
@@ -325,7 +327,7 @@ fn a_robot_that_waits_for_a_door_names_its_owner() {
     };
     let mut named_the_owner = false;
     for _ in 0..4000 {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
         named_the_owner |= w.waits().get(1) == Some(&Some(for_the_door));
     }

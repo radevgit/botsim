@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 
-use botsim_baseline::controller::Controller;
 use botsim_baseline::lifts::LiftDesk;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::lift::{DoorState, LiftSpec, LiftStop};
 use botsim_core::world::World;
@@ -98,12 +98,12 @@ fn map_of(w: &World, n: usize) -> String {
 #[test]
 fn a_robot_rides_the_lift_for_a_job_and_the_lift_is_let_go_afterwards() {
     let mut w = world(&["N1"], true);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let jobs = vec![job(&graph(), 1, "N1", "N101")];
     let mut jobs = Some(jobs);
     let mut rode = false;
     for _ in 0..8000 {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
         rode |= w.lift_rider("L1").unwrap() == Some(&id(1));
     }
@@ -121,10 +121,10 @@ fn a_robot_rides_the_lift_for_a_job_and_the_lift_is_let_go_afterwards() {
 fn a_robot_that_starts_on_the_entrance_rides_too() {
     // job from N2 (the stop) to N101: the ride is the first edge
     let mut w = world(&["N2"], true);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(vec![job(&graph(), 1, "N2", "N101")]);
     for _ in 0..8000 {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     assert_eq!(c.completed().len(), 1);
@@ -137,17 +137,17 @@ fn the_second_robot_waits_before_the_entrance_until_the_lift_is_free() {
     // N1 → N102) is one node before it
     let g = graph();
     let mut w = world(&["N2", "N1"], true);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(vec![job(&g, 1, "N2", "N101"), job(&g, 2, "N1", "N102")]);
 
     let mut seen_waiting = false;
     let mut named_the_owner = false;
     let for_the_lift = botsim_core::waiting::Wait {
-        reason: botsim_core::waiting::WaitReason::Lift,
+        reason: botsim_model::waiting::WaitReason::Lift,
         blocker: Some(0),
     };
     for _ in 0..16000 {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
         named_the_owner |= w.waits().get(1) == Some(&Some(for_the_lift));
         // while R-1 is in the cabin, R-2 stands on N1 (x = 0), not on the entrance
@@ -173,10 +173,10 @@ fn a_job_that_comes_back_down_uses_the_lift_twice() {
     // after N2, so the drop is the entrance N2)
     let g = graph();
     let mut w = world(&["N1"], true);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(vec![job(&g, 1, "N101", "N2")]);
     for _ in 0..16000 {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     assert_eq!(c.completed().len(), 1, "{:?}", c.rejected());
@@ -192,10 +192,10 @@ fn a_lift_ride_works_with_delayed_messages() {
     let g = graph();
     let mut w = world(&["N1"], true);
     w.set_message_delay(10);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(vec![job(&g, 1, "N1", "N101")]);
     for _ in 0..12000 {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     assert_eq!(c.completed().len(), 1, "{:?}", c.rejected());
@@ -208,10 +208,10 @@ fn a_lift_ride_works_with_delayed_messages() {
 fn a_job_that_needs_a_lift_without_stops_is_refused_by_the_robot() {
     let g = graph();
     let mut w = world(&["N1"], false);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(vec![job(&g, 1, "N1", "N101")]);
     for _ in 0..200 {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     assert_eq!(c.rejected().len(), 1);
@@ -224,11 +224,11 @@ fn the_same_run_gives_the_same_result() {
     let run = || {
         let g = graph();
         let mut w = world(&["N2", "N1"], true);
-        let mut c = Controller::new(&w);
+        let mut c = bridge::controller(&w);
         let mut jobs = Some(vec![job(&g, 1, "N2", "N101"), job(&g, 2, "N1", "N102")]);
         let mut done = Vec::new();
         for _ in 0..16000 {
-            c.step(&mut w, jobs.take().unwrap_or_default());
+            bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
             w.step();
         }
         for d in c.completed() {
@@ -308,7 +308,8 @@ fn the_lift_desk_knows_the_waiting_node_of_every_ride() {
     let e = |s: &str| g.edge_idx(s).unwrap();
 
     for (waiting, up, down) in [(true, Some(n("GW")), Some(n("UW"))), (false, None, None)] {
-        let desk = LiftDesk::new(&two_way_world(waiting));
+        let w = two_way_world(waiting);
+        let desk = LiftDesk::new(w.graph(), &bridge::config(&w).lifts);
         assert_eq!(
             desk.waiting_nodes(),
             &HashMap::from([(e("G2-U2"), up), (e("U2-G2"), down)])
@@ -321,10 +322,10 @@ fn the_lift_desk_knows_the_waiting_node_of_every_ride() {
 fn opposite_jobs(waiting: bool) -> (usize, usize, usize) {
     let g = two_way();
     let mut w = two_way_world(waiting);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(vec![job(&g, 1, "G0", "U0"), job(&g, 2, "U0", "G0")]);
     for _ in 0..20000 {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     (

@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use botsim_baseline::baseline_policy::BaselinePolicy;
-use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_dispatcher::{
@@ -54,10 +54,12 @@ fn edge(g: &Graph, a: NodeIdx, b: NodeIdx) -> EdgeIdx {
 
 fn task(purpose: Purpose, from: NodeIdx, edges: Vec<EdgeIdx>, pickup_at: usize) -> Task {
     Task {
+        // the job that fits a route along the line from `from`: each edge leads to
+        // the next node
         job: Job {
             id: 7,
-            pickup: from,
-            drop: from,
+            pickup: from + pickup_at,
+            drop: from + edges.len(),
             created_tick: 0,
         },
         purpose,
@@ -164,7 +166,7 @@ fn another_dispatcher_can_ask_the_impossible_without_effect() {
         cycle: 0,
     };
     let policy = BaselinePolicy::new(w.graph());
-    let mut ctl = Controller::with_dispatcher(&w, policy, Box::new(script));
+    let mut ctl = bridge::with_dispatcher(&w, policy, Box::new(script));
 
     let new_job = Job {
         id: 1,
@@ -172,10 +174,10 @@ fn another_dispatcher_can_ask_the_impossible_without_effect() {
         drop: B,
         created_tick: 0,
     };
-    ctl.step(&mut w, [new_job]);
+    bridge::step(&mut ctl, &mut w, [new_job]);
     for _ in 0..(60.0 / DT) as usize {
         w.step();
-        ctl.step(&mut w, []);
+        bridge::step(&mut ctl, &mut w, []);
     }
 
     let log = log.borrow();

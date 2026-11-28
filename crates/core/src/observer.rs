@@ -21,6 +21,7 @@ use crate::drive::Pose;
 use crate::lift::LiftStatus;
 use crate::waiting::Wait;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::reservation::Reservation;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::Shape;
 
@@ -113,15 +114,6 @@ pub struct RobotSnapshot {
     /// others" metric counts it (see [`crate::waiting`]): `None` for a robot that
     /// does not wait, or that is in its own stop (a random stop, an empty battery).
     pub waiting: Option<Wait>,
-}
-
-/// The nodes and edges a controller has reserved for a robot.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reservation {
-    /// Index of the robot in [`Snapshot::robots`].
-    pub robot: usize,
-    pub nodes: Vec<NodeIdx>,
-    pub edges: Vec<EdgeIdx>,
 }
 
 /// One robot waits for another.

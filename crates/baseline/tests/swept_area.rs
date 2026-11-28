@@ -3,7 +3,7 @@
 //! the crossing. With the edge pair in the conflict table the second robot waits.
 
 use botsim_baseline::conflicts::ConflictInput;
-use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::job::Job;
@@ -53,7 +53,7 @@ fn run(conflicts: bool) -> (usize, usize) {
     )
     .unwrap();
     w.set_safety_stop(false);
-    let mut ctl = Controller::new(&w);
+    let mut ctl = bridge::controller(&w);
     if conflicts {
         let read = ctl.set_conflicts(&[ConflictInput {
             type_a: "ACME/X1".into(),
@@ -78,7 +78,7 @@ fn run(conflicts: bool) -> (usize, usize) {
     ];
     let mut jobs = Some(jobs);
     for _ in 0..(60.0 / DT) as usize {
-        ctl.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut ctl, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     (ctl.completed().len(), w.collisions().len())

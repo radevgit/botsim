@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/model", "crates/link", "crates/vda", "crates/core", "crates/scenario", "crates/router", "crates/dispatcher", "crates/baseline", "crates/runner", "crates/record", "crates/export", "crates/viewer", "crates/check", "crates/space", "crates/traffic"]
+members = ["crates/model", "crates/link", "crates/vda", "crates/core", "crates/scenario", "crates/router", "crates/dispatcher", "crates/baseline", "crates/bridge", "crates/runner", "crates/record", "crates/export", "crates/viewer", "crates/check", "crates/space", "crates/traffic"]
 
 [workspace.package]
 version = "0.2.0"
@@ -8,3 +8,18 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/radevgit/botsim"
+
+# Faster tests: the botsim crates and the geometry crates the simulator runs are
+# optimised; the other outside crates are built as without this. Debug assertions
+# and overflow checks stay on.
+[profile.test]
+opt-level = 1
+
+[profile.test.package."*"]
+opt-level = 0
+
+[profile.test.package.togo]
+opt-level = 1
+
+[profile.test.package.aabb]
+opt-level = 1

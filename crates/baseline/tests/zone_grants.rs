@@ -1,18 +1,19 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use botsim_baseline::controller::Controller;
 use botsim_baseline::zone_grants::{Answer, RobotView, ZoneGrants};
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::jobs::JobGenerator;
 use botsim_core::observer::{Observer, Snapshot};
-use botsim_core::waiting::{Wait, WaitReason};
+use botsim_core::waiting::Wait;
 use botsim_core::world::World;
-use botsim_core::zones::Zones;
 use botsim_model::graph::Graph;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::waiting::WaitReason;
+use botsim_model::zones::Zones;
 use vda5050::factsheet::Factsheet;
 use vda5050::responses::GrantType::{Granted, Queued};
 use vda5050::state::{RequestStatus, ZoneRequest, ZoneRequestType};
@@ -254,11 +255,11 @@ fn busy_ring_with(zones_on: bool, by_message: bool, delay: u64) -> (usize, Vec<S
     let log = Rc::new(RefCell::new(Vec::new()));
     // every step: a robot may wait for the zone for only a few steps
     w.set_observer(Box::new(Recorder(log.clone())));
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut gen_ = JobGenerator::new(5, &nodes, 240.0, DT).unwrap();
     for t in 0..24_000u64 {
         let new: Vec<Job> = gen_.step(t).into_iter().collect();
-        c.step(&mut w, new);
+        bridge::step(&mut c, &mut w, new);
         w.step();
     }
     let snaps = log.take();
@@ -312,7 +313,7 @@ fn in_a_run_zone_waits_are_named_with_their_blocker() {
         w.add_robot(id, spec.clone(), ActionTimes::new(1.0), n, 0.0)
             .unwrap();
     }
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     // R-1 is to drive from N0 through zone b to N2
     let mut jobs = Some(vec![Job {
         id: 1,
@@ -321,7 +322,7 @@ fn in_a_run_zone_waits_are_named_with_their_blocker() {
         created_tick: 0,
     }]);
     for _ in 0..(60.0 / DT) as usize {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     assert!(c.completed().is_empty(), "R-2 never leaves the zone");
@@ -430,10 +431,10 @@ fn robots_get_no_jobs_before_their_zone_set_is_enabled() {
             0.0,
         )
         .unwrap();
-        let mut c = Controller::new(&w);
+        let mut c = bridge::controller(&w);
         let mut jobs = Some(vec![job]);
         for _ in 0..400 {
-            c.step(&mut w, jobs.take().unwrap_or_default());
+            bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
             w.step();
             if c.busy() == 1 {
                 // the robot's own copy of the zone set is enabled by now

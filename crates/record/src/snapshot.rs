@@ -2,9 +2,11 @@
 
 use botsim_core::door::DoorStatus;
 use botsim_core::lift::{Call, DoorState, LiftStatus};
-use botsim_core::observer::{Blocking, Reservation, RobotSnapshot, RobotStatus, Snapshot};
-use botsim_core::waiting::{Wait, WaitReason};
+use botsim_core::observer::{Blocking, RobotSnapshot, RobotStatus, Snapshot};
+use botsim_core::waiting::Wait;
+use botsim_model::reservation::Reservation;
 use botsim_model::spec::Shape;
+use botsim_model::waiting::WaitReason;
 use serde::{Deserialize, Serialize};
 
 /// The world after one step. Robots are referred to by their position in
@@ -65,7 +67,7 @@ pub struct WaitRecord {
     pub reason: WaitReasonRecord,
 }
 
-/// Same variants as `botsim_core::waiting::WaitReason`.
+/// Same variants as `botsim_model::waiting::WaitReason`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WaitReasonRecord {
     Release,

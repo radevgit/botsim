@@ -1,7 +1,7 @@
 //! The baseline controller with a curved edge (S69): orders do not change, the
 //! robot follows the curve, and drives through where the curves join.
 
-use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
@@ -63,11 +63,11 @@ fn run(pass_through: bool) -> (u64, f64) {
     )
     .unwrap();
     w.set_pass_through(pass_through);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(vec![job]);
     let mut lowest = f64::MAX;
     for _ in 0..6000 {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
         let p = w.pose(&id).unwrap();
         if (p.x - 5.0).abs() < 1e-6 && (4.0..6.0).contains(&p.y)

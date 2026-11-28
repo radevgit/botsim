@@ -5,6 +5,7 @@
 //! the node over and goes first.
 
 use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
@@ -83,10 +84,10 @@ fn run(seconds: f64) -> (World, Controller) {
             created_tick: 0,
         },
     ];
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(jobs);
     for _ in 0..(seconds / DT) as usize {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     (w, c)
@@ -155,9 +156,9 @@ fn a_robot_heading_across_the_curve_of_a_stopped_robot_goes_first() {
         created_tick: 0,
     };
     let mut jobs = Some(vec![job(1, s, r), job(2, p, t)]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     for _ in 0..(200.0 / DT) as usize {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     let at = |name: &str| {

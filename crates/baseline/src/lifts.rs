@@ -2,8 +2,8 @@
 //!
 //! A job whose route has a **ride** (a layout edge between two stops of one
 //! lift, see `docs/rules.md` §7g) needs the lift. The controller handles it
-//! with the lift's own command port ([`World::call_lift_door`],
-//! [`World::release_lift`]); the robot only drives and waits.
+//! with messages to the lift ([`Message::CallLift`], [`Message::ReleaseLift`]);
+//! the robot only drives and waits.
 //!
 //! **One robot uses a lift at a time** (it "owns" it), first come first served:
 //! - **Where a robot waits** (design rule §7d: outside the approach to the
@@ -36,11 +36,33 @@
 
 use std::collections::HashMap;
 
-use botsim_core::world::World;
-use botsim_model::graph::{EdgeIdx, NodeIdx};
+use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::robot::RobotId;
 
+use crate::cycle::Message;
 use crate::order_builder::Plan;
+
+/// A lift, as the controller is told of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lift {
+    pub id: String,
+    /// The names of the cabin's doors.
+    pub doors: Vec<String>,
+    /// Where robots get in and out. A layout edge between two stops on different
+    /// maps is a ride.
+    pub stops: Vec<LiftStop>,
+}
+
+/// A place where robots get into or out of a lift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiftStop {
+    /// The layout node at the cabin entrance.
+    pub node: NodeIdx,
+    /// Index into [`Lift::doors`]: the door that opens here.
+    pub door: usize,
+    /// A waiting node (lay-by) for robots that wait for the lift (S49).
+    pub waiting: Option<NodeIdx>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -102,24 +124,23 @@ pub struct LiftDesk {
 }
 
 impl LiftDesk {
-    /// The lifts of `world` and the rides between their stops.
-    pub fn new(world: &World) -> LiftDesk {
-        let graph = world.graph();
-        let lifts: Vec<LiftInfo> = world
-            .lift_specs()
-            .into_iter()
-            .map(|s| LiftInfo {
-                id: s.id.clone(),
-                stops: s
-                    .stops
-                    .iter()
-                    .map(|st| Stop {
-                        node: st.node,
-                        map_id: graph.maps[graph.nodes[st.node].map].clone(),
-                        door_id: s.doors[st.door].clone(),
-                        waiting: st.waiting,
-                    })
-                    .collect(),
+    /// The lifts of the site and the rides between their stops on the layout
+    /// `graph`. A stop at a node the layout does not have, or with a door the lift
+    /// does not have, is left out.
+    pub fn new(graph: &Graph, lifts: &[Lift]) -> LiftDesk {
+        let stop = |lift: &Lift, st: &LiftStop| {
+            Some(Stop {
+                node: st.node,
+                map_id: graph.maps.get(graph.nodes.get(st.node)?.map)?.clone(),
+                door_id: lift.doors.get(st.door)?.clone(),
+                waiting: st.waiting,
+            })
+        };
+        let lifts: Vec<LiftInfo> = lifts
+            .iter()
+            .map(|l| LiftInfo {
+                id: l.id.clone(),
+                stops: l.stops.iter().filter_map(|st| stop(l, st)).collect(),
             })
             .collect();
         let mut rides = HashMap::new();
@@ -236,15 +257,21 @@ impl LiftDesk {
     }
 
     /// One control cycle: call, release and send the cabins of the lifts that
-    /// have an owner.
-    pub fn update(&mut self, world: &mut World, robots: &[LiftRobot]) {
+    /// have an owner. `riders` names, lift by lift, the robot in each cabin as
+    /// far as the lift says; the commands to the lifts go to `out`.
+    pub fn update(
+        &mut self,
+        riders: &[Option<RobotId>],
+        robots: &[LiftRobot],
+        out: &mut Vec<Message>,
+    ) {
         for l in 0..self.owners.len() {
             let Some(mut o) = self.owners[l].clone() else {
                 continue;
             };
             let info = &self.lifts[l];
-            // (a ride is between two stops of its lift, which the controller found in
-            // the layout; if not, the owner lets go)
+            // (a ride is between two stops of its lift, which the desk found in the
+            // layout; if not, the owner lets go)
             let ride = self
                 .rides
                 .get(&o.edge)
@@ -254,31 +281,33 @@ impl LiftDesk {
                 continue;
             };
             let r = robots[o.robot];
-            // (the lift, map and door are the ones found in the world)
-            let call = |world: &mut World, s: &Stop| {
-                let _ = world.call_lift_door(&info.id, &s.map_id, &s.door_id);
+            let call = |s: &Stop| Message::CallLift {
+                lift: info.id.clone(),
+                map: s.map_id.clone(),
+                door: s.door_id.clone(),
             };
+            let release = || Message::ReleaseLift(info.id.clone());
 
             let Some(at) = r.at else {
                 // the job is over: the door is let go and the lift is free
-                let _ = world.release_lift(&info.id);
+                out.push(release());
                 self.owners[l] = None;
                 continue;
             };
             if o.stage == Stage::Calling {
-                if world.lift_rider(&info.id).ok().flatten() == Some(r.id) {
-                    let _ = world.release_lift(&info.id);
-                    call(world, stop_b);
+                if riders.get(l).and_then(Option::as_ref) == Some(r.id) {
+                    out.push(release());
+                    out.push(call(stop_b));
                     o.stage = Stage::Riding;
                 } else {
-                    call(world, stop_a);
+                    out.push(call(stop_a));
                 }
             }
             if o.stage == Stage::Riding && at > o.ride {
                 o.stage = Stage::Exiting;
             }
             if o.stage == Stage::Exiting && r.node != Some(b) {
-                let _ = world.release_lift(&info.id);
+                out.push(release());
                 self.owners[l] = None;
                 continue;
             }

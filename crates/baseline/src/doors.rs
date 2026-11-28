@@ -3,7 +3,7 @@
 //! A door guards layout edges (see `docs/rules.md` §7h). A robot does not start
 //! such an edge unless the door is fully open, and the door does not close on a
 //! robot that is on the edge. The controller opens and releases the door with
-//! the door's own command port ([`World::open_door`], [`World::release_door`]).
+//! messages to it ([`Message::OpenDoor`], [`Message::ReleaseDoor`]).
 //!
 //! **One robot uses a door at a time** (it "owns" it), first come first served:
 //! - A robot asks for the door when its release window would include a guarded
@@ -27,10 +27,18 @@
 
 use std::collections::HashMap;
 
-use botsim_core::world::World;
 use botsim_model::graph::EdgeIdx;
 
+use crate::cycle::Message;
 use crate::order_builder::Plan;
+
+/// A door, as the controller is told of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Door {
+    pub id: String,
+    /// The layout edges that lead through the door.
+    pub edges: Vec<EdgeIdx>,
+}
 
 /// The robot that owns a door.
 #[derive(Debug, Clone)]
@@ -49,18 +57,17 @@ pub struct DoorDesk {
 }
 
 impl DoorDesk {
-    /// The doors of `world`.
-    pub fn new(world: &World) -> DoorDesk {
-        let specs = world.door_specs();
+    /// The doors of the site.
+    pub fn new(doors: &[Door]) -> DoorDesk {
         let mut door_of = HashMap::new();
-        for (d, s) in specs.iter().enumerate() {
+        for (d, s) in doors.iter().enumerate() {
             for &e in &s.edges {
                 door_of.insert(e, d);
             }
         }
         DoorDesk {
-            owners: vec![None; specs.len()],
-            ids: specs.into_iter().map(|s| s.id).collect(),
+            owners: vec![None; doors.len()],
+            ids: doors.iter().map(|s| s.id.clone()).collect(),
             door_of,
         }
     }
@@ -142,19 +149,18 @@ impl DoorDesk {
     }
 
     /// One control cycle. `at[i]` is the plan index of the last node of robot
-    /// `i`, `None` if it has no job.
-    pub fn update(&mut self, world: &mut World, at: &[Option<usize>]) {
+    /// `i`, `None` if it has no job. The commands to the doors go to `out`.
+    pub fn update(&mut self, at: &[Option<usize>], out: &mut Vec<Message>) {
         for d in 0..self.owners.len() {
             let Some(o) = self.owners[d].clone() else {
                 continue;
             };
             // passed (at the end node of the edge) or the job is over: let go
             if at[o.robot].is_none_or(|a| a > o.edge_index) {
-                // (the doors are the ones the controller found in the world)
-                let _ = world.release_door(&self.ids[d]);
+                out.push(Message::ReleaseDoor(self.ids[d].clone()));
                 self.owners[d] = None;
             } else {
-                let _ = world.open_door(&self.ids[d]);
+                out.push(Message::OpenDoor(self.ids[d].clone()));
             }
         }
     }

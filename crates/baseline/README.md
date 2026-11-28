@@ -1,17 +1,32 @@
 # botsim-baseline
 
 The bundled fleet controller. It talks to the robots only through VDA 5050
-messages (and to doors and lifts through their command ports). It is a simple
+messages (and to doors and lifts through messages of its own). It is a simple
 reference that other traffic rules are measured against, and is kept as it is:
 only bugs are fixed.
+
+It knows no simulator: it is given data and gives back messages.
 
 ## Using it
 
 ```text
-Controller::new(&world)                the baseline rules
-controller.step(&mut world, new_jobs)  once per simulation step, with World::step
+Controller::new(&config)               the baseline rules for a site and fleet
+controller.step(&input, new_jobs)      one cycle; returns the messages to send
 controller.completed(), rejected(), pending(), metrics(seconds)
 ```
+
+`config` (`cycle::Config`) holds the layout, the robots with their identity and
+type from their factsheets (`FleetRobot::from_factsheet`), the zone set, the
+lifts and the doors. The order of the robots decides ties.
+
+`input` (`cycle::Input`) holds the time, every robot's `state` message and who is
+in each lift. The result (`cycle::Output`) holds the messages in the order to
+send them, why each robot is held back, and the reservations if somebody watches.
+
+To run it against the simulator use [botsim-bridge](../bridge/README.md).
+
+A refusal of an order shows only in the robot's state; see the
+[rules](../../docs/rules.md), §1a.
 
 Optional: `set_charging`, `set_load_weight`, `set_wait_weight`, and the conflict
 lists of the layout (`set_conflicts`, then `set_node_conflicts` and
@@ -28,11 +43,11 @@ lists of the layout (`set_conflicts`, then `set_node_conflicts` and
   charger or a parking place. It is the trait `Dispatcher` of
   [botsim-dispatcher](../dispatcher/README.md), which also holds the baseline's.
   Another one can replace it:
-  `Controller::with_dispatcher(&world, policy, dispatcher)`.
+  `Controller::with_dispatcher(&config, policy, dispatcher)`.
 - The **traffic policy** says who may go now: how far each route is released,
   and the answers to zone requests. It is the trait `policy::TrafficPolicy`.
   Another policy can replace the baseline's:
-  `Controller::with_policy(&world, policy)`. A policy must implement `start`,
+  `Controller::with_policy(&config, policy)`. A policy must implement `start`,
   `place`, `release` and `zone_answers`.
 
 ## The rules

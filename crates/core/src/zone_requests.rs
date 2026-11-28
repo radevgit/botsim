@@ -57,9 +57,9 @@ use vda5050::zone_set::{ZoneKind, ZoneReleaseLossBehavior};
 
 use crate::errors::RobotError;
 use crate::order_route::PlanEdge;
-use crate::zones::Zones;
 use botsim_model::errors::ErrorType;
 use botsim_model::graph::Graph;
+use botsim_model::zones::Zones;
 
 /// When a robot states the request for a zone it is about to enter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

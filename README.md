@@ -21,6 +21,7 @@ botsim/
 │   ├── router/        route search on the layout graph
 │   ├── dispatcher/    jobs to robots, charging and parking trips
 │   ├── baseline/      bundled baseline fleet controller
+│   ├── bridge/        runs the controller against the simulated world
 │   ├── traffic/       passing order at shared spots (--policy traffic)
 │   ├── space/         swept robot outlines and the conflict map
 │   ├── runner/        command line and JSON summary (package botsim)

@@ -3,7 +3,7 @@
 //! its lane, takes the empty one. Without it both use the same lane (the shortest
 //! route is the same every time).
 
-use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
@@ -71,7 +71,7 @@ fn lanes_used(weight: f64) -> [[bool; 2]; 2] {
     w.add_robot(RobotId::new("ACME", "R1"), spec, times, c, 0.0)
         .unwrap();
     w.set_safety_stop(true);
-    let mut ctl = Controller::new(&w);
+    let mut ctl = bridge::controller(&w);
     ctl.set_load_weight(weight);
     let job = |id, pickup, created_tick| Job {
         id,
@@ -86,7 +86,7 @@ fn lanes_used(weight: f64) -> [[bool; 2]; 2] {
             40 => vec![job(2, c, 40)],
             _ => Vec::new(),
         };
-        ctl.step(&mut w, new);
+        bridge::step(&mut ctl, &mut w, new);
         w.step();
         let r = ctl.reservations();
         for (lane, node) in [u, l].into_iter().enumerate() {

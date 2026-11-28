@@ -41,13 +41,17 @@ LIF 2.0 (layouts).
 - Only the VDA 5050 messages are delayed. **Lift and door commands and what the
   controller reads from lifts and doors are instant**, and so is everything the
   simulator itself looks at (collisions, deadlocks, the observer, metrics).
-- **Baseline:** it sends a job's order and goes on as if it were accepted; if the
-  state later shows an error that names the order, it gives the job up (job
-  refused, what was reserved for it is released, a lift or door it was given is
-  given back). A refused order *update* is not detected with a delay (the
-  baseline only sends updates its robots can follow). Releases, re-routing and the
-  end of a job are all decided on the old state, so a robot may reach the end of
-  its released route before the next update arrives and wait there.
+- **Baseline:** it uses no answer, with or without a delay. It takes every order
+  and update it sends as accepted and learns of a refusal from the state: one that
+  does not show the order or update yet and has an error that names the order, or
+  a new `ORIENTATION_UNREACHABLE` error for an edge it sent (that error names only
+  the edge). Without a delay this is the step after the one in which it sent. A
+  refused new order: the job is given up (job refused, what was reserved for it is
+  released, a lift or door it was given is given back). A refused update: the
+  order is cancelled, and once the state lists the `cancelOrder` and the robot has
+  stopped, the job is given up. Releases, re-routing and the end of a job are all
+  decided on the state as it is, with a delay an old one, so a robot may reach the
+  end of its released route before the next update arrives and wait there.
 - Not yet: a different delay per direction or per robot, random delays or lost
   messages, a delay for the lift and door commands.
 
@@ -217,8 +221,8 @@ Lift and door commands are not VDA 5050; they have their own ports (§7f, §7h).
       *update* (the baseline then sends `cancelOrder`, keeps what the robot holds
       until it has stopped, it brakes to the next node, and lists the job as rejected
       with the robot's error, `NO_ROUTE_TO_TARGET`), the job is given up. The same
-      happens if a robot refuses a changed route (re-routing, §9). With a message
-      delay a refused update is not seen (§1a). A layout for car-like robots needs
+      happens if a robot refuses a changed route (re-routing, §9). The baseline sees
+      a refusal in the robot's state (§1a). A layout for car-like robots needs
       rounded corners (trajectories); where there is no route without a sharp turn,
       the job waits in the queue.
   - **No panic (project rule):** a robot refusing an order is a result of the

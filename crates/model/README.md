@@ -15,5 +15,10 @@ depends on no other botsim crate, reads no files and uses no network.
 | `job` | a transport job (`Job`): from a pickup node to a drop node |
 | `robot` | who a robot is: its VDA 5050 identity (`RobotId`) and the small number that stands for it (`RobotNo`) |
 | `angle` | normalising and subtracting angles |
+| `zones` | the zones of a map (VDA 5050 `zoneSet`), checked (`Zones`) |
+| `collision` | robot bodies placed in the world: overlap and gap |
+| `waiting` | when a robot counts as waiting (`is_waiting`), and why a controller holds one back (`HeldBack`, `WaitReason`) |
+| `reservation` | what a controller has reserved for a robot (`Reservation`) |
+| `protocol` | the VDA 5050 version in the message headers |
 | `errors` | the predefined VDA 5050 error types (`ErrorType`): names and levels |
 | `time` | VDA 5050 timestamps (ISO 8601 UTC) from and to milliseconds since 1970 |

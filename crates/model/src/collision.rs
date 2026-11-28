@@ -10,7 +10,7 @@ use togo::prelude::{
     overlap_orect_orect, point,
 };
 
-use botsim_model::spec::Shape;
+use crate::spec::Shape;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Body {

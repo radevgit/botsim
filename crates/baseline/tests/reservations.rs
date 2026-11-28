@@ -1,5 +1,6 @@
 use botsim_baseline::controller::Controller;
 use botsim_baseline::reservations::Reservations;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::jobs::JobGenerator;
 use botsim_core::world::World;
@@ -60,7 +61,7 @@ fn job(g: &Graph, id: u64, pickup: &str, drop: &str) -> Job {
 fn run(w: &mut World, c: &mut Controller, jobs: Vec<Job>, ticks: u64) {
     let mut jobs = Some(jobs);
     for _ in 0..ticks {
-        c.step(w, jobs.take().unwrap_or_default());
+        bridge::step(c, w, jobs.take().unwrap_or_default());
         w.step();
     }
 }
@@ -99,7 +100,7 @@ fn a_robot_holds_its_node_and_a_job_moves_the_reservations_along() {
     let n = |id: &str| g.node_idx(id).unwrap();
     let (n0, n1, n2) = (n("N0"), n("N1"), n("N2"));
     let mut w = world(g, &["N0"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
 
     run(&mut w, &mut c, vec![], 1);
     assert_eq!(
@@ -124,7 +125,7 @@ fn a_robot_waits_for_a_node_held_by_an_idle_robot_until_it_moves_away() {
     let j = job(&g, 1, "A", "B");
     let j2 = job(&g, 2, "B", "C");
     let mut w = world(g, &["A", "B"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     // R-1 is the nearest to pickup A (distance 0)
     run(&mut w, &mut c, vec![j], 2000);
     // it picks for 5 s, then needs B, which R-2 holds → it waits at A
@@ -145,7 +146,7 @@ fn head_on_robots_in_a_corridor_do_not_collide_but_block_each_other() {
     let g = corridor();
     let jobs = vec![job(&g, 1, "A", "C"), job(&g, 2, "C", "A")];
     let mut w = world(g, &["A", "C"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     run(&mut w, &mut c, jobs, 30_000); // 25 minutes
     assert!(w.collisions().is_empty(), "{:?}", w.collisions());
     // a deadlock: both are still working on their job
@@ -171,10 +172,10 @@ fn robots_that_wait_for_a_moving_robot_or_do_a_job_are_no_deadlock() {
         .collect();
     let mut gen_ = JobGenerator::new(11, &nodes, 240.0, DT).unwrap();
     let mut w = world(g, &["N0", "N1", "N2"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     for t in 0..60_000u64 {
         let new: Vec<Job> = gen_.step(t).into_iter().collect();
-        c.step(&mut w, new);
+        bridge::step(&mut c, &mut w, new);
         w.step();
     }
     assert!(w.deadlocks().is_empty(), "{:?}", w.deadlocks());
@@ -189,10 +190,10 @@ fn many_generated_jobs_on_a_ring_with_three_robots_never_collide() {
             .collect();
         let mut gen_ = JobGenerator::new(11, &nodes, 240.0, DT).unwrap();
         let mut w = world(g, &["N0", "N1", "N2"]);
-        let mut c = Controller::new(&w);
+        let mut c = bridge::controller(&w);
         for t in 0..60_000u64 {
             let new: Vec<Job> = gen_.step(t).into_iter().collect();
-            c.step(&mut w, new);
+            bridge::step(&mut c, &mut w, new);
             w.step();
         }
         let m = c.metrics(w.time());

@@ -3,7 +3,7 @@
 //! first. With the node-edge conflict in the table the second robot waits.
 
 use botsim_baseline::conflicts::{ConflictInput, NodeConflictInput};
-use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::job::Job;
@@ -46,7 +46,7 @@ fn run(node_conflicts: bool) -> (usize, usize) {
     w.add_robot(RobotId::new("ACME", "R2"), spec, times, c, 0.0)
         .unwrap();
     w.set_safety_stop(false);
-    let mut ctl = Controller::new(&w);
+    let mut ctl = bridge::controller(&w);
     // the table needs a (here empty) edge-edge input for the type
     assert_eq!(
         ctl.set_conflicts(&[ConflictInput {
@@ -71,7 +71,7 @@ fn run(node_conflicts: bool) -> (usize, usize) {
         created_tick: 0,
     }]);
     for _ in 0..(60.0 / DT) as usize {
-        ctl.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut ctl, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     (ctl.completed().len(), w.collisions().len())

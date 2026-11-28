@@ -1,0 +1,20 @@
+[package]
+name = "botsim-bridge"
+description = "Runs the botsim baseline controller against the simulated world"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors = ["radevgit"]
+
+[dependencies]
+botsim-baseline = { path = "../baseline" }
+botsim-core = { path = "../core" }
+botsim-dispatcher = { path = "../dispatcher" }
+botsim-model = { path = "../model" }
+
+[dev-dependencies]
+serde_json = "1.0.154"
+vda5050 = "0.1.0"
+vdma-lif = "0.1.0"

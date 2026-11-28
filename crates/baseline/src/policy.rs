@@ -7,10 +7,15 @@
 //! released and answers RELEASE zone requests. It never plans paths and never talks
 //! to a robot.
 //!
-//! Robots are numbered as in the controller (the order of the world's robots); every
-//! list of robots is in that order.
+//! Robots are numbered as in the controller (the order of
+//! [`Config::robots`](crate::cycle::Config::robots)); every list of robots is in
+//! that order.
 //!
 //! **Order of the calls in one cycle:**
+//! 0. for what the states show as refused since the cycle before:
+//!    [`route_dropped`](TrafficPolicy::route_dropped) for a new order, and
+//!    [`route_changed`](TrafficPolicy::route_changed) with the old route for a
+//!    refused addition of a job to a parking trip;
 //! 1. [`cycle_start`](TrafficPolicy::cycle_start) with all robots;
 //! 2. robot by robot: [`release`](TrafficPolicy::release) for a robot that has a
 //!    route and can take an update (or [`route_finished`](TrafficPolicy::route_finished)
@@ -25,11 +30,11 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
 
-use botsim_core::observer::Reservation;
-use botsim_core::zones::Zones;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::reservation::Reservation;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::Shape;
+use botsim_model::zones::Zones;
 use vda5050::state::State;
 
 use crate::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
@@ -152,8 +157,9 @@ pub trait TrafficPolicy: Debug {
     /// A robot with a route has reported its progress.
     fn release(&mut self, ask: &Ask) -> Release;
 
-    /// The controller changed the unreleased part of a route (another route, or a
-    /// job added to a parking trip).
+    /// The controller changed the unreleased part of a route (another route, a job
+    /// added to a parking trip, or such an addition taken back because the robot
+    /// refused it).
     fn route_changed(&mut self, _robot: usize, _route: &Plan) {}
 
     /// The robot has done its route and stands on the last node.

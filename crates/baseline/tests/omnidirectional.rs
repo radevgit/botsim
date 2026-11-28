@@ -1,7 +1,7 @@
 //! The baseline controller with an omnidirectional robot (S63, S98): its orders carry
 //! the orientation the layout gives each edge, so the robot faces along its road.
 
-use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
@@ -51,11 +51,11 @@ fn run(kinematics: &str) -> (u64, Vec<f64>) {
         0.0,
     )
     .unwrap();
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(vec![job]);
     let mut headings = Vec::new();
     for _ in 0..20000 {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
         headings.push(w.pose(&id).unwrap().heading);
     }

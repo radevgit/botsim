@@ -20,12 +20,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use botsim_core::collision::{Body, overlap, place};
-use botsim_core::metrics::is_waiting;
-use botsim_core::observer::Reservation;
+use botsim_model::collision::{Body, overlap, place};
 use botsim_model::graph::{EdgeIdx, EdgeOrientation, Graph, NodeIdx};
+use botsim_model::reservation::Reservation;
 use botsim_model::safety::LATERAL_MARGIN;
 use botsim_model::spec::Shape;
+use botsim_model::waiting::is_waiting;
 use vda5050::state::State;
 
 use crate::conflicts::{

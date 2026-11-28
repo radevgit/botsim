@@ -3,7 +3,7 @@
 //! first robot R0 waits on U1 for ever. A robot R1 that gets its job a minute later
 //! takes the lower lane if the waiting average counts, else it queues behind R0.
 
-use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
@@ -71,7 +71,7 @@ fn second_robot_takes_the_lower_lane(wait_weight: f64) -> bool {
         .unwrap();
     }
     w.set_safety_stop(true);
-    let mut ctl = Controller::new(&w);
+    let mut ctl = bridge::controller(&w);
     ctl.set_wait_weight(wait_weight);
     let job = |id, pickup, created_tick| Job {
         id,
@@ -86,7 +86,7 @@ fn second_robot_takes_the_lower_lane(wait_weight: f64) -> bool {
             1200 => vec![job(2, c, 1200)],
             _ => Vec::new(),
         };
-        ctl.step(&mut w, new);
+        bridge::step(&mut ctl, &mut w, new);
         w.step();
         // (only in the 8 s after the job starts: after 10 s of waiting the re-route
         // takes the lower lane in any case)

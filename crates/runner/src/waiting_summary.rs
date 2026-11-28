@@ -6,8 +6,9 @@
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
-use botsim_core::waiting::{Place, WaitReason};
+use botsim_core::waiting::Place;
 use botsim_core::world::World;
+use botsim_model::waiting::WaitReason;
 use serde::Serialize;
 
 /// How many pairs and places are listed (S169).

@@ -3,11 +3,12 @@
 use botsim_core::actions::ActionTimes;
 use botsim_core::disturbances::StopSpec;
 use botsim_core::robot::Reception;
-use botsim_core::waiting::{HeldBack, Place, Wait, WaitReason, WaitTotal};
+use botsim_core::waiting::{Place, Wait, WaitTotal};
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::waiting::{HeldBack, WaitReason};
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 use vdma_lif::Lif;

@@ -1,13 +1,14 @@
 //! The waiting metric's head-on case (brief U12): two robots come to a corridor
 //! from its two ends; the second one's wait is credited to the first.
 
-use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
-use botsim_core::waiting::{Place, WaitReason};
+use botsim_core::waiting::Place;
 use botsim_core::world::World;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::waiting::WaitReason;
 use vda5050::factsheet::Factsheet;
 
 mod common;
@@ -56,9 +57,9 @@ fn the_second_robot_at_a_corridor_waits_for_the_first() {
         created_tick: 0,
     };
     let mut jobs = Some(vec![job(1, a, e), job(2, d, f_node)]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     for _ in 0..(120.0 / DT) as usize {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     assert_eq!(c.completed().len(), 2, "{:?}", c.rejected());

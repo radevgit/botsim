@@ -2,6 +2,7 @@
 //! places are the interaction nodes of the stations of type `parking`.
 
 use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::{Graph, GraphStation};
@@ -66,13 +67,13 @@ fn setup(two: bool, starts: &[&str]) -> (World, Controller) {
         )
         .unwrap();
     }
-    let ctl = Controller::new(&w);
+    let ctl = bridge::controller(&w);
     (w, ctl)
 }
 
 fn run(w: &mut World, ctl: &mut Controller, seconds: f64) {
     for _ in 0..(seconds / DT) as usize {
-        ctl.step(w, []);
+        bridge::step(ctl, w, []);
         w.step();
     }
 }
@@ -105,7 +106,7 @@ fn an_idle_robot_goes_to_a_parking_place_leaves_it_for_a_job_and_comes_back() {
         drop: a,
         created_tick: w.tick(),
     };
-    ctl.step(&mut w, [job]);
+    bridge::step(&mut ctl, &mut w, [job]);
     assert_eq!(ctl.busy(), 1, "it left the place at once");
     run(&mut w, &mut ctl, 120.0);
     assert_eq!(ctl.completed().len(), 1);
@@ -126,7 +127,7 @@ fn run_one_job(w: &mut World, ctl: &mut Controller) -> (Vec<String>, String) {
             }
         }
         order = state.order_id;
-        ctl.step(w, []);
+        bridge::step(ctl, w, []);
         if !ctl.completed().is_empty() {
             break;
         }
@@ -157,7 +158,7 @@ fn a_robot_on_its_way_to_a_place_takes_a_job_by_extending_its_order() {
     assert!(!on(&w, "R1", "P"), "still on its way");
 
     let j = job(&w, "D", "A");
-    ctl.step(&mut w, [j]);
+    bridge::step(&mut ctl, &mut w, [j]);
     assert_eq!((ctl.busy(), ctl.pending().count()), (1, 0), "taken at once");
     assert!(w.state(&id("R1")).unwrap().order_update_id >= 1);
 
@@ -183,7 +184,7 @@ fn a_pickup_at_the_last_released_node_is_not_added_to_the_order() {
     assert_eq!(ctl.reservations().node_holder(p), Some(0));
 
     let j = job(&w, "P", "D");
-    ctl.step(&mut w, [j]);
+    bridge::step(&mut ctl, &mut w, [j]);
     assert_eq!((ctl.busy(), ctl.pending().count()), (0, 1), "it waits");
     let (finished, _) = run_one_job(&mut w, &mut ctl);
     assert_eq!(ctl.completed().len(), 1, "{:?}", ctl.rejected());
@@ -245,7 +246,7 @@ fn a_layout_without_parking_stations_leaves_idle_robots_where_they_are() {
     w = World::new(g, DT, 0).unwrap();
     w.add_robot(id("R1"), spec, ActionTimes::new(1.0), a, 0.0)
         .unwrap();
-    let mut ctl = Controller::new(&w);
+    let mut ctl = bridge::controller(&w);
     run(&mut w, &mut ctl, 30.0);
     assert!(on(&w, "R1", "A"));
     assert_eq!((ctl.parking_places(), ctl.park_trips()), (0, 0));

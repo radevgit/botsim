@@ -2,6 +2,7 @@
 //! the charging there (charging brief, step 2, first part).
 
 use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::battery::{Battery, BatterySpec};
 use botsim_core::world::World;
@@ -59,7 +60,7 @@ fn setup(percents: &[f64], second: Option<&str>) -> (World, Controller) {
     }
     assert_eq!(w.set_chargers(3600.0).unwrap(), 1);
     w.set_safety_stop(false);
-    let mut ctl = Controller::new(&w);
+    let mut ctl = bridge::controller(&w);
     assert_eq!(
         ctl.set_charging(ChargePolicy {
             low: 25.0,
@@ -73,7 +74,7 @@ fn setup(percents: &[f64], second: Option<&str>) -> (World, Controller) {
 
 fn run(w: &mut World, ctl: &mut Controller, seconds: f64) {
     for _ in 0..(seconds / DT) as usize {
-        ctl.step(w, []);
+        bridge::step(ctl, w, []);
         w.step();
     }
 }
@@ -110,7 +111,7 @@ fn at_the_upper_limit_charging_stops_and_the_robot_takes_jobs_again() {
         drop: c,
         created_tick: w.tick(),
     };
-    ctl.step(&mut w, [job]);
+    bridge::step(&mut ctl, &mut w, [job]);
     run(&mut w, &mut ctl, 30.0);
     assert_eq!(ctl.completed().len(), 1);
     // it has more than the low limit, so it does not go to charge again
@@ -132,7 +133,7 @@ fn job_with_the_charger_taken(r1_percent: f64) -> (World, Controller) {
         drop: b,
         created_tick: 0,
     };
-    ctl.step(&mut w, [job]);
+    bridge::step(&mut ctl, &mut w, [job]);
     run(&mut w, &mut ctl, 30.0);
     (w, ctl)
 }

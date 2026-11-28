@@ -22,30 +22,7 @@
 //! waiting robot is in its own stop (a random stop or an empty battery, S170).
 
 use botsim_model::graph::{EdgeIdx, NodeIdx};
-
-/// Why a robot waits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum WaitReason {
-    /// The next piece of its route is not released to it.
-    Release,
-    /// A RELEASE zone request is not granted.
-    Zone,
-    /// Another robot owns the lift its route needs.
-    Lift,
-    /// Another robot owns the door its route needs.
-    Door,
-    /// Another robot is in its protective field.
-    SafetyStop,
-}
-
-/// What the controller says about a robot it holds back.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HeldBack {
-    pub reason: WaitReason,
-    /// The robots that cause it (indices in the order they were added to the
-    /// world); empty if none can be named.
-    pub blockers: Vec<usize>,
-}
+use botsim_model::waiting::WaitReason;
 
 /// Where a waiting robot stands (S168): on a node (within 0.1 m of it), else on the
 /// edge it is driving.

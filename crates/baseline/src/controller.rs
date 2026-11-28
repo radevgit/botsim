@@ -3,8 +3,18 @@
 //! [`RELEASE_WINDOW`](crate::order_builder::RELEASE_WINDOW) nodes.
 //!
 //! It sees the robots only through their VDA 5050 `state` messages and talks to
-//! them only with `order` messages, like any real controller. Call
-//! [`Controller::step`] once per simulation step, after `World::step`.
+//! them only with messages, like any real controller. It is given the site once
+//! ([`Config`]) and runs in cycles: each call of [`Controller::step`] takes what
+//! has arrived and gives back the messages to send (see [`crate::cycle`]). In a
+//! simulation it runs once per step, after the robots have moved.
+//!
+//! **Refusals** show only in the state messages. The controller takes each order
+//! and update as accepted when it sends it, and notes what to take back. A state
+//! that does not show it yet and has an error naming the `orderId`, or a new
+//! `ORIENTATION_UNREACHABLE` error for an edge sent (that error names no order),
+//! says it was refused: a new order is given up at once; for an update the order
+//! is cancelled, and the job is given up as soon as the robot has the cancel and
+//! has stopped.
 //!
 //! - **Free robot**: no job assigned. Its place is the layout node nearest to
 //!   its reported position (within [`NODE_TOLERANCE`]); a robot that is not on a
@@ -46,32 +56,32 @@
 //! timeout, zone answers) is a [`TrafficPolicy`] (brief `traffic_policy_slot.md`);
 //! the rules above that say so are the baseline's, [`crate::baseline_policy`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
-use botsim_core::metrics::{Metrics, is_waiting, summarize};
-use botsim_core::robot::Reception;
-use botsim_core::waiting::{HeldBack, WaitReason};
-use botsim_core::world::World;
 use botsim_dispatcher::baseline::BaselineDispatcher;
 use botsim_dispatcher::{Answer, ChargePolicy, Control, Cycle, Dispatcher, Purpose, Site, Task};
 use botsim_model::errors::ErrorType;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::job::Job;
+use botsim_model::protocol::PROTOCOL_VERSION;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::Shape;
+use botsim_model::time::iso8601;
+use botsim_model::waiting::{HeldBack, WaitReason, is_waiting};
 use botsim_router::load::{self, Load};
 use botsim_router::route::{Arrival, Mover, plan_path};
 use botsim_router::types::TypeRouting;
-use vda5050::order::Order;
-use vda5050::state::{ActionStatus, RequestStatus, State};
+use vda5050::state::{ActionStatus, RequestStatus, State, StateError};
 
 use crate::baseline_policy::BaselinePolicy;
 pub use crate::baseline_policy::{
     GIVE_WAY_AFTER_SECONDS, GIVE_WAY_HOLD_SECONDS, REROUTE_AFTER_SECONDS,
 };
 use crate::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
+use crate::cycle::{Config, Input, Message, Output};
 use crate::doors::DoorDesk;
 use crate::lifts::{LiftDesk, LiftRobot};
+use crate::metrics::{Metrics, summarize};
 use crate::node_grid::NodeGrid;
 use crate::order_builder::{OrderHeader, Plan, build_order_with};
 use crate::policy::{Ask, Fleet, PolicyRobot, RouteView, Setup, TrafficPolicy};
@@ -127,13 +137,68 @@ struct Work {
     /// a trip is a stand-in (the robot's node and the goal), the route has no
     /// actions, and a trip is not counted as a completed or rejected job.
     purpose: Purpose,
-    /// The order was sent with a message delay and the robot's state has not
-    /// shown it yet (S58): the controller does not know whether it was accepted.
-    awaiting_ack: bool,
+    /// The order and the updates the robot's states have not shown yet, oldest
+    /// first: any of them may still be refused.
+    unconfirmed: VecDeque<Sent>,
     /// The robot refused an update of the order (S70, e.g. a car-like robot that
     /// cannot take a turn): the order was cancelled, and the job is given up as soon
     /// as the robot has stopped. Until then the robot keeps what it holds.
-    cancelling: Option<ErrorType>,
+    cancelling: Option<Cancelling>,
+}
+
+impl Work {
+    /// The robot's states have not shown the order yet (S58): the controller does
+    /// not know whether it was accepted.
+    fn awaiting_ack(&self) -> bool {
+        self.unconfirmed.front().is_some_and(|s| s.update_id == 0)
+    }
+
+    /// Take off the order and the updates that `state` shows as accepted.
+    fn confirm(&mut self, state: &State) {
+        if state.order_id != self.order_id {
+            return;
+        }
+        let before = self.unconfirmed.len();
+        while self
+            .unconfirmed
+            .front()
+            .is_some_and(|s| s.update_id <= state.order_update_id)
+        {
+            self.unconfirmed.pop_front();
+        }
+        // a robot clears its errors when it accepts an order, so those it reports
+        // now are all new for the messages that come after
+        if self.unconfirmed.len() < before {
+            for sent in &mut self.unconfirmed {
+                sent.orientation_errors = 0;
+            }
+        }
+    }
+}
+
+/// An order or update on its way: what to take back if the robot refuses it.
+#[derive(Debug)]
+struct Sent {
+    update_id: u32,
+    /// The released node index before this message.
+    released_before: usize,
+    /// The route before this message, if the message added a job to a trip.
+    plan_before: Option<Plan>,
+    /// The message carried another route (S53).
+    rerouted: bool,
+    /// The edges the message names.
+    edges: Vec<EdgeIdx>,
+    /// The `ORIENTATION_UNREACHABLE` errors naming one of these edges in the
+    /// robot's state when the message was sent.
+    orientation_errors: usize,
+}
+
+/// A refused update: the order is being cancelled.
+#[derive(Debug)]
+struct Cancelling {
+    reason: ErrorType,
+    /// The id of the `cancelOrder` action; `None` if it could not be sent.
+    action: Option<String>,
 }
 
 #[derive(Debug)]
@@ -170,6 +235,8 @@ pub struct Controller<P: TrafficPolicy = BaselinePolicy> {
     rejected: Vec<Rejected>,
     /// The tick of the previous control cycle.
     last_tick: u64,
+    /// The seconds between two ticks.
+    step_seconds: f64,
     /// Who may go now.
     policy: P,
     /// The zone set of the site, which the controller sends to every robot and
@@ -201,9 +268,9 @@ pub struct Controller<P: TrafficPolicy = BaselinePolicy> {
 }
 
 impl Controller {
-    /// A controller with the baseline's traffic rules for all robots now in `world`.
-    pub fn new(world: &World) -> Controller {
-        Controller::with_policy(world, BaselinePolicy::new(world.graph()))
+    /// A controller with the baseline's traffic rules for the fleet of `config`.
+    pub fn new(config: &Config) -> Controller {
+        Controller::with_policy(config, BaselinePolicy::new(&config.graph))
     }
 
     /// Swept-area reservation of the baseline rules, see
@@ -237,53 +304,48 @@ impl Controller {
 }
 
 impl<P: TrafficPolicy> Controller<P> {
-    /// A controller for all robots now in `world` with the traffic rules of `policy`
+    /// A controller for the fleet of `config` with the traffic rules of `policy`
     /// and the baseline's dispatcher.
-    pub fn with_policy(world: &World, policy: P) -> Controller<P> {
-        Controller::with_dispatcher(world, policy, Box::new(BaselineDispatcher::new()))
+    pub fn with_policy(config: &Config, policy: P) -> Controller<P> {
+        Controller::with_dispatcher(config, policy, Box::new(BaselineDispatcher::new()))
     }
 
-    /// A controller for all robots now in `world` with the traffic rules of `policy`
+    /// A controller for the fleet of `config` with the traffic rules of `policy`
     /// and the tasks given out by `dispatcher` (which it starts).
     pub fn with_dispatcher(
-        world: &World,
+        config: &Config,
         mut policy: P,
         mut dispatcher: Box<dyn Dispatcher>,
     ) -> Controller<P> {
         // the robot types (manufacturer, series) in the order they first appear
-        let graph = world.graph();
+        let graph = &config.graph;
         let mut keys: Vec<(String, String)> = Vec::new();
         let mut kinds = Vec::new();
         // the body outline of each robot, for the policy
         let mut shapes: Vec<Shape> = Vec::new();
-        let robots: Vec<Slot> = world
-            .robot_ids()
-            .filter_map(|id| {
-                // the robot's type comes from its factsheet message (S61); a robot
-                // that has none cannot be read and gets no jobs
-                let f = world.factsheet(id).ok()?;
-                let spec = world.spec(id).ok()?;
-                let (kinematics, shape) = (spec.kinematics, spec.shape);
-                let series = f.type_specification.series_name.clone();
-                let key = (f.manufacturer, f.type_specification.series_name);
+        let robots: Vec<Slot> = config
+            .robots
+            .iter()
+            .map(|robot| {
+                let key = (robot.id.manufacturer.clone(), robot.series.clone());
                 let type_idx = keys.iter().position(|k| *k == key).unwrap_or_else(|| {
                     keys.push(key);
-                    kinds.push(kinematics);
+                    kinds.push(robot.kinematics);
                     keys.len() - 1
                 });
-                shapes.push(shape);
-                Some(Slot {
-                    id: id.clone(),
+                shapes.push(robot.shape);
+                Slot {
+                    id: robot.id.clone(),
                     type_idx,
                     work: None,
-                    series,
+                    series: robot.series.clone(),
                     header_id: 0,
                     response_header_id: 0,
                     zone_set_sent: false,
                     enable_sent: false,
                     zone_set_header_id: 0,
                     instant_header_id: 0,
-                })
+                }
             })
             .collect();
         let types: Vec<TypeRouting> = keys
@@ -303,39 +365,48 @@ impl<P: TrafficPolicy> Controller<P> {
                 omnidirectional: types[slot.type_idx].omnidirectional,
             })
             .collect();
+        let zones = config.zones.as_ref().filter(|z| z.map < graph.maps.len());
         policy.start(&Setup {
-            graph: world.graph(),
+            graph,
             types: &type_names,
             robots: &policy_robots,
-            zones: world.zones(),
+            zones,
         });
-        dispatcher.start(world.graph(), robots.len());
-        let lifts = LiftDesk::new(world);
+        dispatcher.start(graph, robots.len());
+        let lifts = LiftDesk::new(graph, &config.lifts);
         let rides = lifts.waiting_nodes().clone();
         Controller {
-            graph: world.graph().clone(),
+            graph: graph.clone(),
             dispatcher,
             robots,
             completed: Vec::new(),
             rejected: Vec::new(),
-            last_tick: world.tick(),
+            last_tick: config.start_tick,
+            step_seconds: config.step_seconds,
             policy,
-            zone_set: world.zones().map(|z| vda5050::zone_set::ZoneSet {
-                map_id: world.graph().maps[z.map].clone(),
-                zone_set_id: z.zone_set_id.clone(),
-                zone_set_descriptor: None,
-                zones: z.zones.clone(),
+            zone_set: zones.and_then(|z| {
+                Some(vda5050::zone_set::ZoneSet {
+                    map_id: graph.maps.get(z.map)?.clone(),
+                    zone_set_id: z.zone_set_id.clone(),
+                    zone_set_descriptor: None,
+                    zones: z.zones.clone(),
+                })
             }),
             lifts,
-            doors: DoorDesk::new(world),
-            node_grid: NodeGrid::new(world.graph()),
+            doors: DoorDesk::new(&config.doors),
+            node_grid: NodeGrid::new(graph),
             types,
             rides,
             reroutes: 0,
             load_weight: 0.0,
             wait_weight: 0.0,
-            node_wait: vec![0.0; world.graph().nodes.len()],
+            node_wait: vec![0.0; graph.nodes.len()],
         }
+    }
+
+    /// The robots, in the order of the states [`Controller::step`] takes.
+    pub fn robots(&self) -> impl Iterator<Item = &RobotId> {
+        self.robots.iter().map(|s| &s.id)
     }
 
     /// The parking places of the layout (U13): the interaction nodes of the stations
@@ -420,7 +491,7 @@ impl<P: TrafficPolicy> Controller<P> {
     }
 
     /// Throughput and waiting of the jobs done so far (see
-    /// [`botsim_core::metrics`]); `elapsed_seconds` is the simulated time.
+    /// [`crate::metrics`]); `elapsed_seconds` is the simulated time.
     pub fn metrics(&self, elapsed_seconds: f64) -> Metrics {
         let waits: Vec<f64> = self.completed.iter().map(|c| c.waiting_seconds).collect();
         summarize(&waits, elapsed_seconds)
@@ -450,26 +521,25 @@ impl<P: TrafficPolicy> Controller<P> {
 
     /// One control cycle: take the new jobs, read every robot's state, move
     /// the release windows on, finish jobs, and assign waiting jobs.
-    pub fn step(&mut self, world: &mut World, new_jobs: impl IntoIterator<Item = Job>) {
+    pub fn step(&mut self, input: &Input, new_jobs: impl IntoIterator<Item = Job>) -> Output {
         for job in new_jobs {
             self.dispatcher.add_job(job);
         }
-        let tick = world.tick();
+        let tick = input.time.tick;
         // time since the last cycle: a robot seen waiting now is counted as
         // waiting for all of it
-        let elapsed = (tick - self.last_tick) as f64 * world.dt();
+        let elapsed = tick.saturating_sub(self.last_tick) as f64 * self.step_seconds;
         self.last_tick = tick;
 
-        // (the robots are the ones the world had; if one cannot be read, this cycle
-        // does nothing)
-        let Ok(states) = self
-            .robots
-            .iter()
-            .map(|s| world.state(&s.id))
-            .collect::<Result<Vec<State>, _>>()
-        else {
-            return;
-        };
+        // (without a state of every robot this cycle does nothing)
+        let states = input.states;
+        if states.len() != self.robots.len() {
+            return Output::default();
+        }
+        let timestamp = iso8601(input.time.unix_ms);
+        let mut out = Vec::new();
+
+        self.learn_refusals(states, &timestamp, &mut out);
 
         // the waiting average of the nodes (only needed for the route cost)
         if self.wait_weight > 0.0 {
@@ -491,11 +561,11 @@ impl<P: TrafficPolicy> Controller<P> {
         self.policy.cycle_start(&Fleet {
             tick,
             elapsed,
-            states: &states,
+            states,
             routes: &route_views(&self.robots),
         });
         for (i, state) in states.iter().enumerate() {
-            self.update_work(world, i, state, tick, elapsed);
+            self.update_work(i, state, (tick, elapsed), &timestamp, &mut out);
         }
         // a charging robot that has reached the upper limit stops charging and is
         // free for jobs again
@@ -506,16 +576,16 @@ impl<P: TrafficPolicy> Controller<P> {
             {
                 let slot = &mut self.robots[i];
                 let id = format!("stop-charge-{}", slot.instant_header_id);
-                send_instant(world, slot, "stopCharging", &id);
+                send_instant(&mut out, &timestamp, slot, "stopCharging", &id);
             }
         }
         self.policy.after_releases(&Fleet {
             tick,
             elapsed,
-            states: &states,
+            states,
             routes: &route_views(&self.robots),
         });
-        self.update_lifts(world, &states);
+        self.update_lifts(input.lift_riders, states, &mut out);
         // the policy hears of every robot without a job and where it stands
         for (i, state) in states.iter().enumerate() {
             if self.robots[i].work.is_none()
@@ -524,20 +594,76 @@ impl<P: TrafficPolicy> Controller<P> {
                 self.policy.idle(i, n);
             }
         }
-        self.update_zone_sets(world, &states);
-        self.answer_zone_requests(world, &states, tick, elapsed);
-        self.dispatch(world, &states, tick, elapsed);
-        // why each robot is held back, and by whom (who waits for whom: deadlocks)
-        world.publish_held_back(self.held_back(&states));
+        self.update_zone_sets(states, &timestamp, &mut out);
+        self.answer_zone_requests(states, (tick, elapsed), &timestamp, &mut out);
+        self.dispatch(states, (tick, elapsed), &timestamp, &mut out);
+        Output {
+            messages: out,
+            // why each robot is held back, and by whom (who waits for whom:
+            // deadlocks)
+            held_back: Some(self.held_back(states)),
+            // what is reserved (only if someone watches)
+            reservations: input.watched.then(|| self.policy.reservations()),
+        }
+    }
 
-        // tell the observer what is reserved (only if someone watches)
-        if world.observing() {
-            world.publish_reservations(self.policy.reservations());
+    /// Take off what the states show as accepted, and act on what they show as
+    /// refused: a new order is given up at once; for an update, the release and
+    /// the route it brought are taken back and the order is cancelled (S70).
+    fn learn_refusals(&mut self, states: &[State], timestamp: &str, out: &mut Vec<Message>) {
+        for (i, (slot, state)) in self.robots.iter_mut().zip(states).enumerate() {
+            let Some(work) = slot.work.as_mut() else {
+                continue;
+            };
+            if work.cancelling.is_some() {
+                continue;
+            }
+            work.confirm(state);
+            let Some(reason) = refusal(&self.graph, state, work) else {
+                continue;
+            };
+            if work.awaiting_ack() {
+                // The robot refused the order: give the job up.
+                let Some(work) = slot.work.take() else {
+                    continue;
+                };
+                give_back(
+                    &mut self.policy,
+                    &mut self.lifts,
+                    &mut self.doors,
+                    i,
+                    &work.plan,
+                    work.released_through,
+                );
+                if work.purpose == Purpose::Job {
+                    self.rejected.push(Rejected {
+                        job: work.job,
+                        robot: slot.id.clone(),
+                        reason,
+                    });
+                }
+                self.dispatcher.given_up(i, work.purpose);
+                continue;
+            }
+            // the oldest unconfirmed update was not accepted, so neither was what
+            // came with it or after it
+            let mut sent = std::mem::take(&mut work.unconfirmed);
+            if let Some(first) = sent.front() {
+                work.released_through = first.released_before;
+            }
+            self.reroutes = self
+                .reroutes
+                .saturating_sub(sent.iter().filter(|s| s.rerouted).count());
+            if let Some(plan) = sent.iter_mut().find_map(|s| s.plan_before.take()) {
+                work.plan = plan;
+                self.policy.route_changed(i, &work.plan);
+            }
+            cancel_order(out, timestamp, slot, reason);
         }
     }
 
     /// For each robot that stands still on its order: why it is held back, and by
-    /// whom (see [`botsim_core::waiting`]).
+    /// whom (see [`botsim_model::waiting`]).
     /// - Road released ahead of it and a zone request not granted: the zone, with
     ///   the robots the policy names.
     /// - At the end of its released route, with more to go: the lift or door another
@@ -586,15 +712,30 @@ impl<P: TrafficPolicy> Controller<P> {
     }
 
     /// Release more of the route, or finish the job, for robot `i`.
-    fn update_work(&mut self, world: &mut World, i: usize, state: &State, tick: u64, elapsed: f64) {
+    fn update_work(
+        &mut self,
+        i: usize,
+        state: &State,
+        (tick, elapsed): (u64, f64),
+        timestamp: &str,
+        out: &mut Vec<Message>,
+    ) {
         let slot = &mut self.robots[i];
         let Some(work) = slot.work.as_mut() else {
             return;
         };
-        if let Some(reason) = work.cancelling {
-            // wait until the robot has stopped (it brakes to the next node); until
-            // then the way it is on stays reserved
-            if !state.driving {
+        if let Some(cancel) = &work.cancelling {
+            // wait until the robot has the cancel (its state lists the action) and
+            // has stopped (it brakes to the next node); until then the way it is on
+            // stays reserved
+            let reason = cancel.reason;
+            let has_it = cancel.action.as_ref().is_none_or(|id| {
+                state
+                    .instant_action_states
+                    .iter()
+                    .any(|a| a.action_id == *id)
+            });
+            if has_it && !state.driving {
                 let Some(work) = slot.work.take() else {
                     return;
                 };
@@ -617,34 +758,8 @@ impl<P: TrafficPolicy> Controller<P> {
             }
             return;
         }
-        if work.awaiting_ack {
-            if state.order_id == work.order_id {
-                work.awaiting_ack = false; // the robot has taken the order
-            } else if let Some(reason) = order_error(state, &work.order_id) {
-                // The robot refused the order (the state says so): give the job up.
-                let Some(work) = slot.work.take() else {
-                    return;
-                };
-                give_back(
-                    &mut self.policy,
-                    &mut self.lifts,
-                    &mut self.doors,
-                    i,
-                    &work.plan,
-                    work.released_through,
-                );
-                if work.purpose == Purpose::Job {
-                    self.rejected.push(Rejected {
-                        job: work.job,
-                        robot: slot.id.clone(),
-                        reason,
-                    });
-                }
-                self.dispatcher.given_up(i, work.purpose);
-                return;
-            } else {
-                return; // not answered yet
-            }
+        if work.awaiting_ack() {
+            return; // not answered yet
         }
         if state.order_id != work.order_id {
             return; // the robot has not taken the order yet
@@ -663,7 +778,8 @@ impl<P: TrafficPolicy> Controller<P> {
                 Purpose::Charge => {
                     // arrived at the charger: start charging; no job was done
                     send_instant(
-                        world,
+                        out,
+                        timestamp,
                         slot,
                         "startCharging",
                         &format!("charge-{}", work.order_id),
@@ -744,7 +860,7 @@ impl<P: TrafficPolicy> Controller<P> {
             let header = OrderHeader {
                 robot: &slot.id,
                 header_id: slot.header_id,
-                timestamp: &world.timestamp(),
+                timestamp,
                 order_id: &work.order_id,
                 order_update_id: work.update_id,
             };
@@ -753,25 +869,36 @@ impl<P: TrafficPolicy> Controller<P> {
                 .then_some((slot.id.manufacturer.as_str(), slot.series.as_str()));
             let msg = build_order_with(&self.graph, &header, &work.plan, from, rt, orient);
             slot.header_id += 1;
-            match deliver(world, msg) {
-                Ok(_) => {
+            match msg {
+                Some(msg) => {
+                    out.push(Message::Order(msg));
+                    work.unconfirmed.push_back(sent(
+                        &self.graph,
+                        state,
+                        work.update_id,
+                        from,
+                        changed,
+                        work.plan.edges[from..].to_vec(),
+                    ));
                     work.released_through = rt;
                     if changed {
                         self.reroutes += 1;
                     }
                 }
-                Err(reason) => {
-                    // the robot cannot drive the next part (e.g. a car-like robot
-                    // that cannot take the turn) or the changed route: give the job
-                    // up (S70)
-                    cancel_order(world, slot, reason);
-                }
+                // no message can be made for the next part or the changed route:
+                // give the job up, as for a refused update (S70)
+                None => cancel_order(out, timestamp, slot, ErrorType::ValidationFailure),
             }
         }
     }
 
     /// Call, release and send the lifts that robots use (see [`crate::lifts`]).
-    fn update_lifts(&mut self, world: &mut World, states: &[State]) {
+    fn update_lifts(
+        &mut self,
+        riders: &[Option<RobotId>],
+        states: &[State],
+        out: &mut Vec<Message>,
+    ) {
         let nodes: Vec<Option<NodeIdx>> = states.iter().map(|s| self.node_of(s)).collect();
         let ats = self.plan_positions(states);
         let robots: Vec<LiftRobot> = self
@@ -784,8 +911,8 @@ impl<P: TrafficPolicy> Controller<P> {
                 node: nodes[i],
             })
             .collect();
-        self.lifts.update(world, &robots);
-        self.doors.update(world, &ats);
+        self.lifts.update(riders, &robots, out);
+        self.doors.update(&ats, out);
     }
 
     /// The plan index of each robot's last node; `None` for a robot without a job.
@@ -826,7 +953,7 @@ impl<P: TrafficPolicy> Controller<P> {
     /// the robot's state shows it (disabled), send the `enableZoneSet` instant
     /// action. Each is sent once; the controller reads the answer from the state
     /// (which may be old, with a message delay).
-    fn update_zone_sets(&mut self, world: &mut World, states: &[State]) {
+    fn update_zone_sets(&mut self, states: &[State], timestamp: &str, out: &mut Vec<Message>) {
         let Some(zs) = self.zone_set.clone() else {
             return;
         };
@@ -836,24 +963,24 @@ impl<P: TrafficPolicy> Controller<P> {
             if status.is_none() && !slot.zone_set_sent {
                 let msg = serde_json::from_value(serde_json::json!({
                     "headerId": slot.zone_set_header_id,
-                    "timestamp": world.timestamp(),
-                    "version": botsim_core::world::PROTOCOL_VERSION,
+                    "timestamp": timestamp,
+                    "version": PROTOCOL_VERSION,
                     "manufacturer": slot.id.manufacturer,
                     "serialNumber": slot.id.serial_number,
                     "zoneSet": zs,
                 }));
                 slot.zone_set_header_id += 1;
                 slot.zone_set_sent = true;
-                // (the message has all its fields and the robot is in the world; if
-                // not, the robot gets no zone set)
+                // (the message has all its fields; if not, the robot gets no zone
+                // set)
                 if let Ok(msg) = msg {
-                    let _ = world.send_zone_set(&msg);
+                    out.push(Message::ZoneSet(msg));
                 }
             } else if status == Some(vda5050::state::EnabledStatus::Disabled) && !slot.enable_sent {
                 let msg = serde_json::from_value(serde_json::json!({
                     "headerId": slot.instant_header_id,
-                    "timestamp": world.timestamp(),
-                    "version": botsim_core::world::PROTOCOL_VERSION,
+                    "timestamp": timestamp,
+                    "version": PROTOCOL_VERSION,
                     "manufacturer": slot.id.manufacturer,
                     "serialNumber": slot.id.serial_number,
                     "actions": [{
@@ -866,7 +993,7 @@ impl<P: TrafficPolicy> Controller<P> {
                 slot.instant_header_id += 1;
                 slot.enable_sent = true;
                 if let Ok(msg) = msg {
-                    let _ = world.send_instant_actions(&msg);
+                    out.push(Message::InstantActions(msg));
                 }
             }
         }
@@ -875,10 +1002,10 @@ impl<P: TrafficPolicy> Controller<P> {
     /// Send the policy's answers to the RELEASE zone requests the robots state.
     fn answer_zone_requests(
         &mut self,
-        world: &mut World,
         states: &[State],
-        tick: u64,
-        elapsed: f64,
+        (tick, elapsed): (u64, f64),
+        timestamp: &str,
+        out: &mut Vec<Message>,
     ) {
         let answers = self.policy.zone_answers(&Fleet {
             tick,
@@ -898,22 +1025,28 @@ impl<P: TrafficPolicy> Controller<P> {
             }
             let msg: Result<Responses, _> = serde_json::from_value(serde_json::json!({
                 "headerId": slot.response_header_id,
-                "timestamp": world.timestamp(),
-                "version": botsim_core::world::PROTOCOL_VERSION,
+                "timestamp": timestamp,
+                "version": PROTOCOL_VERSION,
                 "manufacturer": slot.id.manufacturer,
                 "serialNumber": slot.id.serial_number,
                 "responses": mine,
             }));
             slot.response_header_id += 1;
             if let Ok(msg) = msg {
-                let _ = world.send_responses(&msg);
+                out.push(Message::Responses(msg));
             }
         }
     }
 
     /// Let the dispatcher give out tasks: waiting jobs, and trips to chargers and
     /// parking places. It acts through [`Orders`].
-    fn dispatch(&mut self, world: &mut World, states: &[State], tick: u64, elapsed: f64) {
+    fn dispatch(
+        &mut self,
+        states: &[State],
+        (tick, elapsed): (u64, f64),
+        timestamp: &str,
+        out: &mut Vec<Message>,
+    ) {
         let robots: Vec<botsim_dispatcher::Robot> = (0..self.robots.len())
             .map(|i| self.dispatch_view(i, &states[i]))
             .collect();
@@ -932,7 +1065,9 @@ impl<P: TrafficPolicy> Controller<P> {
             lifts: &mut self.lifts,
             doors: &mut self.doors,
             rejected: &mut self.rejected,
-            world,
+            tick,
+            timestamp,
+            out,
             states,
         };
         self.dispatcher
@@ -984,24 +1119,33 @@ struct Orders<'a, P: TrafficPolicy> {
     lifts: &'a mut LiftDesk,
     doors: &'a mut DoorDesk,
     rejected: &'a mut Vec<Rejected>,
-    world: &'a mut World,
+    tick: u64,
+    timestamp: &'a str,
+    /// The messages of the cycle.
+    out: &'a mut Vec<Message>,
     states: &'a [State],
 }
 
 impl<P: TrafficPolicy> Orders<'_, P> {
-    /// Does the route of `task` start at `from` and connect edge by edge, with the
-    /// pickup of a job on it?
+    /// Does the route of `task` start at `from` and connect edge by edge, and, for
+    /// a job, lead to its pickup node after `pickup_at` edges and end at its drop
+    /// node?
     fn connects(&self, from: NodeIdx, task: &Task) -> bool {
+        if task.from != from {
+            return false;
+        }
         let mut here = from;
-        task.from == from
-            && (task.purpose != Purpose::Job || task.pickup_at <= task.edges.len())
-            && task.edges.iter().all(|&e| match self.graph.edges.get(e) {
-                Some(edge) if edge.start == here => {
-                    here = edge.end;
-                    true
-                }
-                _ => false,
-            })
+        let mut pickup = (task.pickup_at == 0).then_some(from);
+        for (k, &e) in task.edges.iter().enumerate() {
+            match self.graph.edges.get(e) {
+                Some(edge) if edge.start == here => here = edge.end,
+                _ => return false,
+            }
+            if k + 1 == task.pickup_at {
+                pickup = Some(here);
+            }
+        }
+        task.purpose != Purpose::Job || (pickup == Some(task.job.pickup) && here == task.job.drop)
     }
 
     /// The route of `task` with its actions.
@@ -1014,7 +1158,6 @@ impl<P: TrafficPolicy> Orders<'_, P> {
 
     /// Place the route of a free robot with the traffic rules and send the order.
     fn assign(&mut self, i: usize, job: Job, mut plan: Plan, purpose: Purpose) -> Answer {
-        let tick = self.world.tick();
         let order_id = format!("{}-{}", order_prefix(purpose), job.id);
         let wanted = plan.released_through(0, self.policy.window());
         let wanted = self.lifts.window(i, &plan, 0, 0, wanted);
@@ -1055,7 +1198,7 @@ impl<P: TrafficPolicy> Orders<'_, P> {
         let header = OrderHeader {
             robot: &slot.id,
             header_id: slot.header_id,
-            timestamp: &self.world.timestamp(),
+            timestamp: self.timestamp,
             order_id: &order_id,
             order_update_id: 0,
         };
@@ -1064,23 +1207,26 @@ impl<P: TrafficPolicy> Orders<'_, P> {
             .then_some((slot.id.manufacturer.as_str(), slot.series.as_str()));
         let msg = build_order_with(self.graph, &header, &plan, 0, released_through, orient);
         slot.header_id += 1;
-        match deliver(self.world, msg) {
-            Ok(reception) => {
+        match msg {
+            Some(msg) => {
+                self.out.push(Message::Order(msg));
+                let order = sent(self.graph, &self.states[i], 0, 0, false, plan.edges.clone());
                 slot.work = Some(Work {
                     job,
                     plan,
                     order_id,
                     update_id: 0,
                     released_through,
-                    assigned_tick: tick,
+                    assigned_tick: self.tick,
                     waiting_seconds: 0.0,
                     purpose,
-                    awaiting_ack: reception == Reception::InTransit,
+                    unconfirmed: VecDeque::from([order]),
                     cancelling: None,
                 });
                 Answer::Taken
             }
-            Err(reason) => {
+            // no message can be made of this route
+            None => {
                 give_back(
                     self.policy,
                     self.lifts,
@@ -1093,7 +1239,7 @@ impl<P: TrafficPolicy> Orders<'_, P> {
                     self.rejected.push(Rejected {
                         job,
                         robot: slot.id.clone(),
-                        reason,
+                        reason: ErrorType::ValidationFailure,
                     });
                 }
                 Answer::Refused
@@ -1142,7 +1288,12 @@ impl<P: TrafficPolicy> Control for Orders<'_, P> {
             .as_ref()
             .filter(|w| takes_extension(w, i, state, self.lifts, self.doors))
             .and_then(|w| w.plan.nodes.get(w.released_through));
-        if task.purpose != Purpose::Job || !from.is_some_and(|&n| self.connects(n, &task)) {
+        // (a robot does not run the actions of the node an update starts at, so the
+        // pickup must lie beyond it)
+        if task.purpose != Purpose::Job
+            || task.pickup_at == 0
+            || !from.is_some_and(|&n| self.connects(n, &task))
+        {
             return Answer::Invalid;
         }
         let job = task.job;
@@ -1156,13 +1307,13 @@ impl<P: TrafficPolicy> Control for Orders<'_, P> {
         let plan = work.plan.continued(work.released_through, then);
         work.job = job;
         work.purpose = Purpose::Job;
-        work.assigned_tick = self.world.tick();
+        work.assigned_tick = self.tick;
         work.waiting_seconds = 0.0;
         work.update_id += 1;
         let header = OrderHeader {
             robot: &slot.id,
             header_id: slot.header_id,
-            timestamp: &self.world.timestamp(),
+            timestamp: self.timestamp,
             order_id: &work.order_id,
             order_update_id: work.update_id,
         };
@@ -1172,16 +1323,26 @@ impl<P: TrafficPolicy> Control for Orders<'_, P> {
         let from = work.released_through;
         let msg = build_order_with(self.graph, &header, &plan, from, from, orient);
         slot.header_id += 1;
-        match deliver(self.world, msg) {
-            Ok(_) => {
-                work.plan = plan;
+        match msg {
+            Some(msg) => {
+                self.out.push(Message::Order(msg));
+                let mut update = sent(
+                    self.graph,
+                    &self.states[i],
+                    work.update_id,
+                    from,
+                    false,
+                    plan.edges[from..].to_vec(),
+                );
+                update.plan_before = Some(std::mem::replace(&mut work.plan, plan));
+                work.unconfirmed.push_back(update);
                 self.policy.route_changed(i, &work.plan);
                 Answer::Taken
             }
-            // the robot refuses the route: cancel the order and give the job up, as
-            // for any refused update (S70)
-            Err(reason) => {
-                cancel_order(self.world, slot, reason);
+            // no message can be made of this route: cancel the order and give the
+            // job up, as for any refused update (S70)
+            None => {
+                cancel_order(self.out, self.timestamp, slot, ErrorType::ValidationFailure);
                 Answer::Refused
             }
         }
@@ -1190,7 +1351,8 @@ impl<P: TrafficPolicy> Control for Orders<'_, P> {
     fn charge_here(&mut self, i: usize, trip: usize) {
         if let Some(slot) = self.robots.get_mut(i).filter(|s| s.work.is_none()) {
             send_instant(
-                self.world,
+                self.out,
+                self.timestamp,
                 slot,
                 "startCharging",
                 &format!("charge-here-{trip}"),
@@ -1218,7 +1380,7 @@ fn takes_extension(
 ) -> bool {
     work.purpose == Purpose::Park
         && work.cancelling.is_none()
-        && !work.awaiting_ack
+        && !work.awaiting_ack()
         && state.order_id == work.order_id
         && !lifts.owns(i)
         && !doors.owns(i)
@@ -1253,37 +1415,37 @@ fn route_views(robots: &[Slot]) -> Vec<Option<RouteView<'_>>> {
         .collect()
 }
 
-/// Send an order message to its robot: `Ok` with `Accepted` or `InTransit`, or the
-/// error type if the robot refused it, if there is no message (it could not be
-/// built), or if the robot is unknown to the world.
-fn deliver(world: &mut World, msg: Option<Order>) -> Result<Reception, ErrorType> {
-    let msg = msg.ok_or(ErrorType::ValidationFailure)?;
-    match world.send_order(&msg) {
-        Ok(Reception::Rejected(reason)) => Err(reason),
-        Ok(reception) => Ok(reception),
-        Err(_) => Err(ErrorType::ValidationFailure),
+/// The robot refused an update of its order: tell it to cancel the order (it brakes
+/// to the next node and stops), and note that the job is to be given up once it has
+/// stopped (see `Work::cancelling`). If the message cannot be built, the robot
+/// waits at the end of what it was given and the job is still given up.
+fn cancel_order(out: &mut Vec<Message>, timestamp: &str, slot: &mut Slot, reason: ErrorType) {
+    let Some(order_id) = slot.work.as_ref().map(|w| w.order_id.clone()) else {
+        return;
+    };
+    let action_id = format!("cancel-{order_id}");
+    let sent = send_instant(out, timestamp, slot, "cancelOrder", &action_id);
+    if let Some(work) = slot.work.as_mut() {
+        work.cancelling = Some(Cancelling {
+            reason,
+            action: sent.then_some(action_id),
+        });
     }
 }
 
-/// The robot refused an update of its order: tell it to cancel the order (it brakes
-/// to the next node and stops), and note that the job is to be given up once it has
-/// stopped (see `Work::cancelling`). If the message cannot be built or sent, the
-/// robot waits at the end of what it was given and the job is still given up.
-fn cancel_order(world: &mut World, slot: &mut Slot, reason: ErrorType) {
-    let Some(work) = slot.work.as_mut() else {
-        return;
-    };
-    work.cancelling = Some(reason);
-    let action_id = format!("cancel-{}", work.order_id);
-    send_instant(world, slot, "cancelOrder", &action_id);
-}
-
-/// Send one instant action (no parameters) to the robot of `slot`.
-fn send_instant(world: &mut World, slot: &mut Slot, action_type: &str, action_id: &str) {
+/// Send one instant action (no parameters) to the robot of `slot`; `false` if the
+/// message cannot be built.
+fn send_instant(
+    out: &mut Vec<Message>,
+    timestamp: &str,
+    slot: &mut Slot,
+    action_type: &str,
+    action_id: &str,
+) -> bool {
     let message = serde_json::from_value(serde_json::json!({
         "headerId": slot.instant_header_id,
-        "timestamp": world.timestamp(),
-        "version": botsim_core::world::PROTOCOL_VERSION,
+        "timestamp": timestamp,
+        "version": PROTOCOL_VERSION,
         "manufacturer": slot.id.manufacturer,
         "serialNumber": slot.id.serial_number,
         "actions": [{
@@ -1293,25 +1455,83 @@ fn send_instant(world: &mut World, slot: &mut Slot, action_type: &str, action_id
         }],
     }));
     slot.instant_header_id += 1;
-    if let Ok(msg) = message {
-        let _ = world.send_instant_actions(&msg);
+    match message {
+        Ok(msg) => {
+            out.push(Message::InstantActions(msg));
+            true
+        }
+        Err(_) => false,
     }
 }
 
-/// The error type of an error in `state` that names the order `order_id`: the
-/// robot has refused that order (VDA 5050 puts the `orderId` in the references).
-fn order_error(state: &State, order_id: &str) -> Option<ErrorType> {
-    let e = state.errors.iter().find(|e| {
+/// The note on an order or update that names `edges`, made when the robot reports
+/// `state`.
+fn sent(
+    graph: &Graph,
+    state: &State,
+    update_id: u32,
+    released_before: usize,
+    rerouted: bool,
+    edges: Vec<EdgeIdx>,
+) -> Sent {
+    let orientation_errors = orientation_errors(graph, state, &edges);
+    Sent {
+        update_id,
+        released_before,
+        plan_before: None,
+        rerouted,
+        edges,
+        orientation_errors,
+    }
+}
+
+/// Is this an `ORIENTATION_UNREACHABLE` error that names one of `edges`?
+fn names_orientation(graph: &Graph, error: &StateError, edges: &[EdgeIdx]) -> bool {
+    error.error_type == ErrorType::OrientationUnreachable.as_str()
+        && error.error_references.iter().flatten().any(|r| {
+            r.reference_key == "edgeId"
+                && edges.iter().any(|&e| {
+                    graph
+                        .edges
+                        .get(e)
+                        .is_some_and(|e| e.id == r.reference_value)
+                })
+        })
+}
+
+/// How many errors of `state` say that an orientation on one of `edges` cannot be
+/// taken.
+fn orientation_errors(graph: &Graph, state: &State, edges: &[EdgeIdx]) -> usize {
+    state
+        .errors
+        .iter()
+        .filter(|e| names_orientation(graph, e, edges))
+        .count()
+}
+
+/// The error type of an error in `state` that says the robot has refused an order
+/// or update of `work` not yet confirmed: an error that names the order (VDA 5050
+/// puts the `orderId` in the references), or a new `ORIENTATION_UNREACHABLE` error
+/// for an edge sent (it names only the edge).
+fn refusal(graph: &Graph, state: &State, work: &Work) -> Option<ErrorType> {
+    if work.unconfirmed.is_empty() {
+        return None;
+    }
+    let error = state.errors.iter().find(|e| {
         e.error_references
             .iter()
             .flatten()
-            .any(|r| r.reference_key == "orderId" && r.reference_value == order_id)
+            .any(|r| r.reference_key == "orderId" && r.reference_value == work.order_id)
+            || work.unconfirmed.iter().any(|s| {
+                names_orientation(graph, e, &s.edges)
+                    && orientation_errors(graph, state, &s.edges) > s.orientation_errors
+            })
     })?;
     Some(
         ErrorType::ALL
             .iter()
             .copied()
-            .find(|t| t.as_str() == e.error_type)
+            .find(|t| t.as_str() == error.error_type)
             .unwrap_or(ErrorType::ValidationFailure),
     )
 }

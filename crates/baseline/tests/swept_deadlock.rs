@@ -3,13 +3,14 @@
 //! (M1, a station siding: nobody holds the node B wants).
 
 use botsim_baseline::conflicts::{ConflictInput, NodeConflictInput};
-use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
-use botsim_core::waiting::{Wait, WaitReason};
+use botsim_core::waiting::Wait;
 use botsim_core::world::World;
 use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_model::waiting::WaitReason;
 use vda5050::factsheet::Factsheet;
 
 mod common;
@@ -38,7 +39,7 @@ fn a_cycle_through_a_node_edge_wait_is_reported_as_a_deadlock() {
         .unwrap();
     w.add_robot(b.clone(), spec, times, s, -up / 2.0).unwrap();
     w.set_deadlock_timeout(10.0);
-    let mut ctl = Controller::new(&w);
+    let mut ctl = bridge::controller(&w);
     ctl.set_conflicts(&[ConflictInput {
         type_a: "ACME/X1".into(),
         type_b: "ACME/X1".into(),
@@ -59,7 +60,7 @@ fn a_cycle_through_a_node_edge_wait_is_reported_as_a_deadlock() {
     };
     let mut jobs = Some(vec![job(1, x, s), job(2, s, y)]);
     for _ in 0..(40.0 / DT) as usize {
-        ctl.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut ctl, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     assert!(ctl.completed().is_empty(), "both are stuck");

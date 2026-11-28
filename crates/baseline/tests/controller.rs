@@ -1,4 +1,5 @@
 use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::jobs::JobGenerator;
 use botsim_core::world::World;
@@ -70,7 +71,7 @@ fn job(g: &Graph, id: u64, pickup: &str, drop: &str) -> Job {
 fn run(w: &mut World, c: &mut Controller, jobs: Vec<Job>, ticks: u64) {
     let mut jobs = Some(jobs);
     for _ in 0..ticks {
-        c.step(w, jobs.take().unwrap_or_default());
+        bridge::step(c, w, jobs.take().unwrap_or_default());
         w.step();
     }
 }
@@ -84,7 +85,7 @@ fn one_robot_does_one_job() {
     let g = chain();
     let j = job(&g, 1, "N2", "N5");
     let mut w = world(g, &["N0"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     run(&mut w, &mut c, vec![j], 6000);
 
     assert_eq!(completed_ids(&c), vec![1]);
@@ -108,7 +109,7 @@ fn the_nearest_free_robot_gets_the_job() {
     let j = job(&g, 1, "N5", "N6");
     // R-1 on N0 is 25 m from the pickup, R-2 on N4 only 5 m
     let mut w = world(g, &["N0", "N4"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     run(&mut w, &mut c, vec![j], 6000);
     assert_eq!(c.completed().len(), 1);
     assert_eq!(c.completed()[0].robot, RobotId::new("ACME", "R-2"));
@@ -120,7 +121,7 @@ fn equal_distance_goes_to_the_robot_added_first() {
     let j = job(&g, 1, "N2", "N3");
     // two robots on the same node: the same distance
     let mut w = world(g, &["N0", "N0"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     run(&mut w, &mut c, vec![j], 6000);
     assert_eq!(c.completed()[0].robot, RobotId::new("ACME", "R-1"));
 }
@@ -136,7 +137,7 @@ fn jobs_are_served_in_order_and_an_unreachable_job_does_not_block_others() {
         job(&g, 3, "N3", "N4"),
     ];
     let mut w = world(g, &["N0"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     run(&mut w, &mut c, jobs, 8000);
     assert_eq!(completed_ids(&c), vec![1, 3]);
     assert_eq!(c.pending().map(|j| j.id).collect::<Vec<_>>(), vec![2]);
@@ -151,7 +152,7 @@ fn two_robots_work_in_parallel_and_a_busy_robot_gets_no_second_job() {
         job(&g, 3, "N2", "N3"),
     ];
     let mut w = world(g, &["N0", "N2"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     run(&mut w, &mut c, jobs, 1);
     // after the first cycle both robots have a job and the third job waits
     assert_eq!(c.busy(), 2);
@@ -170,7 +171,7 @@ fn many_generated_jobs_all_get_done_and_the_run_is_repeatable() {
             .collect();
         let mut gen_ = JobGenerator::new(7, &nodes, 120.0, DT).unwrap();
         let mut w = world(g, &["N0", "N2"]);
-        let mut c = Controller::new(&w);
+        let mut c = bridge::controller(&w);
         // jobs for 10 minutes (about 20), then 30 more minutes to finish
         for t in 0..48_000u64 {
             let new: Vec<Job> = if t < 12_000 {
@@ -178,7 +179,7 @@ fn many_generated_jobs_all_get_done_and_the_run_is_repeatable() {
             } else {
                 vec![]
             };
-            c.step(&mut w, new);
+            bridge::step(&mut c, &mut w, new);
             w.step();
         }
         (
@@ -206,15 +207,15 @@ fn job_with_cycle(cycle: u64) -> (Controller, f64) {
     let g = chain();
     let j = job(&g, 1, "N2", "N5");
     let mut w = world(g, &["N0"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(vec![j]);
     for t in 0..12_000u64 {
         if t % cycle == 0 {
-            c.step(&mut w, jobs.take().unwrap_or_default());
+            bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         }
         w.step();
     }
-    c.step(&mut w, vec![]);
+    bridge::step(&mut c, &mut w, vec![]);
     (c, w.time())
 }
 

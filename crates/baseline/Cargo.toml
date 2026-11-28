@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-botsim-core = { path = "../core" }
 botsim-dispatcher = { path = "../dispatcher" }
 botsim-model = { path = "../model" }
 botsim-router = { path = "../router" }
@@ -16,4 +15,6 @@ serde_json = "1.0.154"
 vda5050 = "0.1.0"
 
 [dev-dependencies]
+botsim-bridge = { path = "../bridge" }
+botsim-core = { path = "../core" }
 vdma-lif = "0.1.0"

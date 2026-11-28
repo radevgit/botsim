@@ -16,7 +16,7 @@
 
 use std::collections::HashSet;
 
-use botsim_core::zones::Zones;
+use botsim_model::zones::Zones;
 use vda5050::responses::GrantType;
 use vda5050::state::{ZoneRequest, ZoneRequestType};
 

@@ -27,7 +27,6 @@ use vda5050::order::Order;
 use vda5050::state::State;
 
 use crate::actions::ActionTimes;
-use crate::collision::{Body, gap, overlap, place};
 use crate::deadlock::{DEFAULT_TIMEOUT_SECONDS, DeadlockDetector};
 use crate::disturbances::{DisturbanceError, StopGenerator, StopSpec, check_duration_variation};
 use crate::door::{Door, DoorError, DoorSpec, DoorStatus};
@@ -35,20 +34,20 @@ use crate::drive::Phase;
 use crate::drive::{DriveError, Glance, Pose};
 use crate::jobs::Rng;
 use crate::lift::{Lift, LiftError, LiftSpec, LiftStatus};
-use crate::metrics::stands_waiting;
-use crate::observer::{Blocking, Observer, Reservation, RobotSnapshot, RobotStatus, Snapshot};
+use crate::observer::{Blocking, Observer, RobotSnapshot, RobotStatus, Snapshot};
 use crate::robot::{Reception, Robot, START_NODE_TOLERANCE};
 use crate::state_report::Header;
-use crate::waiting::{HeldBack, Place, Wait, WaitReason, WaitTotal};
+use crate::waiting::{Place, Wait, WaitTotal};
 use crate::zone_requests::ZoneRequestTiming;
-use crate::zones::Zones;
+use botsim_model::collision::{Body, gap, overlap, place};
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::protocol::PROTOCOL_VERSION;
+use botsim_model::reservation::Reservation;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
 use botsim_model::time::iso8601;
-
-/// VDA 5050 version written in the headers.
-pub const PROTOCOL_VERSION: &str = "3.0.1";
+use botsim_model::waiting::{HeldBack, WaitReason, stands_waiting};
+use botsim_model::zones::Zones;
 
 /// A robot that the protective field stops again within this time after it last held
 /// it is still in the same safety stop (see [`World::safety_stops`]).

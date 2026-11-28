@@ -19,9 +19,9 @@
 //! **Edge orientation** ([`build_order_with`]): for omnidirectional robots each edge
 //! carries the LIF's orientation for the type. Not yet: `maximumSpeed`.
 
-use botsim_core::world::PROTOCOL_VERSION;
 use botsim_model::graph::{EdgeIdx, EdgeOrientation, Graph, NodeIdx};
 use botsim_model::job::Job;
+use botsim_model::protocol::PROTOCOL_VERSION;
 use botsim_model::robot::RobotId;
 use botsim_router::route::shortest_path;
 use vda5050::order::{Action, BlockingType, Edge, Node, Order, OrientationType};

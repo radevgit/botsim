@@ -2,9 +2,9 @@
 //! that checking every pair finds, in the same order.
 
 use botsim_core::actions::ActionTimes;
-use botsim_core::collision::{overlap, place};
 use botsim_core::jobs::Rng;
 use botsim_core::world::World;
+use botsim_model::collision::{overlap, place};
 use botsim_model::graph::Graph;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;

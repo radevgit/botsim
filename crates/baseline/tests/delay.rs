@@ -2,6 +2,7 @@
 //! its orders arrive late.
 
 use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
@@ -55,10 +56,10 @@ fn job(g: &Graph, id: u64, pickup: &str, drop: &str) -> Job {
 
 /// Run the jobs for `ticks` cycles; the tick each job was finished at.
 fn run(w: &mut World, jobs: Vec<Job>, ticks: u64) -> (Controller, Vec<(u64, u64)>) {
-    let mut c = Controller::new(w);
+    let mut c = bridge::controller(w);
     let mut jobs = Some(jobs);
     for _ in 0..ticks {
-        c.step(w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, w, jobs.take().unwrap_or_default());
         w.step();
     }
     let done = c
@@ -92,18 +93,18 @@ fn an_order_that_has_not_arrived_is_not_mistaken_for_a_finished_job() {
     // while after a new job was assigned; the job must not be counted as done then
     let g = ring();
     let mut w = world(&["N0"], 40);
-    let mut c = Controller::new(&w);
-    c.step(&mut w, vec![job(&g, 1, "N0", "N1")]);
+    let mut c = bridge::controller(&w);
+    bridge::step(&mut c, &mut w, vec![job(&g, 1, "N0", "N1")]);
     for _ in 0..30 {
         w.step();
-        c.step(&mut w, vec![]);
+        bridge::step(&mut c, &mut w, vec![]);
     }
     assert!(c.completed().is_empty());
     assert_eq!(c.busy(), 1);
     // and it gets done in the end
     for _ in 0..6000 {
         w.step();
-        c.step(&mut w, vec![]);
+        bridge::step(&mut c, &mut w, vec![]);
     }
     assert_eq!(c.completed().len(), 1);
 }

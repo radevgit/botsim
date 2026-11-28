@@ -1,5 +1,5 @@
-use botsim_core::zones::{ZoneError, Zones};
 use botsim_model::graph::Graph;
+use botsim_model::zones::{ZoneError, Zones};
 use vda5050::zone_set::{ZoneKind, ZoneSet};
 use vdma_lif::Lif;
 

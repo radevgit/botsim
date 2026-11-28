@@ -4,7 +4,7 @@
 //! the second robot waits.
 
 use botsim_baseline::conflicts::{ConflictInput, NodeNodeConflictInput};
-use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::job::Job;
@@ -57,7 +57,7 @@ fn run(node_node_conflicts: bool) -> (usize, usize) {
     .unwrap();
     // only the rules keep the robots apart
     w.set_safety_stop(false);
-    let mut ctl = Controller::new(&w);
+    let mut ctl = bridge::controller(&w);
     // the table needs a (here empty) edge-edge input for the type
     ctl.set_conflicts(&[ConflictInput {
         type_a: "ACME/X1".into(),
@@ -80,7 +80,7 @@ fn run(node_node_conflicts: bool) -> (usize, usize) {
     };
     let mut jobs = Some(vec![job(1, a, b), job(2, c, d)]);
     for _ in 0..(120.0 / DT) as usize {
-        ctl.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut ctl, &mut w, jobs.take().unwrap_or_default());
         w.step();
     }
     (ctl.completed().len(), w.collisions().len())

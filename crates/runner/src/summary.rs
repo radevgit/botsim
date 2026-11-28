@@ -298,7 +298,7 @@ pub fn run_with(
     world: World,
     measure_time: bool,
 ) -> Result<Summary, ScenarioError> {
-    run_controller(scenario, world, measure_time, Controller::new)
+    run_controller(scenario, world, measure_time, botsim_bridge::controller)
 }
 
 /// Like [`run`], with the traffic rules of `policy` instead of the baseline's: the
@@ -314,7 +314,7 @@ pub fn run_with_policy(
     policy: Box<dyn TrafficPolicy>,
 ) -> Result<Summary, ScenarioError> {
     run_controller(scenario, world, false, |w| {
-        Controller::with_policy(w, policy)
+        botsim_bridge::with_policy(w, policy)
     })
 }
 
@@ -359,7 +359,7 @@ fn run_controller<P: TrafficPolicy>(
         if let (Some(g), Some(c)) = (generator.as_mut(), controller.as_mut()) {
             let new: Vec<Job> = g.step(world.tick()).into_iter().collect();
             created += new.len();
-            clock.time(measure_time, || c.step(&mut world, new));
+            clock.time(measure_time, || botsim_bridge::step(c, &mut world, new));
         }
         world.step();
         if scenario.stop_at_first_deadlock && !world.deadlocks().is_empty() {
@@ -369,7 +369,7 @@ fn run_controller<P: TrafficPolicy>(
     }
     if let Some(c) = controller.as_mut() {
         // see jobs that finished in the last step
-        clock.time(measure_time, || c.step(&mut world, []));
+        clock.time(measure_time, || botsim_bridge::step(c, &mut world, []));
     }
     let (jobs, metrics) = match &controller {
         Some(c) => {

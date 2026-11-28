@@ -1,7 +1,7 @@
 //! The baseline controller with robots that drive through nodes (S66): its window
 //! of released nodes is wide enough for them to keep going.
 
-use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
@@ -55,11 +55,11 @@ fn run(pass_through: bool, delay: u64) -> (u64, usize, Vec<f64>) {
     .unwrap();
     w.set_pass_through(pass_through);
     w.set_message_delay(delay);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let mut jobs = Some(vec![job]);
     let mut top_between = Vec::new();
     for _ in 0..20000 {
-        c.step(&mut w, jobs.take().unwrap_or_default());
+        bridge::step(&mut c, &mut w, jobs.take().unwrap_or_default());
         w.step();
         // the speed while the robot is in the middle of the line
         let x = w.pose(&id).unwrap().x;

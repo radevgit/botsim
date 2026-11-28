@@ -2,6 +2,7 @@
 //! up at the end of its released route for too long gets a route around it.
 
 use botsim_baseline::controller::{Controller, REROUTE_AFTER_SECONDS};
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
@@ -83,7 +84,7 @@ fn job(g: &Graph, id: u64, pickup: &str, drop: &str) -> Job {
 fn run(w: &mut World, c: &mut Controller, jobs: Vec<Job>, seconds: f64) -> Vec<(u64, f64)> {
     let mut jobs = Some(jobs);
     for _ in 0..(seconds / DT) as u64 {
-        c.step(w, jobs.take().unwrap_or_default());
+        bridge::step(c, w, jobs.take().unwrap_or_default());
         w.step();
     }
     c.completed()
@@ -98,7 +99,7 @@ fn a_robot_held_up_by_an_idle_robot_goes_round_it_after_the_timeout() {
     let g = streets(false, true);
     let j = job(&g, 1, "A", "D");
     let mut w = world(g, &["A", "B"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let done = run(&mut w, &mut c, vec![j], 120.0);
 
     assert_eq!(done.len(), 1, "the job is done");
@@ -121,7 +122,7 @@ fn a_short_wait_is_not_re_routed() {
     let g = streets(false, true);
     let jobs = vec![job(&g, 1, "B", "G"), job(&g, 2, "A", "D")];
     let mut w = world_with(g, &["B", "A"], 2.0);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let done = run(&mut w, &mut c, jobs, 120.0);
     assert_eq!(done.len(), 2);
     assert_eq!(c.reroutes(), 0);
@@ -133,7 +134,7 @@ fn without_another_way_the_robot_keeps_waiting() {
     let g = streets(false, false);
     let j = job(&g, 1, "A", "D");
     let mut w = world(g, &["A", "B"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let done = run(&mut w, &mut c, vec![j], 90.0);
     assert!(done.is_empty());
     assert_eq!(c.reroutes(), 0);
@@ -148,7 +149,7 @@ fn a_new_route_keeps_the_stops_and_actions_of_the_job() {
     let g = streets(true, true);
     let jobs = vec![job(&g, 1, "B", "B"), job(&g, 2, "C", "D")];
     let mut w = world(g, &["A", "B"]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     let done = run(&mut w, &mut c, jobs, 120.0);
     assert_eq!(done.iter().filter(|(j, _)| *j == 2).count(), 1, "{done:?}");
     assert_eq!(c.reroutes(), 1);
@@ -177,7 +178,7 @@ fn the_same_run_gives_the_same_result() {
         let g = streets(true, true);
         let jobs = vec![job(&g, 1, "B", "B"), job(&g, 2, "C", "D")];
         let mut w = world(g, &["A", "B"]);
-        let mut c = Controller::new(&w);
+        let mut c = bridge::controller(&w);
         run(&mut w, &mut c, jobs, 120.0)
     };
     assert_eq!(once(), once());

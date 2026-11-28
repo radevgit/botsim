@@ -35,10 +35,10 @@ use crate::errors::RobotError;
 use crate::order_route::route_from_order;
 use crate::state_report::{Header, InstantActionState, build_state};
 use crate::zone_requests::{ZoneRequestTiming, ZoneRequester};
-use crate::zones::Zones;
 use botsim_model::errors::ErrorType;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::spec::RobotSpec;
+use botsim_model::zones::Zones;
 
 /// How close (metres) the robot must be to the first node of a new order.
 pub const START_NODE_TOLERANCE: f64 = 0.1;
@@ -348,7 +348,7 @@ impl Robot {
             }),
             Err(e) => {
                 let t = match e {
-                    crate::zones::ZoneError::UnknownMap(_) => ErrorType::UnknownMapId,
+                    botsim_model::zones::ZoneError::UnknownMap(_) => ErrorType::UnknownMapId,
                     _ => ErrorType::ValidationFailure,
                 };
                 self.zone_set_errors.push((refuse(t, e.to_string()), until));

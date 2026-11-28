@@ -2,6 +2,7 @@
 //! given edges its type may use, and jobs go to robots that can do them.
 
 use botsim_baseline::controller::Controller;
+use botsim_bridge as bridge;
 use botsim_core::actions::ActionTimes;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
@@ -103,7 +104,7 @@ fn run(w: &mut World, c: &mut Controller, jobs: Vec<Job>, seconds: f64) -> Vec<b
     let n = w.robot_ids().count();
     let mut via_e = vec![false; n];
     for _ in 0..(seconds / DT) as u64 {
-        c.step(w, jobs.take().unwrap_or_default());
+        bridge::step(c, w, jobs.take().unwrap_or_default());
         w.step();
         for (i, seen) in via_e.iter_mut().enumerate() {
             let p = w.pose(&id(i + 1)).unwrap();
@@ -120,7 +121,7 @@ fn each_type_gets_a_route_over_the_edges_it_may_use() {
         let g = layout(true);
         let j = job(&g, 1, "A", "D");
         let mut w = world(g, &[(series, "A")]);
-        let mut c = Controller::new(&w);
+        let mut c = bridge::controller(&w);
         let via_e = run(&mut w, &mut c, vec![j], 120.0);
         assert_eq!(c.completed().len(), 1, "{series}");
         assert_eq!(via_e[0], goes_round, "{series}");
@@ -136,7 +137,7 @@ fn a_job_goes_to_the_robot_that_can_do_it_even_if_another_is_nearer() {
     let g = layout(false);
     let j = job(&g, 1, "A", "D");
     let mut w = world(g, &[("Y2", "A"), ("X1", "A")]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     run(&mut w, &mut c, vec![j], 120.0);
     let done = c.completed();
     assert_eq!(done.len(), 1, "{:?}", c.rejected());
@@ -150,7 +151,7 @@ fn a_job_no_robot_type_can_do_waits_and_is_not_refused() {
     let g = layout(false);
     let j = job(&g, 1, "A", "D");
     let mut w = world(g, &[("Y2", "A")]);
-    let mut c = Controller::new(&w);
+    let mut c = bridge::controller(&w);
     run(&mut w, &mut c, vec![j], 30.0);
     assert!(c.completed().is_empty());
     assert!(c.rejected().is_empty());
@@ -164,7 +165,7 @@ fn the_same_run_gives_the_same_result() {
         let g = layout(true);
         let jobs = vec![job(&g, 1, "A", "D"), job(&g, 2, "A", "C")];
         let mut w = world(g, &[("Y2", "A"), ("X1", "B")]);
-        let mut c = Controller::new(&w);
+        let mut c = bridge::controller(&w);
         run(&mut w, &mut c, jobs, 120.0);
         c.completed()
             .iter()
