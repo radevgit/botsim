@@ -1,6 +1,6 @@
 //! Waiting: when a robot counts as waiting, and what a controller says about a
 //! robot it holds back. The controller asks the first of state reports
-//! (`botsim_link::state::State::is_waiting`); the simulator (`botsim_core::waiting`)
+//! (`botsim_link::state::State::is_waiting`); the simulator (`botsim_sim::waiting`)
 //! uses both to decide who waits for whom.
 //!
 //! **Waiting** (user decision S32): the time a robot **stands still while it has a

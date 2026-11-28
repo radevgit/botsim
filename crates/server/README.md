@@ -29,7 +29,8 @@ order, and the states of the lifts (who is in them). The result (`cycle::Output`
 holds the messages to robots, doors and lifts in the order to send them, why each
 robot is held back, and the reservations if somebody watches.
 
-To run it against the simulator use [botsim-bridge](../bridge/README.md).
+To run it against the simulator use the [command line crate](../runner/README.md)
+`botsim`, which connects the two.
 
 A refusal of an order shows only in the robot's state; see the
 [rules](../../docs/rules.md), §1a.

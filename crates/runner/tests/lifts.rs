@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 
 use botsim::scenario::{Scenario, ScenarioError};
 use botsim::summary;
-use botsim_core::lift::DoorState;
+use botsim_sim::lift::DoorState;
 
-#[path = "../../core/tests/vda_port/mod.rs"]
+#[path = "../../sim/tests/vda_port/mod.rs"]
 mod vda_port;
 use vda_port::VdaWorld;
 
@@ -45,7 +45,7 @@ door_open_seconds = 3.0
 door_close_seconds = 3.0
 "#;
 
-fn build(text: &str) -> Result<botsim_core::world::World, ScenarioError> {
+fn build(text: &str) -> Result<botsim_sim::world::World, ScenarioError> {
     Scenario::from_toml(text)?.build_world(&data())
 }
 
@@ -102,8 +102,8 @@ fn lift_with_stops(stops: &str) -> String {
 
 #[test]
 fn stops_make_a_ride_possible_and_a_robot_rides_to_the_other_map() {
-    use botsim_core::drive::Phase;
     use botsim_model::robot::RobotId;
+    use botsim_sim::drive::Phase;
 
     let text = scenario(&lift_with_stops(r#"[{ node = "N2" }, { node = "N102" }]"#));
     let mut w = build(&text).unwrap();
@@ -120,7 +120,7 @@ fn stops_make_a_ride_possible_and_a_robot_rides_to_the_other_map() {
     .unwrap();
     assert_eq!(
         w.send_order(&order),
-        Ok(botsim_core::robot::Reception::Accepted)
+        Ok(botsim_sim::robot::Reception::Accepted)
     );
     w.call_lift("L1", "Map_Z-Level_1").unwrap();
     // the robot drives 11 m, gets in, and waits for the cabin to be sent
@@ -281,8 +281,8 @@ fn lifts_appear_in_the_observer_snapshots() {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use botsim_core::observer::{Observer, Snapshot};
     use botsim_model::graph::Graph;
+    use botsim_sim::observer::{Observer, Snapshot};
 
     #[derive(Debug)]
     struct Recorder(Rc<RefCell<Vec<Snapshot>>>);

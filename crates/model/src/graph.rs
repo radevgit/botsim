@@ -1,6 +1,7 @@
 //! Track graph built from one LIF layout: nodes with positions and map (floor),
-//! directed straight edges with lengths. Geometry only; per-robot-type edge rules
-//! (speed, orientation, rotation) are added in later steps.
+//! directed edges with lengths, and what the layout says per robot type (who may
+//! use a node or edge; an edge's speed limit, orientation, rotation rules and
+//! curved trajectory).
 
 use std::collections::HashMap;
 use std::fmt;

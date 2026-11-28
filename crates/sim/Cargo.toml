@@ -1,0 +1,23 @@
+[package]
+name = "botsim-sim"
+description = "Headless simulator of mixed robot fleets executing VDA 5050 orders on a LIF layout"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+botsim-link = { path = "../link" }
+botsim-model = { path = "../model" }
+aabb = "0.8.0"
+togo = "0.8.0"
+# (the factsheets of the setup)
+vda5050 = "0.1.0"
+vdma-lif = "0.1.0"
+
+[dev-dependencies]
+# (the tests translate between VDA 5050 and the simulator's messages)
+botsim-vda = { path = "../vda" }
+jsonschema = "0.61.2"
+serde_json = "1.0.154"

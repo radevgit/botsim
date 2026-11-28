@@ -8,8 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-botsim-core = { path = "../core" }
 botsim-model = { path = "../model" }
+botsim-sim = { path = "../sim" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 

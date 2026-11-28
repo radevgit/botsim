@@ -1,4 +1,4 @@
-//! The protective field (S54). The safety stop itself is tested in `botsim-core`.
+//! The protective field (S54). The safety stop itself is tested in `botsim-sim`.
 
 use botsim_model::safety::{FIELD_MARGIN, LATERAL_MARGIN, protective_field};
 use botsim_model::spec::{RobotSpec, Shape};

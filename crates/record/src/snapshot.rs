@@ -1,12 +1,12 @@
 //! Lines 2 and following of a recording: one snapshot per line.
 
-use botsim_core::door::DoorStatus;
-use botsim_core::lift::{Call, DoorState, LiftStatus};
-use botsim_core::observer::{Blocking, RobotSnapshot, RobotStatus, Snapshot};
-use botsim_core::waiting::Wait;
 use botsim_model::reservation::Reservation;
 use botsim_model::spec::Shape;
 use botsim_model::waiting::WaitReason;
+use botsim_sim::door::DoorStatus;
+use botsim_sim::lift::{Call, DoorState, LiftStatus};
+use botsim_sim::observer::{Blocking, RobotSnapshot, RobotStatus, Snapshot};
+use botsim_sim::waiting::Wait;
 use serde::{Deserialize, Serialize};
 
 /// The world after one step. Robots are referred to by their position in
@@ -58,7 +58,7 @@ pub struct RobotRecord {
     pub waiting: Option<WaitRecord>,
 }
 
-/// One robot's wait in one step (`botsim_core::waiting::Wait`).
+/// One robot's wait in one step (`botsim_sim::waiting::Wait`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WaitRecord {
     /// The robot it waits for, by its position in [`SnapshotLine::robots`]; `null`
@@ -87,7 +87,7 @@ pub enum ShapeRecord {
     Circle([f64; 3]),
 }
 
-/// Same variants as `botsim_core::observer::RobotStatus`.
+/// Same variants as `botsim_sim::observer::RobotStatus`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StatusRecord {
     Idle,

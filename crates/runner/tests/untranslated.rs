@@ -1,6 +1,6 @@
 //! A run translates nothing between the world and the controller, so there is
 //! nothing in the summary about it, also for a zone set that a connection through
-//! VDA 5050 would refuse (`botsim-bridge`, `tests/untranslated.rs`).
+//! VDA 5050 would refuse (`botsim`, `tests/vda_route_untranslated.rs`).
 
 use std::path::{Path, PathBuf};
 

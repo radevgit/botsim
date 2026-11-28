@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use botsim::scenario::Scenario;
 use botsim::summary;
-use botsim_core::observer::{Observer, Snapshot};
 use botsim_model::graph::Graph;
+use botsim_sim::observer::{Observer, Snapshot};
 
 #[derive(Debug)]
 struct Recorder(Rc<RefCell<Vec<Snapshot>>>);
@@ -66,9 +66,9 @@ fn a_mixed_fleet_keeps_to_what_its_types_may_use() {
     let log = log.borrow();
     assert!(log.len() > 1000);
     let on_cross_aisle =
-        |p: &botsim_core::drive::Pose| (p.x - 20.0).abs() < 1e-6 && p.y > 0.5 && p.y < 19.5;
+        |p: &botsim_sim::drive::Pose| (p.x - 20.0).abs() < 1e-6 && p.y > 0.5 && p.y < 19.5;
     let on_ramp =
-        |p: &botsim_core::drive::Pose| (p.x - 40.0).abs() < 1e-6 && p.y > 0.5 && p.y < 19.5;
+        |p: &botsim_sim::drive::Pose| (p.x - 40.0).abs() < 1e-6 && p.y > 0.5 && p.y < 19.5;
     let mut x_on_cross_aisle = false;
     let mut y_top_speed_on_ramp: f64 = 0.0;
     let mut x_top_speed_on_ramp: f64 = 0.0;

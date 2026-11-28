@@ -1,9 +1,9 @@
 //! Shortest route between two nodes (Dijkstra on edge length).
 //!
 //! Edges are directed. Ties are broken by node index, so the same layout always
-//! gives the same route. Not yet: per-robot-type edge rules (a type may not be
-//! allowed on an edge), blocked edges, and lift edges between maps (they have
-//! length 0 for now).
+//! gives the same route. [`plan_path`] and [`shortest_path_avoiding`] can leave
+//! out blocked nodes and forbidden edges, such as those a robot type may not use;
+//! [`shortest_path`] takes every edge. A lift edge between maps has length 0.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;

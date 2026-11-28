@@ -4,7 +4,7 @@ use botsim::scenario::Scenario;
 use botsim_model::robot::RobotId;
 use vda5050::order::Order;
 
-#[path = "../../core/tests/vda_port/mod.rs"]
+#[path = "../../sim/tests/vda_port/mod.rs"]
 mod vda_port;
 use vda_port::VdaWorld;
 
@@ -58,7 +58,7 @@ fn horizon_order(serial: &str) -> Order {
 
 /// What the controller does at the start (S62): send the site's zone set to the
 /// robot and enable it.
-fn give_the_zone_set(w: &mut botsim_core::world::World, serial: &str) {
+fn give_the_zone_set(w: &mut botsim_sim::world::World, serial: &str) {
     let z = w.zones().expect("the scenario has a zone set");
     let set = serde_json::json!({
         "mapId": w.graph().maps[z.map],

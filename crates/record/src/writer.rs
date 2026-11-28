@@ -5,8 +5,8 @@ use std::fmt;
 use std::io::{self, BufWriter, Write};
 use std::rc::Rc;
 
-use botsim_core::observer::{Observer, Snapshot};
 use botsim_model::graph::Graph;
+use botsim_sim::observer::{Observer, Snapshot};
 use serde::Serialize;
 
 use crate::{GeometryFile, LayoutLine, LayoutRobot, SnapshotLine};

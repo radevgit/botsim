@@ -13,8 +13,6 @@ botsim-model = { path = "../model" }
 botsim-server = { path = "../server" }
 
 [dev-dependencies]
-botsim-bridge = { path = "../bridge" }
-botsim-core = { path = "../core" }
 botsim-dispatcher = { path = "../dispatcher" }
 botsim-router = { path = "../router" }
 # (the tests translate between VDA 5050 and the controller's messages)

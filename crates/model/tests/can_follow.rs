@@ -1,5 +1,5 @@
 //! `Graph::can_follow` / `can_start` (S71) in a few cases. That the robot itself
-//! answers the same is tested in `botsim-core`.
+//! answers the same is tested in `botsim-sim`.
 
 use botsim_model::graph::{Graph, Rotation};
 use botsim_model::spec::Kinematics;

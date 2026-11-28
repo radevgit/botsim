@@ -1,6 +1,6 @@
 //! Rotation allowed at nodes (LIF `rotationAtStartNodeAllowed` /
 //! `rotationAtEndNodeAllowed`, S64) in the graph. What it means for a robot is
-//! tested in `botsim-core`.
+//! tested in `botsim-sim`.
 
 use botsim_model::graph::{Graph, Rotation};
 use vdma_lif::Lif;

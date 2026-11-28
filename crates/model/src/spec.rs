@@ -64,7 +64,7 @@ pub struct RobotSpec {
     pub min_speed: f64,
     pub shape: Shape,
     /// The factsheet this spec was made from; the robot sends it as its
-    /// `factsheet` message (`World::factsheet` in `botsim-core`, S61).
+    /// `factsheet` message (`World::factsheet` in `botsim-sim`, S61).
     pub factsheet: Factsheet,
 }
 

@@ -1,5 +1,5 @@
 //! The refusals of an order that the simulator made itself while it read VDA 5050
-//! messages (their tests were in `botsim-core`): the structure of the lists, the
+//! messages (their tests were in `botsim-sim`): the structure of the lists, the
 //! release rules and names the layout does not have. The simulator reads `link`
 //! orders, which cannot be written that way, so the translator makes these
 //! checks, with the error type and references a robot refuses with.

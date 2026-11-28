@@ -1,5 +1,5 @@
 //! Edges with a curved trajectory (S69) in the graph. How a robot drives them is
-//! tested in `botsim-core`.
+//! tested in `botsim-sim`.
 
 use std::f64::consts::FRAC_PI_2;
 

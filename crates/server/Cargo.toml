@@ -21,7 +21,8 @@ vda5050 = "0.1.0"
 vdma-lif = "0.1.0"
 
 [dev-dependencies]
-botsim-core = { path = "../core" }
+# (the tests give the orders the server builds to simulated robots)
+botsim-sim = { path = "../sim" }
 # (the tests translate between VDA 5050 and the controller's messages)
 botsim-vda = { path = "../vda" }
 serde_json = "1.0.154"

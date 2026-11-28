@@ -68,7 +68,7 @@ named by their numbers, in the order of the scenario.
 The translator `botsim-vda` makes VDA 5050 messages of them and reads those. A
 **route through `vda`** takes every message to a robot and every report of a
 robot through that translation and back; it tests the translation without real
-robots and is used by the tests only (`botsim-bridge`). What the translator
+robots and is used by the tests only (`botsim::vda_route`). What the translator
 refuses of a message to a robot then shows in that robot's errors, like the
 robot's own refusals; a state it refuses whole counts as one that cannot be had,
 and then the controller only takes the new jobs in that cycle.
@@ -80,7 +80,7 @@ simulator; it never stops the program.
 | Direction | Message | State |
 |---|---|---|
 | to the robot | `order` | done (§3) |
-| to the robot | `instantActions` | done, `cancelOrder` only (§3) |
+| to the robot | `instantActions` | done: `cancelOrder`, `startCharging`, `stopCharging`, `enableZoneSet`, `deleteZoneSet` (§5) |
 | to the robot | `responses` (answers to zone requests) | done (§7e) |
 | to the robot | `zoneSet` + instant actions `enableZoneSet` / `deleteZoneSet` | done (**S62**, §7c): the scenario's zone set file is the *site's* zone set; the baseline controller sends it to every robot and enables it |
 | from the robot | `state` | done (§3); delayed with a message delay (§1a) |
@@ -102,7 +102,7 @@ each lift and door by its number.
 - On an edge the robot accelerates, cruises and brakes to stop at the end
   node, unless it drives through the node (next point).
 - **Driving through nodes (S66).** With `drive_through_nodes` (scenario, default
-  `true`; the core world has it off until `World::set_pass_through(true)`) a robot
+  `true`; the simulator's world has it off until `World::set_pass_through(true)`) a robot
   does **not** stop at a node when
   - the next edge is part of the **released** route (the end of the base, with
     the horizon behind it, is a stop),
@@ -318,11 +318,21 @@ each lift and door by its number.
 
 ## 5. Instant actions
 
-- `cancelOrder`: the robot brakes to the next node and stops; running and
-  waiting actions become FAILED; the instant action is RUNNING until all
-  movement has stopped, then FINISHED. Order ids are kept. With no active
-  order or a wrong `orderId` it fails with `NO_ORDER_TO_CANCEL`.
-- Every other instant action fails with `INVALID_INSTANT_ACTION`.
+- Every instant action received is listed with its status among the state's
+  instant action states, and stays listed.
+- `cancelOrder` (optional parameter `orderId`): the robot brakes to the next
+  node and stops; running and waiting actions become FAILED; the instant action
+  is RUNNING until all movement has stopped, then FINISHED. Order ids are kept.
+  With no active order or a wrong `orderId` it fails with `NO_ORDER_TO_CANCEL`.
+- `startCharging` and `stopCharging`: finished at once; `startCharging` fails if
+  the robot has no battery or does not stand on a charger (§10a).
+- `enableZoneSet` and `deleteZoneSet` (parameter `zoneSetId`; **S62**, §7c):
+  finished at once; they fail if the robot has no such zone set, and
+  `deleteZoneSet` also if it is enabled. Enabling one disables the others.
+- Every other instant action type fails. All these failures except that of
+  `cancelOrder` have the error `INVALID_INSTANT_ACTION`. The error of a failed
+  instant action names its `actionId` and stays in the state until a new order or
+  update is accepted.
 - Simplification: every action can be cancelled.
 
 ## 6. State report
@@ -333,8 +343,10 @@ each lift and door by its number.
 - `nodeStates` / `edgeStates` list everything still ahead (base and horizon);
   the first node of an order is never listed; `lastNodeId` is the last node
   reached. `driving` is true while driving or turning on the spot.
-- Placeholders: battery 100 % (permanently powered robot), operating mode
-  AUTOMATIC, no emergency stop, no loads.
+- The charge and whether the robot is charging come from its battery model
+  (§10a); a robot without one reports 100 %, not charging (a permanently powered
+  robot).
+- Placeholders: operating mode AUTOMATIC, no emergency stop, no loads.
 - Errors use the 28 predefined error types of the standard (Table 9), as an
   enumeration (**S20**).
 
@@ -369,7 +381,7 @@ each lift and door by its number.
   positions after each step, so a robot reacts one step (0.05 s) later; the
   length of one step is part of the field for that reason.
 - **Switch:** scenario key `safety_stop` (default `true`); `false` lets robots
-  drive into each other, which is what the collision tests need. In the core
+  drive into each other, which is what the collision tests need. In the simulator
   library the world has it off until `set_safety_stop(true)`.
 - Only robots are obstacles (no walls or people yet). Observer status
   `Obstructed`.
@@ -386,7 +398,7 @@ each lift and door by its number.
 
 - The simulator has a **read-only observer port**, so a viewer or recording
   file can be added later without tying the simulator to any particular
-  library (**U5**: no Rerun for now). The core never depends on a viewer.
+  library (**U5**: no Rerun for now). The simulator never depends on a viewer.
 - When an observer is attached it gets the **layout** once (maps, nodes, edges)
   and **snapshots**, after every step or, like a frame rate, only every chosen
   interval of simulated time (rounded to whole steps; the snapshot is only
@@ -794,7 +806,7 @@ gets); the command line chooses with `--policy`.
     only) to 1 (with node-edge conflicts), jobs done 91, 86, 79, 59 to 61 robots
     moving at 1000 s, no stand-off at 1100 s. Not covered: the turn on
     the spot, the protective field, driving backwards; the deadlock detector of the
-    core does not see waits for a conflicting edge.
+    simulator does not see waits for a conflicting edge.
 - **Route with load (S91, brief request of 2026-11-23):** the shortest route is
   the same every time, so an equally long parallel lane was never chosen. With
   the scenario setting `route_load_weight` (metres, default 0 = off, same routes as
@@ -1073,7 +1085,7 @@ gets); the command line chooses with `--policy`.
   and maximum over finished jobs. Jobs still running at the end are not
   counted.
 - **Collisions**: see section 7.
-- **Waits** (U12 definition, U15 step 2; **S157**, **S158**; `botsim_core::waiting`):
+- **Waits** (U12 definition, U15 step 2; **S157**, **S158**; `botsim_sim::waiting`):
   decided once per step by the world (`World::waits`: reason and blocker). A robot
   **waits** when it has an order ahead of it and stands still without running an
   action, or its protective field stops or brakes it.
@@ -1137,7 +1149,7 @@ gets); the command line chooses with `--policy`.
 - Energy: a step in which the robot moved costs `drive_wh_per_m` per metre moved; a
   step without motion costs `work_w` while an action runs at a node (phase Acting),
   else `idle_w` (standing, waiting, turning on the spot, obstructed). Defaults 0.
-  The charge does not go below 0 (`botsim_core::battery`).
+  The charge does not go below 0 (`botsim_sim::battery`).
 - `start_charge` (percent, default 100): a number for all robots of the group, or a
   range `[low, high]` from which each robot gets a random value. The values come from
   an own stream of the scenario seed (`"battery"`), so the same seed gives the same
@@ -1272,6 +1284,8 @@ Rerun recording was dropped, U5). Lifts hold one robot and doors are tied to
 edges (§7g, §7h).
 
 ## 13. Speed and scale (**S52**)
+
+All figures in this section are from botsim 0.1 and were not taken again.
 
 The brief's target is about 1,000 robots. Measured with
 `cargo run --release -p botsim --example scale -- <robots> <side> <seconds> <jobs per robot per hour>`

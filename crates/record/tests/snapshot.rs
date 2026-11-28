@@ -1,10 +1,10 @@
 mod common;
 
-use botsim_core::observer::{Observer, Snapshot};
-use botsim_core::waiting::Wait;
 use botsim_model::graph::Graph;
 use botsim_model::waiting::WaitReason;
 use botsim_record::{ShapeRecord, SnapshotLine, StatusRecord};
+use botsim_sim::observer::{Observer, Snapshot};
+use botsim_sim::waiting::Wait;
 use std::cell::RefCell;
 use std::rc::Rc;
 

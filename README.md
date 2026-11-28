@@ -17,17 +17,17 @@ botsim/
 │   ├── model/         layout graph, robot types, path and safety geometry
 │   ├── link/          compact messages: fleet server, robots, doors, lifts
 │   ├── vda/           translation between link and VDA 5050 messages
-│   ├── core/          simulation: world, robots, orders, collisions, jobs
+│   ├── sim/           simulator: world, robots, orders, collisions, jobs
 │   ├── scenario/      scenario file (TOML): loading, building the world
 │   ├── router/        route search on the layout graph
 │   ├── dispatcher/    jobs to robots, charging and parking trips
 │   ├── server/        fleet server: control loop, slot for the traffic rules,
 │   │                  traffic adapter
 │   ├── baseline/      first come, first served traffic rules, kept as reference
-│   ├── bridge/        runs the controller against the simulated world
 │   ├── traffic/       passing order at shared spots (--policy traffic)
 │   ├── space/         swept robot outlines and the conflict map
-│   ├── runner/        command line and JSON summary (package botsim)
+│   ├── runner/        command line, JSON summary; connects the server and the
+│   │                  simulator (package botsim)
 │   ├── check/         static layout checker (checks: see its README)
 │   ├── record/        recording of a run (JSON Lines)
 │   ├── export/        PNG frames for videos, layout generators

@@ -17,7 +17,8 @@
 //!   writes or reads. Doors and lifts are outside VDA 5050.
 //!
 //! The fleet server's controller (`botsim-server`) and the simulator
-//! (`botsim-core`) speak them; `botsim-bridge` passes them between the two.
+//! (`botsim-sim`) speak them; the command line crate (`botsim`) passes them between
+//! the two.
 //!
 //! Depends on no botsim crate but `botsim-model`.
 

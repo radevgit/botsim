@@ -7,7 +7,8 @@ this crate but in `botsim-vda`.
 
 Library only; of the botsim crates it depends on `botsim-model` only, reads no
 files and uses no network. The fleet server's controller (`botsim-server`) and the
-simulator (`botsim-core`) speak it; `botsim-bridge` passes it between the two.
+simulator (`botsim-sim`) speak it; the command line crate (`botsim`) passes it
+between the two.
 
 - Layout nodes, edges and maps are the numbers of the layout graph; a robot is a
   `RobotNo` (`botsim_model::robot`). Names are looked up elsewhere.

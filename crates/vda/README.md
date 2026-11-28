@@ -7,8 +7,9 @@ translates. It adds no custom fields.
 
 Library only; of the botsim crates it depends on `botsim-link` and `botsim-model`
 only, reads no files and uses no network. The fleet server and the simulator talk
-to each other in `link` without it. `botsim-bridge` uses it for its route through
-`vda`, which tests the translation without real robots.
+to each other in `link` without it. The command line crate
+[`botsim`](../runner/README.md), which connects the two, has a route through
+`vda` that tests the translation without real robots.
 
 The VDA 5050 side is the message types of the
 [`vda5050`](https://crates.io/crates/vda5050) crate. JSON text and MQTT topics are

@@ -3,7 +3,7 @@
 //!
 //! ```toml
 //! name = "two-robots"
-//! seed = 1                       # not used yet; goes into the summary later
+//! seed = 1                       # fixes the random values; goes into the summary
 //! duration = 600.0               # seconds of simulated time
 //! time_step = 0.05               # seconds; there is deliberately no default
 //! start_time = 2026-11-20T10:00:00Z   # tick 0 in message timestamps (UTC)
@@ -13,7 +13,7 @@
 //! drive_through_nodes = true     # optional, default true: no stop at nodes straight on
 //! message_delay = 0.0            # optional: seconds a message takes, each way (default 0)
 //! stop_at_first_deadlock = false # optional debug: end the run when a deadlock is reported
-//! zone_set = "zones.json"        # optional VDA 5050 zone set; loaded and checked only
+//! zone_set = "zones.json"        # optional VDA 5050 zone set; robots react to RELEASE zones only
 //!
 //! [[door]]                       # optional, any number: a door on layout edges
 //! id = "D1"
@@ -76,26 +76,26 @@
 //! With `[jobs]` the bundled baseline controller runs: the seed (above) fixes
 //! the random jobs, so a run is repeatable.
 //!
-//! Not yet: a choice of controller; robots riding a lift (the lift only exists
-//! as a peripheral that the controller can call).
+//! Not yet: a choice of controller in the file (the `botsim` command's `--policy`
+//! chooses the traffic rules).
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use botsim_core::actions::ActionTimes;
-use botsim_core::battery::{Battery, BatterySpec};
-use botsim_core::disturbances::{Disturbances, StopSpec, check_duration_variation};
-use botsim_core::door::DoorSpec;
-use botsim_core::jobs::{JobGenerator, Rng};
-use botsim_core::lift::{LiftSpec, LiftStop};
-use botsim_core::world::World;
-use botsim_core::zone_requests::ZoneRequestTiming;
 use botsim_model::graph::Graph;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
 use botsim_model::time::unix_ms_from_utc;
 use botsim_model::zones::Zones;
+use botsim_sim::actions::ActionTimes;
+use botsim_sim::battery::{Battery, BatterySpec};
+use botsim_sim::disturbances::{Disturbances, StopSpec, check_duration_variation};
+use botsim_sim::door::DoorSpec;
+use botsim_sim::jobs::{JobGenerator, Rng};
+use botsim_sim::lift::{LiftSpec, LiftStop};
+use botsim_sim::world::World;
+use botsim_sim::zone_requests::ZoneRequestTiming;
 use serde::Deserialize;
 use vda5050::factsheet::Factsheet;
 use vda5050::zone_set::ZoneSet;
@@ -116,8 +116,8 @@ pub struct Scenario {
     pub start_time: toml::value::Datetime,
     pub lif: PathBuf,
     /// Optional VDA 5050 zone set (a JSON file with the `zoneSet` object, or a
-    /// whole `zoneSet` message). It is loaded and checked; no behaviour uses the
-    /// zones yet.
+    /// whole `zoneSet` message). It is loaded and checked; the robots react to its
+    /// RELEASE zones only.
     #[serde(default)]
     pub zone_set: Option<PathBuf>,
     #[serde(rename = "robot")]
@@ -199,7 +199,7 @@ pub struct Scenario {
 }
 
 /// A `[[door]]` section (S50): a door that guards layout edges. The door model
-/// is in `botsim_core::door`.
+/// is in `botsim_sim::door`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DoorConfig {
@@ -220,7 +220,7 @@ pub struct DoorConfig {
 }
 
 /// A `[[lift]]` section: a lift between maps (floors). The lift model is in
-/// `botsim_core::lift`; no robot rides it yet.
+/// `botsim_sim::lift`; robots ride it between its `stops`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LiftConfig {
@@ -657,8 +657,7 @@ impl Scenario {
         let Some(j) = &self.jobs else {
             return Ok(None);
         };
-        let too_few =
-            |e: botsim_core::jobs::JobError| ScenarioError::Invalid(format!("[jobs] {e}"));
+        let too_few = |e: botsim_sim::jobs::JobError| ScenarioError::Invalid(format!("[jobs] {e}"));
         if !j.pickup_stations.is_empty() {
             let places = |ids: &[String]| -> Result<Vec<Vec<_>>, ScenarioError> {
                 ids.iter()

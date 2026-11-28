@@ -2,7 +2,7 @@
 //!
 //! The unit is "driving edge e", not the node: whether a robot may drive edge
 //! `f` after edge `e` depends on how `e` ended (the turn rules of its
-//! kinematics, `Graph::can_follow` of botsim-core, the rules the driver uses).
+//! kinematics, `Graph::can_follow` of botsim-sim, the rules the driver uses).
 //! There is an arc e -> f if e ends where f starts, the type may drive both and
 //! `can_follow` says yes. A robot that enters a place it cannot leave is lost, so
 //! "reachable" is not enough: the check uses the biggest strongly connected set

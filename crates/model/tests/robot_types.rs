@@ -1,5 +1,5 @@
 //! Per-robot-type properties of the LIF (S55) in the graph. What they mean for a
-//! robot is tested in `botsim-core`.
+//! robot is tested in `botsim-sim`.
 
 use botsim_model::graph::{Graph, GraphError};
 use vdma_lif::Lif;

@@ -1,14 +1,14 @@
 //! The "waiting caused by others" figures of the summary (brief U12; S167 to S170):
 //! robot-seconds robots waited because of another robot, added up from
-//! [`botsim_core::world::World::wait_totals`]. The reasons and who is named are in
-//! [`botsim_core::waiting`].
+//! [`botsim_sim::world::World::wait_totals`]. The reasons and who is named are in
+//! [`botsim_sim::waiting`].
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
-use botsim_core::waiting::Place;
-use botsim_core::world::World;
 use botsim_model::waiting::WaitReason;
+use botsim_sim::waiting::Place;
+use botsim_sim::world::World;
 use serde::Serialize;
 
 /// How many pairs and places are listed (S169).

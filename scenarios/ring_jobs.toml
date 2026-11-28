@@ -7,7 +7,7 @@ duration = 1800.0             # simulated seconds
 time_step = 0.05              # seconds per step
 start_time = 2026-11-20T10:00:00Z
 lif = "ring.lif.json"         # paths are relative to this file
-zone_set = "ring_zones.json"  # optional VDA 5050 zones; only loaded and checked so far
+zone_set = "ring_zones.json"  # optional VDA 5050 zones; robots react to RELEASE zones only
 
 [[robot]]
 manufacturer = "ACME"

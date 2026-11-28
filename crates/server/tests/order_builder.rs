@@ -1,8 +1,5 @@
 use std::sync::LazyLock;
 
-use botsim_core::actions::ActionTimes;
-use botsim_core::robot::Reception::Accepted;
-use botsim_core::world::World;
 use botsim_link::ids::OrderId;
 use botsim_link::message::Millis;
 use botsim_model::graph::Graph;
@@ -14,13 +11,16 @@ use botsim_server::cycle::robot_no;
 use botsim_server::order_builder::{
     OrderHeader, Plan, RELEASE_WINDOW, build_order as try_build_order,
 };
+use botsim_sim::actions::ActionTimes;
+use botsim_sim::robot::Reception::Accepted;
+use botsim_sim::world::World;
 use vda5050::factsheet::Factsheet;
 use vda5050::order::Order;
 
 mod common;
 use common::graph;
 mod translate;
-#[path = "../../core/tests/vda_port/mod.rs"]
+#[path = "../../sim/tests/vda_port/mod.rs"]
 mod vda_port;
 use vda_port::VdaWorld;
 

@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use botsim::scenario::{Scenario, ScenarioError};
-use botsim_core::robot::Reception::Accepted;
 use botsim_model::robot::RobotId;
+use botsim_sim::robot::Reception::Accepted;
 use vda5050::order::Order;
 
-#[path = "../../core/tests/vda_port/mod.rs"]
+#[path = "../../sim/tests/vda_port/mod.rs"]
 mod vda_port;
 use vda_port::VdaWorld;
 
@@ -81,7 +81,7 @@ fn the_example_file_loads_and_builds_a_world() {
 
 #[test]
 fn per_type_action_times_are_parsed_and_accepted() {
-    // only parsing is checked here; that ActionTimes works is tested in core
+    // only parsing is checked here; that ActionTimes works is tested in sim
     let s = Scenario::from_toml(&GOOD.replace(
         "action_time = 2.0",
         "action_time = 2.0\n[robot.action_times]\npick = 3.0",

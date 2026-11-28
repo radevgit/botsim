@@ -3,9 +3,9 @@
 use std::fs::File;
 use std::io::BufReader;
 
-use botsim_core::observer::Observer;
 use botsim_model::graph::Graph;
 use botsim_record::{LayoutLine, LayoutRobot, Recorder, read_recording};
+use botsim_sim::observer::Observer;
 use vdma_lif::Lif;
 
 const TYPES: &str =

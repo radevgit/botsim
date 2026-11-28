@@ -10,16 +10,16 @@
 //!
 //! Not yet: deadlocks, controller time per step.
 
-use botsim_bridge::Bridged;
-use botsim_core::lift::DoorState;
-use botsim_core::world::World;
 use botsim_dispatcher::ChargePolicy;
 use botsim_model::job::Job;
 use botsim_server::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
 use botsim_server::policy::TrafficPolicy;
+use botsim_sim::lift::DoorState;
+use botsim_sim::world::World;
 use botsim_space::{MapOptions, TypeRef};
 use serde::Serialize;
 
+use crate::connect::{self, Connected};
 use crate::scenario::{Scenario, ScenarioError};
 use crate::waiting_summary::{WaitingSummary, waiting_summary};
 
@@ -299,7 +299,7 @@ pub fn run_with(
     world: World,
     measure_time: bool,
 ) -> Result<Summary, ScenarioError> {
-    run_controller(scenario, world, measure_time, botsim_bridge::controller)
+    run_controller(scenario, world, measure_time, connect::controller)
 }
 
 /// Like [`run`], with the traffic rules of `policy` instead of the baseline's: the
@@ -314,9 +314,7 @@ pub fn run_with_policy(
     world: World,
     policy: Box<dyn TrafficPolicy>,
 ) -> Result<Summary, ScenarioError> {
-    run_controller(scenario, world, false, |w| {
-        botsim_bridge::with_policy(w, policy)
-    })
+    run_controller(scenario, world, false, |w| connect::with_policy(w, policy))
 }
 
 /// The run itself; `make` builds the controller for the world.
@@ -324,7 +322,7 @@ fn run_controller<P: TrafficPolicy>(
     scenario: &Scenario,
     mut world: World,
     measure_time: bool,
-    make: impl FnOnce(&World) -> Bridged<P>,
+    make: impl FnOnce(&World) -> Connected<P>,
 ) -> Result<Summary, ScenarioError> {
     let ticks = ticks_for(scenario.duration, scenario.time_step);
     let mut generator = scenario.job_generator(world.graph())?;
@@ -360,7 +358,7 @@ fn run_controller<P: TrafficPolicy>(
         if let (Some(g), Some(c)) = (generator.as_mut(), controller.as_mut()) {
             let new: Vec<Job> = g.step(world.tick()).into_iter().collect();
             created += new.len();
-            clock.time(measure_time, || botsim_bridge::step(c, &mut world, new));
+            clock.time(measure_time, || connect::step(c, &mut world, new));
         }
         world.step();
         if scenario.stop_at_first_deadlock && !world.deadlocks().is_empty() {
@@ -370,7 +368,7 @@ fn run_controller<P: TrafficPolicy>(
     }
     if let Some(c) = controller.as_mut() {
         // see jobs that finished in the last step
-        clock.time(measure_time, || botsim_bridge::step(c, &mut world, []));
+        clock.time(measure_time, || connect::step(c, &mut world, []));
     }
     let (jobs, metrics) = match &controller {
         Some(c) => {

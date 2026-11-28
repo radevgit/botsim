@@ -1,4 +1,4 @@
-//! Angles. Turning a robot step by step is tested in `botsim-core`.
+//! Angles. Turning a robot step by step is tested in `botsim-sim`.
 
 mod rotation {
     use botsim_model::angle::normalize_angle;
