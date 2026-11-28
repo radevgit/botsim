@@ -20,8 +20,9 @@ lists of the layout (`set_conflicts`, then `set_node_conflicts` and
 
 ## Two parts
 
-- The **dispatcher** (`controller`) assigns jobs, plans routes, sends charging
-  and parking trips, runs lifts and doors, and builds the messages.
+- The **dispatcher** (`controller`) assigns jobs, plans routes (found with
+  [botsim-router](../router/README.md)), sends charging and parking trips, runs
+  lifts and doors, and builds the messages.
 - The **traffic policy** says who may go now: how far each route is released,
   and the answers to zone requests. It is the trait `policy::TrafficPolicy`.
   Another policy can replace the baseline's:

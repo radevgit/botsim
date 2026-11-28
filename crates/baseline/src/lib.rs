@@ -11,5 +11,4 @@ pub mod node_grid;
 pub mod order_builder;
 pub mod policy;
 pub mod reservations;
-pub mod route;
 pub mod zone_grants;

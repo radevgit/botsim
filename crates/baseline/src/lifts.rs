@@ -9,7 +9,9 @@
 //! - **Where a robot waits** (design rule §7d: outside the approach to the
 //!   entrance): at the stop's **waiting node** (lay-by) if the layout has one
 //!   (`waiting` of the stop, S49) — then the route to the lift is planned
-//!   through that node ([`LiftDesk::route`]) — else at the node **before** the
+//!   through that node
+//!   ([`route_through_waiting`](botsim_router::lift::route_through_waiting) with
+//!   [`LiftDesk::waiting_nodes`]) — else at the node **before** the
 //!   entrance. That node is the robot's **gate**. A robot that starts on the
 //!   entrance cannot wait outside.
 //! - A robot is never released past its gate unless it owns the lift. At the
@@ -35,11 +37,10 @@
 use std::collections::HashMap;
 
 use botsim_core::world::World;
-use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::graph::{EdgeIdx, NodeIdx};
 use botsim_model::robot::RobotId;
 
 use crate::order_builder::Plan;
-use crate::route::{Arrival, Mover, plan_path, straight_lengths};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -92,10 +93,11 @@ pub struct LiftRobot<'a> {
 
 #[derive(Debug)]
 pub struct LiftDesk {
-    graph: Graph,
     lifts: Vec<LiftInfo>,
     /// Layout edge → (lift index, start node, end node) for every ride.
     rides: HashMap<EdgeIdx, (usize, NodeIdx, NodeIdx)>,
+    /// Every ride → the waiting node of its entrance, for the route search.
+    waiting: HashMap<EdgeIdx, Option<NodeIdx>>,
     owners: Vec<Option<Owner>>,
 }
 
@@ -121,6 +123,7 @@ impl LiftDesk {
             })
             .collect();
         let mut rides = HashMap::new();
+        let mut waiting = HashMap::new();
         for (i, e) in graph.edges.iter().enumerate() {
             if !e.map_transition {
                 continue;
@@ -128,70 +131,21 @@ impl LiftDesk {
             let on = |l: &LiftInfo, n| l.stops.iter().any(|s| s.node == n);
             if let Some(l) = lifts.iter().position(|l| on(l, e.start) && on(l, e.end)) {
                 rides.insert(i, (l, e.start, e.end));
+                waiting.insert(i, lifts[l].stop(e.start).and_then(|s| s.waiting));
             }
         }
         LiftDesk {
-            graph: graph.clone(),
             owners: vec![None; lifts.len()],
             lifts,
             rides,
+            waiting,
         }
     }
 
-    /// The shortest route from `from` to `to`, planned **through the waiting
-    /// node** of every lift entrance it uses that has one: to the lay-by, from
-    /// there to the entrance, then the ride. No detour if the robot starts on
-    /// the entrance, already passes the lay-by before the ride, or the lay-by
-    /// cannot be reached. `ok[e]` says whether the robot's type may drive edge `e`
-    /// (S55); other edges are not used.
-    pub fn route(&self, ok: &[bool], from: NodeIdx, to: NodeIdx) -> Option<Vec<EdgeIdx>> {
-        let cost = straight_lengths(&self.graph);
-        let mover = Mover {
-            ok,
-            cost: &cost,
-            turns: None,
-        };
-        self.route_from(&mover, Arrival::Free, from, to)
-    }
-
-    /// Like [`LiftDesk::route`] for a robot that cannot make every turn (S73):
-    /// `arrival` says how it gets to `from`, and `mover` its turn rules.
-    pub fn route_from(
-        &self,
-        mover: &Mover,
-        arrival: Arrival,
-        from: NodeIdx,
-        to: NodeIdx,
-    ) -> Option<Vec<EdgeIdx>> {
-        let none = std::collections::HashSet::new();
-        let path_of = |a: NodeIdx, arrival: Arrival, b: NodeIdx| {
-            plan_path(&self.graph, mover, arrival, a, b, &none, |_| false)
-        };
-        let path = path_of(from, arrival, to)?;
-        let mut nodes = vec![from];
-        nodes.extend(path.iter().map(|&e| self.graph.edges[e].end));
-        for (i, &e) in path.iter().enumerate() {
-            let Some(&(l, a, b)) = self.rides.get(&e) else {
-                continue;
-            };
-            let waiting = self.lifts[l].stop(a).and_then(|s| s.waiting);
-            let before = match waiting {
-                Some(w) if i > 0 && !nodes[..i].contains(&w) => {
-                    let detour = path_of(from, arrival, w).and_then(|mut to_w| {
-                        let at_w = to_w.last().map_or(arrival, |&l| Arrival::Edge(l));
-                        to_w.extend(path_of(w, at_w, a)?);
-                        Some(to_w)
-                    });
-                    detour.unwrap_or_else(|| path[..i].to_vec())
-                }
-                _ => path[..i].to_vec(),
-            };
-            let mut edges = before;
-            edges.push(e);
-            edges.extend(self.route_from(mover, Arrival::Edge(e), b, to)?);
-            return Some(edges);
-        }
-        Some(path)
+    /// Every ride with the waiting node of its entrance (`None` if the stop has
+    /// none), as the router takes it to plan routes through those nodes.
+    pub fn waiting_nodes(&self) -> &HashMap<EdgeIdx, Option<NodeIdx>> {
+        &self.waiting
     }
 
     /// The plan index of the node where a robot must wait for the ride `k` of

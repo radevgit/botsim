@@ -101,6 +101,9 @@ pub fn straight_lengths(graph: &Graph) -> Vec<f64> {
 /// [`shortest_path_avoiding`] on the edges the type may drive; with them the search
 /// goes over edges (the one just driven decides the next), so a route that needs a
 /// turn the robot cannot make is not found. `None` if there is no route.
+///
+/// `from`, `to` and an edge in `arrival` must be of the graph, and `mover.ok` and
+/// `mover.cost` must have an entry for each edge; else it may panic.
 pub fn plan_path(
     graph: &Graph,
     mover: &Mover,
@@ -167,6 +170,9 @@ pub fn plan_path(
 /// start node may be in it) and may not use an edge for which `forbidden` is
 /// true; `cost[e]` is the cost of driving edge `e` (S74). `None` if there is no
 /// such route, or `to` itself is blocked.
+///
+/// `from` and `to` must be nodes of the graph, and `cost` must have an entry for
+/// each edge; else it may panic.
 pub fn shortest_path_avoiding(
     graph: &Graph,
     from: NodeIdx,
@@ -220,6 +226,8 @@ pub fn shortest_path_avoiding(
 
 /// For every node, the edges that lead into it (for [`distances_to`]); only the
 /// edges for which `ok[e]` is true (the ones a robot type may drive, S55).
+///
+/// `ok` must have an entry for each edge of the graph; else it panics.
 pub fn in_edges(graph: &Graph, ok: &[bool]) -> Vec<Vec<EdgeIdx>> {
     let mut into = vec![Vec::new(); graph.nodes.len()];
     for (i, e) in graph.edges.iter().enumerate() {
@@ -235,6 +243,9 @@ pub fn in_edges(graph: &Graph, ok: &[bool]) -> Vec<Vec<EdgeIdx>> {
 /// from [`in_edges`], `cost[e]` is the cost of edge `e` ([`travel_lengths`] or
 /// [`straight_lengths`]). It gives the same lengths as [`shortest_path`] called for
 /// every node (with straight lengths), but costs one search instead of one per node.
+///
+/// `target` must be a node of the graph, `into` must be the [`in_edges`] of this
+/// graph, and `cost` must have an entry for each edge; else it may panic.
 pub fn distances_to(
     graph: &Graph,
     into: &[Vec<EdgeIdx>],
@@ -263,6 +274,8 @@ pub fn distances_to(
 
 /// The edges to drive from `from` to `to`; empty if they are the same node;
 /// `None` if `to` cannot be reached.
+///
+/// `from` and `to` must be nodes of the graph; else it may panic.
 pub fn shortest_path(graph: &Graph, from: NodeIdx, to: NodeIdx) -> Option<Vec<EdgeIdx>> {
     let n = graph.nodes.len();
     let mut dist = vec![f64::INFINITY; n];

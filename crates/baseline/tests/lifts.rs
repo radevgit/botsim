@@ -2,7 +2,10 @@
 //! floor 1 (`Map_Z-Level_1`) has N1 and N2, floor 2 (`Map_Z-Level_2`) has N102
 //! and N101; N2→N102 and N102→N2 are the rides, N2 and N102 the stops.
 
+use std::collections::HashMap;
+
 use botsim_baseline::controller::Controller;
+use botsim_baseline::lifts::LiftDesk;
 use botsim_core::actions::ActionTimes;
 use botsim_core::jobs::Job;
 use botsim_core::lift::{DoorState, LiftSpec, LiftStop};
@@ -298,47 +301,19 @@ fn two_way_world(waiting: bool) -> World {
     build(two_way(), ["L1", "L2"], &["G0", "U0"], &stops)
 }
 
-fn edge_ids(g: &Graph, edges: &[usize]) -> Vec<String> {
-    edges.iter().map(|&e| g.edges[e].id.clone()).collect()
-}
-
 #[test]
-fn a_route_to_the_lift_goes_through_the_waiting_node() {
-    use botsim_baseline::lifts::LiftDesk;
-
+fn the_lift_desk_knows_the_waiting_node_of_every_ride() {
     let g = two_way();
     let n = |s: &str| g.node_idx(s).unwrap();
-    let all = vec![true; g.edges.len()]; // every edge may be used
+    let e = |s: &str| g.edge_idx(s).unwrap();
 
-    let w = two_way_world(true);
-    let desk = LiftDesk::new(&w);
-    // G0 → U0: to the lay-by, back, to the entrance, the ride, on the upper floor
-    // (no detour there: the way after the ride has no ride in it)
-    let r = desk.route(&all, n("G0"), n("U0")).unwrap();
-    assert_eq!(
-        edge_ids(&g, &r),
-        [
-            "G0-GJ", "GJ-GW", "GW-GJ", "GJ-G2", "G2-U2", "U2-UJ", "UJ-U0"
-        ]
-    );
-    // a robot that starts on the entrance cannot wait outside: no detour
-    let r = desk.route(&all, n("G2"), n("U0")).unwrap();
-    assert_eq!(edge_ids(&g, &r), ["G2-U2", "U2-UJ", "UJ-U0"]);
-    // a robot that starts on the lay-by has passed it already
-    let r = desk.route(&all, n("GW"), n("U2")).unwrap();
-    assert_eq!(edge_ids(&g, &r), ["GW-GJ", "GJ-G2", "G2-U2"]);
-    // no ride, no detour
-    let r = desk.route(&all, n("G0"), n("G2")).unwrap();
-    assert_eq!(edge_ids(&g, &r), ["G0-GJ", "GJ-G2"]);
-
-    // without a waiting node the route is the shortest one
-    let w = two_way_world(false);
-    let desk = LiftDesk::new(&w);
-    let r = desk.route(&all, n("G0"), n("U0")).unwrap();
-    assert_eq!(
-        edge_ids(&g, &r),
-        ["G0-GJ", "GJ-G2", "G2-U2", "U2-UJ", "UJ-U0"]
-    );
+    for (waiting, up, down) in [(true, Some(n("GW")), Some(n("UW"))), (false, None, None)] {
+        let desk = LiftDesk::new(&two_way_world(waiting));
+        assert_eq!(
+            desk.waiting_nodes(),
+            &HashMap::from([(e("G2-U2"), up), (e("U2-G2"), down)])
+        );
+    }
 }
 
 /// R-1 goes up and R-2 comes down at the same time; returns (jobs done,

@@ -18,6 +18,7 @@ botsim/
 │   ├── vda/           translation between link and VDA 5050 messages
 │   ├── core/          simulation: world, robots, orders, collisions, jobs
 │   ├── scenario/      scenario file (TOML): loading, building the world
+│   ├── router/        route search on the layout graph
 │   ├── baseline/      bundled baseline fleet controller
 │   ├── traffic/       passing order at shared spots (--policy traffic)
 │   ├── space/         swept robot outlines and the conflict map

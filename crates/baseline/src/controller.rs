@@ -57,6 +57,11 @@ use botsim_model::errors::ErrorType;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
 use botsim_model::robot::RobotId;
 use botsim_model::spec::{Kinematics, Shape};
+use botsim_router::lift::route_through_waiting;
+use botsim_router::load::{self, Load};
+use botsim_router::route::{
+    Arrival, Mover, Turns, distances_to, in_edges, plan_path, travel_lengths,
+};
 use vda5050::order::Order;
 use vda5050::state::{ActionStatus, RequestStatus, State};
 
@@ -71,7 +76,6 @@ use crate::node_grid::NodeGrid;
 use crate::order_builder::{OrderHeader, Plan, build_order_with};
 use crate::policy::{Ask, Fleet, PolicyRobot, RouteView, Setup, TrafficPolicy};
 use crate::reservations::Reservations;
-use crate::route::{Arrival, Mover, Turns, distances_to, in_edges, plan_path, travel_lengths};
 use vda5050::responses::Responses;
 
 /// The time constant of the waiting average per node that the route cost uses
@@ -1143,10 +1147,15 @@ impl<P: TrafficPolicy> Controller<P> {
                 }
                 if dist[t].is_none() {
                     // (however the robot arrives at the pickup: the most it can do)
-                    if self
-                        .lifts
-                        .route_from(&self.types[t].mover(), Arrival::Free, job.pickup, job.drop)
-                        .is_none()
+                    if route_through_waiting(
+                        &self.graph,
+                        &self.types[t].mover(),
+                        self.lifts.waiting_nodes(),
+                        Arrival::Free,
+                        job.pickup,
+                        job.drop,
+                    )
+                    .is_none()
                     {
                         self.unserviceable.insert((job.id, t));
                         continue;
@@ -1191,7 +1200,8 @@ impl<P: TrafficPolicy> Controller<P> {
                         .map_or(Arrival::Free, |p| Arrival::Heading(p.theta)),
                 };
                 let plan = Plan::for_job_with(&self.graph, c.from, arrival, &job, |a, arr, b| {
-                    self.lifts.route_from(&mover, arr, a, b)
+                    let rides = self.lifts.waiting_nodes();
+                    route_through_waiting(&self.graph, &mover, rides, arr, a, b)
                 })?;
                 let plan = match trip {
                     Some(w) => w.plan.continued(w.released_through, plan),
@@ -1348,7 +1358,10 @@ impl<P: TrafficPolicy> Controller<P> {
                 .mobile_robot_position
                 .as_ref()
                 .map_or(Arrival::Free, |p| Arrival::Heading(p.theta));
-            let Some(edges) = self.lifts.route_from(&mover, arrival, node, place) else {
+            let rides = self.lifts.waiting_nodes();
+            let Some(edges) =
+                route_through_waiting(&self.graph, &mover, rides, arrival, node, place)
+            else {
                 no_route.push((i, place));
                 continue;
             };
@@ -1402,7 +1415,9 @@ impl<P: TrafficPolicy> Controller<P> {
             .mobile_robot_position
             .as_ref()
             .map_or(Arrival::Free, |p| Arrival::Heading(p.theta));
-        let Some(edges) = self.lifts.route_from(&mover, arrival, node, charger) else {
+        let rides = self.lifts.waiting_nodes();
+        let Some(edges) = route_through_waiting(&self.graph, &mover, rides, arrival, node, charger)
+        else {
             return false;
         };
         let plan = Plan::new(&self.graph, node, edges);
@@ -1639,9 +1654,9 @@ fn order_error(state: &State, order_id: &str) -> Option<ErrorType> {
     )
 }
 
-/// The route cost of every edge for `robot`: `cost` plus `reserved` for each other
-/// robot that holds the edge and each that holds the node it ends at, plus `waited`
-/// times the waiting average of that node. `weights` is (`reserved`, `waited`,
+/// The route cost of every edge for `robot`, with the penalties of
+/// [`load::loaded_cost`]: this says to the router which edges and nodes the policy
+/// gives to other robots. `weights` is (`load_weight`, `wait_weight`,
 /// `node_wait`). `None` if both weights are 0.
 fn loaded_cost<P: TrafficPolicy>(
     cost: &[f64],
@@ -1650,21 +1665,31 @@ fn loaded_cost<P: TrafficPolicy>(
     weights: (f64, f64, &[f64]),
     robot: usize,
 ) -> Option<Vec<f64>> {
-    let (reserved, waited, node_wait) = weights;
-    if reserved <= 0.0 && waited <= 0.0 {
-        return None;
-    }
+    let (load_weight, wait_weight, node_wait) = weights;
     let other = |h: Option<usize>| h.is_some_and(|h| h != robot);
-    Some(
-        cost.iter()
-            .enumerate()
-            .map(|(e, &c)| {
-                let end = graph.edges[e].end;
-                let n = usize::from(other(policy.edge_holder(e)))
-                    + usize::from(other(policy.node_holder(end)));
-                c + reserved * n as f64 + waited * node_wait[end]
-            })
-            .collect(),
+    // (who holds what matters only with a load weight)
+    let (edge_held, node_held): (Vec<bool>, Vec<bool>) = if load_weight > 0.0 {
+        (
+            (0..graph.edges.len())
+                .map(|e| other(policy.edge_holder(e)))
+                .collect(),
+            (0..graph.nodes.len())
+                .map(|n| other(policy.node_holder(n)))
+                .collect(),
+        )
+    } else {
+        Default::default()
+    };
+    load::loaded_cost(
+        graph,
+        cost,
+        &Load {
+            load_weight,
+            wait_weight,
+            edge_held: &edge_held,
+            node_held: &node_held,
+            node_wait,
+        },
     )
 }
 
