@@ -10,11 +10,12 @@
 //! Not yet: deadlocks, controller time per step.
 
 use botsim_baseline::conflicts::{ConflictInput, NodeConflictInput, NodeNodeConflictInput};
-use botsim_baseline::controller::{ChargePolicy, Controller};
+use botsim_baseline::controller::Controller;
 use botsim_baseline::policy::TrafficPolicy;
-use botsim_core::jobs::Job;
 use botsim_core::lift::DoorState;
 use botsim_core::world::World;
+use botsim_dispatcher::ChargePolicy;
+use botsim_model::job::Job;
 use botsim_space::{MapOptions, TypeRef};
 use serde::Serialize;
 

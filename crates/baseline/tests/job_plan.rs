@@ -2,12 +2,13 @@ use botsim_baseline::order_builder::{
     OrderHeader, Plan, RELEASE_WINDOW, build_order as try_build_order,
 };
 use botsim_core::actions::ActionTimes;
-use botsim_core::jobs::Job;
 use botsim_core::robot::Reception::Accepted;
 use botsim_core::world::World;
 use botsim_model::graph::Graph;
+use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
+use botsim_router::route::shortest_path;
 use vda5050::factsheet::Factsheet;
 use vda5050::state::ActionStatus::{Finished, Running};
 
@@ -75,6 +76,39 @@ fn a_job_plan_drives_to_the_pickup_then_the_drop() {
     // unreachable (the chain is one-way): no plan
     assert!(Plan::for_job(&g, g.node_idx("N4").unwrap(), &job(&g, "N1", "N5")).is_none());
     assert!(Plan::for_job(&g, g.node_idx("N0").unwrap(), &job(&g, "N5", "N1")).is_none());
+}
+
+#[test]
+fn a_plan_along_a_found_route_picks_and_drops_also_where_the_places_fall_together() {
+    let g = chain();
+    let n = |name: &str| g.node_idx(name).unwrap();
+    // (start, pickup, drop) → the plan nodes with their actions
+    let cases = [
+        // pickup and drop apart
+        ("N0", "N2", "N3", vec![(2, vec!["pick"]), (3, vec!["drop"])]),
+        // the robot stands on the pickup
+        ("N2", "N2", "N4", vec![(0, vec!["pick"]), (2, vec!["drop"])]),
+        // pickup and drop are one node: pick first
+        ("N0", "N3", "N3", vec![(3, vec!["pick", "drop"])]),
+        // all three are one node
+        ("N3", "N3", "N3", vec![(0, vec!["pick", "drop"])]),
+    ];
+    for (start, pickup, drop, actions) in cases {
+        let found = |a, b| shortest_path(&g, n(a), n(b)).unwrap();
+        let mut edges = found(start, pickup);
+        let pickup_at = edges.len();
+        edges.extend(found(pickup, drop));
+        let p = Plan::for_edges(&g, n(start), edges.clone(), pickup_at).unwrap();
+        assert_eq!(action_nodes(&p), actions, "{start} {pickup} {drop}");
+        // the route itself is the one given
+        let bare = Plan::new(&g, n(start), edges);
+        assert_eq!((&p.nodes, &p.edges), (&bare.nodes, &bare.edges));
+        assert_eq!(p.actions.len(), p.nodes.len());
+        assert_eq!(Plan::for_job(&g, n(start), &job(&g, pickup, drop)), Some(p));
+    }
+    // a pickup beyond the route, or an edge the graph does not have: no plan
+    assert!(Plan::for_edges(&g, n("N0"), vec![0], 2).is_none());
+    assert!(Plan::for_edges(&g, n("N0"), vec![g.edges.len()], 0).is_none());
 }
 
 #[test]

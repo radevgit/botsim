@@ -19,6 +19,7 @@ botsim/
 │   ├── core/          simulation: world, robots, orders, collisions, jobs
 │   ├── scenario/      scenario file (TOML): loading, building the world
 │   ├── router/        route search on the layout graph
+│   ├── dispatcher/    jobs to robots, charging and parking trips
 │   ├── baseline/      bundled baseline fleet controller
 │   ├── traffic/       passing order at shared spots (--policy traffic)
 │   ├── space/         swept robot outlines and the conflict map

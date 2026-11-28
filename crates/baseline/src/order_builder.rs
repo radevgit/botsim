@@ -19,11 +19,11 @@
 //! **Edge orientation** ([`build_order_with`]): for omnidirectional robots each edge
 //! carries the LIF's orientation for the type. Not yet: `maximumSpeed`.
 
-use botsim_core::jobs::Job;
 use botsim_core::world::PROTOCOL_VERSION;
 use botsim_model::graph::{EdgeIdx, EdgeOrientation, Graph, NodeIdx};
+use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
-use botsim_router::route::{Arrival, shortest_path};
+use botsim_router::route::shortest_path;
 use vda5050::order::{Action, BlockingType, Edge, Node, Order, OrientationType};
 
 /// How many nodes ahead of the robot are released.
@@ -61,30 +61,29 @@ impl Plan {
     /// pickup node and `pick`, drive to the drop node and `drop`. `None` if a
     /// node cannot be reached.
     pub fn for_job(graph: &Graph, at: NodeIdx, job: &Job) -> Option<Plan> {
-        Plan::for_job_with(graph, at, Arrival::Free, job, |a, _, b| {
-            shortest_path(graph, a, b)
-        })
+        let mut edges = shortest_path(graph, at, job.pickup)?;
+        let pickup_at = edges.len();
+        edges.extend(shortest_path(graph, job.pickup, job.drop)?);
+        Plan::for_edges(graph, at, edges, pickup_at)
     }
 
-    /// Like [`Plan::for_job`], with another way to find the route between two
-    /// nodes (the controller plans through lift waiting nodes, S49, and around turns
-    /// the robot cannot make, S73). `route(from, arrival, to)` gets how the robot
-    /// arrives at `from`: as the robot does at `at` for the first part, by the last
-    /// edge of the first part for the second.
-    pub fn for_job_with(
+    /// The plan of a transport job along a route that is already found: `edges`
+    /// from `start`, the first `pickup_at` of them to the pickup node, where the
+    /// robot does `pick`, the rest to the drop node, the last one, where it does
+    /// `drop`. `None` if `pickup_at` is beyond the route or an edge is not in the
+    /// graph.
+    pub fn for_edges(
         graph: &Graph,
-        at: NodeIdx,
-        arrival: Arrival,
-        job: &Job,
-        route: impl Fn(NodeIdx, Arrival, NodeIdx) -> Option<Vec<EdgeIdx>>,
+        start: NodeIdx,
+        edges: Vec<EdgeIdx>,
+        pickup_at: usize,
     ) -> Option<Plan> {
-        let mut edges = route(at, arrival, job.pickup)?;
-        let pick_at = edges.len();
-        let then = edges.last().map_or(arrival, |&e| Arrival::Edge(e));
-        edges.extend(route(job.pickup, then, job.drop)?);
-        let mut plan = Plan::new(graph, at, edges);
+        if pickup_at > edges.len() || edges.iter().any(|&e| e >= graph.edges.len()) {
+            return None;
+        }
+        let mut plan = Plan::new(graph, start, edges);
         let drop_at = plan.last();
-        plan.actions[pick_at].push(PICK.to_string());
+        plan.actions[pickup_at].push(PICK.to_string());
         plan.actions[drop_at].push(DROP.to_string());
         Some(plan)
     }

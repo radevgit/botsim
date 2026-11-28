@@ -18,7 +18,7 @@
 //!
 //! **Routes.** The module takes as much of a route as it can order and, in every
 //! release, more when it can. While it can take nothing, it asks for another way,
-//! as it does for a robot on a ring of waiting robots. The dispatcher can only be
+//! as it does for a robot on a ring of waiting robots. The controller can only be
 //! told nodes to keep clear of, so an edge to avoid is given as the node it ends
 //! at.
 //!
@@ -28,8 +28,8 @@
 //! taken; of several, the one with the lowest module number is named.
 //!
 //! Built so far: plain job runs. Not yet: routes that are given up (cancel), RELEASE
-//! zones (no request is answered), the dispatcher's holder queries and the
-//! reservations for a watcher.
+//! zones (no request is answered), the holder queries (`node_holder`,
+//! `edge_holder`) and the reservations for a watcher.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -134,7 +134,7 @@ impl TrafficAdapter {
         Route::new(self.types.get(robot)?, &nodes?, &edges?)
     }
 
-    /// The nodes the dispatcher shall keep clear of; `None` if there is none to
+    /// The nodes the controller shall keep clear of; `None` if there is none to
     /// name.
     fn avoid(&self, wish: &botsim_traffic::Reroute) -> Option<Reroute> {
         let avoid: HashSet<NodeIdx> = wish

@@ -12,6 +12,7 @@ depends on no other botsim crate, reads no files and uses no network.
 | `path` | the geometry of an edge as a line to drive along: straight, or a sampled LIF trajectory (NURBS) |
 | `orientation` | the heading a robot must have on an edge (VDA 5050 `orientation`) |
 | `safety` | the protective field ahead of a moving robot |
+| `job` | a transport job (`Job`): from a pickup node to a drop node |
 | `robot` | who a robot is: its VDA 5050 identity (`RobotId`) and the small number that stands for it (`RobotNo`) |
 | `angle` | normalising and subtracting angles |
 | `errors` | the predefined VDA 5050 error types (`ErrorType`): names and levels |

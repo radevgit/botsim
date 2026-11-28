@@ -8,11 +8,11 @@
 //!
 //! - **Free robot**: no job assigned. Its place is the layout node nearest to
 //!   its reported position (within [`NODE_TOLERANCE`]); a robot that is not on a
-//!   node is not used. A robot without a job stays where it is (S31).
-//! - **Nearest**: the shortest route length from the robot's node to the
-//!   pickup node; ties go to the robot added first.
-//! - **FCFS**: the oldest job is assigned first. A job no free robot can reach
-//!   stays in the queue and does not block the jobs behind it.
+//!   node is not used.
+//! - **Tasks**: which robot gets which job, and which one drives to a charger or
+//!   a parking place, is decided by a [`Dispatcher`] (the baseline's: the oldest
+//!   job first, to the nearest robot; see
+//!   [`botsim_dispatcher::baseline`]).
 //! - **Release**: when the robot reaches plan node `i`, the base is extended up
 //!   to node `i + 2` (an order update from the end of the base), as far as the
 //!   way is free.
@@ -40,28 +40,28 @@
 //! for ever when there is no way round), look-ahead beyond the window, robot types
 //! and edge rules, robots that fail.
 //!
-//! **Two parts** (brief `traffic_policy_slot.md`): this module is the dispatcher
-//! (jobs, routes, re-planning, charging, lifts, doors, messages). Who may go now
-//! (reservations, conflicts, go-first, the wait timeout, zone answers) is a
-//! [`TrafficPolicy`]; the rules above that say so are the baseline's,
-//! [`crate::baseline_policy`].
+//! **Parts:** this module carries out the tasks (messages, releases, re-planning,
+//! lifts, doors, what becomes of a robot's work). Who gets which task is a
+//! [`Dispatcher`]. Who may go now (reservations, conflicts, go-first, the wait
+//! timeout, zone answers) is a [`TrafficPolicy`] (brief `traffic_policy_slot.md`);
+//! the rules above that say so are the baseline's, [`crate::baseline_policy`].
 
-use std::collections::VecDeque;
+use std::collections::HashMap;
 
-use botsim_core::jobs::Job;
 use botsim_core::metrics::{Metrics, is_waiting, summarize};
 use botsim_core::robot::Reception;
 use botsim_core::waiting::{HeldBack, WaitReason};
 use botsim_core::world::World;
+use botsim_dispatcher::baseline::BaselineDispatcher;
+use botsim_dispatcher::{Answer, ChargePolicy, Control, Cycle, Dispatcher, Purpose, Site, Task};
 use botsim_model::errors::ErrorType;
 use botsim_model::graph::{EdgeIdx, Graph, NodeIdx};
+use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
-use botsim_model::spec::{Kinematics, Shape};
-use botsim_router::lift::route_through_waiting;
+use botsim_model::spec::Shape;
 use botsim_router::load::{self, Load};
-use botsim_router::route::{
-    Arrival, Mover, Turns, distances_to, in_edges, plan_path, travel_lengths,
-};
+use botsim_router::route::{Arrival, Mover, plan_path};
+use botsim_router::types::TypeRouting;
 use vda5050::order::Order;
 use vda5050::state::{ActionStatus, RequestStatus, State};
 
@@ -104,26 +104,12 @@ pub struct Rejected {
     pub reason: ErrorType,
 }
 
-/// What a route is for. The `job` of a trip is a stand-in (the robot's node and the
-/// goal), the route has no actions, and a trip is not counted as a completed or
-/// rejected job.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Purpose {
-    Job,
-    /// To a charger; on arrival the controller starts the charging.
-    Charge,
-    /// To a free parking place (U13).
-    Park,
-}
-
-impl Purpose {
-    /// The start of the order id.
-    fn order_prefix(self) -> &'static str {
-        match self {
-            Purpose::Job => "job",
-            Purpose::Charge => "charge",
-            Purpose::Park => "park",
-        }
+/// The start of the order id of a task.
+fn order_prefix(purpose: Purpose) -> &'static str {
+    match purpose {
+        Purpose::Job => "job",
+        Purpose::Charge => "charge",
+        Purpose::Park => "park",
     }
 }
 
@@ -137,7 +123,9 @@ struct Work {
     released_through: usize,
     assigned_tick: u64,
     waiting_seconds: f64,
-    /// A transport job, or a trip the dispatcher sends the robot on.
+    /// A transport job, or a trip the dispatcher sends the robot on. The `job` of
+    /// a trip is a stand-in (the robot's node and the goal), the route has no
+    /// actions, and a trip is not counted as a completed or rejected job.
     purpose: Purpose,
     /// The order was sent with a message delay and the robot's state has not
     /// shown it yet (S58): the controller does not know whether it was accepted.
@@ -146,57 +134,6 @@ struct Work {
     /// cannot take a turn): the order was cancelled, and the job is given up as soon
     /// as the robot has stopped. Until then the robot keeps what it holds.
     cancelling: Option<ErrorType>,
-}
-
-/// A robot that a job can be given to.
-#[derive(Debug, Clone, Copy)]
-struct Candidate {
-    robot: usize,
-    /// Where its route to the pickup starts: the node it stands on, or the last
-    /// released node of its trip to a parking place.
-    from: NodeIdx,
-    /// Metres it still drives to get there.
-    ahead: f64,
-    /// It is on its way to a parking place: a job extends that order (S144).
-    parking: bool,
-}
-
-/// What a robot type may drive (S55): the layout lists the types that may use
-/// each node and edge.
-#[derive(Debug)]
-struct TypeRouting {
-    /// An omnidirectional type drives off in any direction without turning.
-    omnidirectional: bool,
-    /// `ok[e]`: the type may drive edge `e` (the edge and both its nodes allow it).
-    ok: Vec<bool>,
-    /// The turns the type cannot make (S73); `None` if it can make them all.
-    turns: Option<Turns>,
-    /// The distance the type drives on each edge (S74): a curve is longer than the
-    /// straight line between its nodes.
-    cost: Vec<f64>,
-    /// The allowed edges into each node.
-    into: Vec<Vec<EdgeIdx>>,
-}
-
-impl TypeRouting {
-    /// What the type can drive, for the route search.
-    fn mover(&self) -> Mover<'_> {
-        Mover {
-            ok: &self.ok,
-            cost: &self.cost,
-            turns: self.turns.as_ref(),
-        }
-    }
-
-    /// Like [`mover`](Self::mover), with another cost per edge (the length plus the
-    /// load penalty).
-    fn mover_with<'a>(&'a self, cost: &'a [f64]) -> Mover<'a> {
-        Mover {
-            ok: &self.ok,
-            cost,
-            turns: self.turns.as_ref(),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -218,32 +155,16 @@ struct Slot {
     /// message (each topic counts for itself).
     zone_set_header_id: u32,
     instant_header_id: u32,
-    /// The robot stands on a charger and `startCharging` was sent: it gets no jobs.
-    charging: bool,
-    /// It was counted as finding no free parking place; reset when it gets a route.
-    unparked: bool,
-    /// It refused an order to a parking place: not sent again until it has had a job.
-    park_refused: bool,
 }
 
-/// When the baseline sends robots to a charger (percent of the charge the robot
-/// reports in its state).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ChargePolicy {
-    /// A free robot below this goes to a charger.
-    pub low: f64,
-    /// A charging robot gets jobs again from this on.
-    pub high: f64,
-    /// Below this a robot takes no more jobs and waits for a charger.
-    pub critical: f64,
-}
-
-/// The controller: the dispatcher, with the traffic rules behind `P` (by default the
-/// baseline's, [`BaselinePolicy`]).
+/// The controller, with the traffic rules behind `P` (by default the baseline's,
+/// [`BaselinePolicy`]) and a [`Dispatcher`] (by default the baseline's,
+/// [`BaselineDispatcher`]).
 #[derive(Debug)]
 pub struct Controller<P: TrafficPolicy = BaselinePolicy> {
     graph: Graph,
-    pending: VecDeque<Job>,
+    /// Which robot gets which task; it holds the jobs not yet given out.
+    dispatcher: Box<dyn Dispatcher>,
     robots: Vec<Slot>,
     completed: Vec<Completed>,
     rejected: Vec<Rejected>,
@@ -260,12 +181,12 @@ pub struct Controller<P: TrafficPolicy = BaselinePolicy> {
     doors: DoorDesk,
     /// Which node a position is on (S52).
     node_grid: NodeGrid,
-    /// What each robot type may drive and the edges into each node for it, for
-    /// the route lengths to a pickup (S52, S55). Indexed by `Slot::type_idx`.
+    /// What each robot type may drive and the edges into each node for it (S52,
+    /// S55). Indexed by `Slot::type_idx`.
     types: Vec<TypeRouting>,
-    /// (job, robot type) pairs whose drop cannot be reached from their pickup
-    /// by that type (the job waits for ever for such a robot).
-    unserviceable: std::collections::HashSet<(u64, usize)>,
+    /// Every lift ride with the waiting node of its entrance (a copy of the lift
+    /// desk's, which does not change), for the dispatcher's routes.
+    rides: HashMap<EdgeIdx, Option<NodeIdx>>,
     /// How many times a route was changed because the way was held (S53).
     reroutes: usize,
     /// Metres of route cost added for every robot that holds an edge, or the node
@@ -277,25 +198,6 @@ pub struct Controller<P: TrafficPolicy = BaselinePolicy> {
     /// For each node, how many robots stood waiting on it, as a moving average over
     /// [`WAIT_AVERAGE_SECONDS`] (1.0 = one robot waiting all the time).
     node_wait: Vec<f64>,
-    /// Sending robots to chargers; `None` (default) is off.
-    charge_policy: Option<ChargePolicy>,
-    /// The nodes of the stations of type `charger`.
-    charger_nodes: Vec<NodeIdx>,
-    /// Charger node → the robot that is on its way there.
-    charger_targets: std::collections::HashMap<NodeIdx, usize>,
-    /// Trips to a charger started so far (also the id of the stand-in jobs).
-    charge_trips: usize,
-    /// Simulated seconds that free robots below the low limit have waited for a
-    /// charger (all robots together).
-    charge_wait_seconds: f64,
-    /// The parking places: the nodes of the stations of type `parking` (U13).
-    parking_nodes: Vec<NodeIdx>,
-    /// Parking place → the robot that is on its way there.
-    parking_targets: std::collections::HashMap<NodeIdx, usize>,
-    /// Trips to a parking place started so far (also the id of the stand-in jobs).
-    park_trips: usize,
-    /// How often a robot without a job got no parking place.
-    no_free_parking: usize,
 }
 
 impl Controller {
@@ -335,12 +237,23 @@ impl Controller {
 }
 
 impl<P: TrafficPolicy> Controller<P> {
-    /// A controller for all robots now in `world` with the traffic rules of `policy`.
-    pub fn with_policy(world: &World, mut policy: P) -> Controller<P> {
+    /// A controller for all robots now in `world` with the traffic rules of `policy`
+    /// and the baseline's dispatcher.
+    pub fn with_policy(world: &World, policy: P) -> Controller<P> {
+        Controller::with_dispatcher(world, policy, Box::new(BaselineDispatcher::new()))
+    }
+
+    /// A controller for all robots now in `world` with the traffic rules of `policy`
+    /// and the tasks given out by `dispatcher` (which it starts).
+    pub fn with_dispatcher(
+        world: &World,
+        mut policy: P,
+        mut dispatcher: Box<dyn Dispatcher>,
+    ) -> Controller<P> {
         // the robot types (manufacturer, series) in the order they first appear
         let graph = world.graph();
         let mut keys: Vec<(String, String)> = Vec::new();
-        let mut kinds: Vec<Kinematics> = Vec::new();
+        let mut kinds = Vec::new();
         // the body outline of each robot, for the policy
         let mut shapes: Vec<Shape> = Vec::new();
         let robots: Vec<Slot> = world
@@ -370,27 +283,13 @@ impl<P: TrafficPolicy> Controller<P> {
                     enable_sent: false,
                     zone_set_header_id: 0,
                     instant_header_id: 0,
-                    charging: false,
-                    unparked: false,
-                    park_refused: false,
                 })
             })
             .collect();
         let types: Vec<TypeRouting> = keys
             .iter()
             .zip(&kinds)
-            .map(|((m, s), &kinematics)| {
-                let ok: Vec<bool> = (0..graph.edges.len())
-                    .map(|e| graph.edge_allows(e, m, s))
-                    .collect();
-                TypeRouting {
-                    omnidirectional: kinematics == Kinematics::Omnidirectional,
-                    into: in_edges(graph, &ok),
-                    turns: Turns::for_type(graph, kinematics, m, s),
-                    cost: travel_lengths(graph, m, s),
-                    ok,
-                }
-            })
+            .map(|((m, s), &kinematics)| TypeRouting::new(graph, kinematics, m, s))
             .collect();
         let type_names: Vec<String> = keys.iter().map(|(m, s)| format!("{m}/{s}")).collect();
         let policy_robots: Vec<PolicyRobot> = robots
@@ -410,9 +309,12 @@ impl<P: TrafficPolicy> Controller<P> {
             robots: &policy_robots,
             zones: world.zones(),
         });
+        dispatcher.start(world.graph(), robots.len());
+        let lifts = LiftDesk::new(world);
+        let rides = lifts.waiting_nodes().clone();
         Controller {
             graph: world.graph().clone(),
-            pending: VecDeque::new(),
+            dispatcher,
             robots,
             completed: Vec::new(),
             rejected: Vec::new(),
@@ -424,42 +326,33 @@ impl<P: TrafficPolicy> Controller<P> {
                 zone_set_descriptor: None,
                 zones: z.zones.clone(),
             }),
-            lifts: LiftDesk::new(world),
+            lifts,
             doors: DoorDesk::new(world),
             node_grid: NodeGrid::new(world.graph()),
             types,
-            unserviceable: std::collections::HashSet::new(),
+            rides,
             reroutes: 0,
             load_weight: 0.0,
             wait_weight: 0.0,
             node_wait: vec![0.0; world.graph().nodes.len()],
-            charge_policy: None,
-            charger_nodes: Vec::new(),
-            charger_targets: std::collections::HashMap::new(),
-            charge_trips: 0,
-            charge_wait_seconds: 0.0,
-            parking_nodes: station_nodes(world.graph(), "parking"),
-            parking_targets: std::collections::HashMap::new(),
-            park_trips: 0,
-            no_free_parking: 0,
         }
     }
 
     /// The parking places of the layout (U13): the interaction nodes of the stations
     /// of type `parking`. With none, idle robots stay where they are.
     pub fn parking_places(&self) -> usize {
-        self.parking_nodes.len()
+        self.dispatcher.counts().parking_places
     }
 
     /// Trips to a parking place started so far.
     pub fn park_trips(&self) -> usize {
-        self.park_trips
+        self.dispatcher.counts().park_trips
     }
 
     /// How often a robot without a job found no free parking place (or none it can
     /// reach) and stayed where it was; counted once until it gets a route again.
     pub fn no_free_parking(&self) -> usize {
-        self.no_free_parking
+        self.dispatcher.counts().no_free_parking
     }
 
     /// Send robots to chargers (charging brief, step 2): a free robot whose reported
@@ -468,20 +361,18 @@ impl<P: TrafficPolicy> Controller<P> {
     /// when it has arrived. Chargers are the stations of type `charger` (any case) of
     /// the layout. Returns the number of charger nodes (0: nothing will happen).
     pub fn set_charging(&mut self, policy: ChargePolicy) -> usize {
-        self.charger_nodes = station_nodes(&self.graph, "charger");
-        self.charge_policy = Some(policy);
-        self.charger_nodes.len()
+        self.dispatcher.set_charging(policy)
     }
 
     /// Trips to a charger started so far.
     pub fn charge_trips(&self) -> usize {
-        self.charge_trips
+        self.dispatcher.counts().charge_trips
     }
 
     /// Simulated seconds free robots below the low limit have waited for a charger
     /// (all robots together; robots that are busy with a job are not counted).
     pub fn charge_wait_seconds(&self) -> f64 {
-        self.charge_wait_seconds
+        self.dispatcher.counts().charge_wait_seconds
     }
 
     /// Route with load, second part: every edge also costs `weight` metres for each
@@ -508,19 +399,6 @@ impl<P: TrafficPolicy> Controller<P> {
         } else {
             0.0
         };
-    }
-
-    /// The route cost of every edge for a robot of type `t` that is not `robot`:
-    /// the length plus the load penalty. `None` if the load weight is 0 (use the
-    /// plain lengths).
-    fn loaded_cost(&self, t: usize, robot: usize) -> Option<Vec<f64>> {
-        loaded_cost(
-            &self.types[t].cost,
-            &self.graph,
-            &self.policy,
-            (self.load_weight, self.wait_weight, &self.node_wait),
-            robot,
-        )
     }
 
     /// How many times a robot's route was changed because the policy asked for it
@@ -550,7 +428,7 @@ impl<P: TrafficPolicy> Controller<P> {
 
     /// Jobs not yet assigned, oldest first.
     pub fn pending(&self) -> impl Iterator<Item = &Job> {
-        self.pending.iter()
+        self.dispatcher.pending()
     }
 
     pub fn completed(&self) -> &[Completed] {
@@ -573,7 +451,9 @@ impl<P: TrafficPolicy> Controller<P> {
     /// One control cycle: take the new jobs, read every robot's state, move
     /// the release windows on, finish jobs, and assign waiting jobs.
     pub fn step(&mut self, world: &mut World, new_jobs: impl IntoIterator<Item = Job>) {
-        self.pending.extend(new_jobs);
+        for job in new_jobs {
+            self.dispatcher.add_job(job);
+        }
         let tick = world.tick();
         // time since the last cycle: a robot seen waiting now is counted as
         // waiting for all of it
@@ -619,14 +499,14 @@ impl<P: TrafficPolicy> Controller<P> {
         }
         // a charging robot that has reached the upper limit stops charging and is
         // free for jobs again
-        if let Some(policy) = self.charge_policy {
-            for (i, state) in states.iter().enumerate() {
+        for (i, state) in states.iter().enumerate() {
+            if self
+                .dispatcher
+                .stop_charging(i, state.power_supply.state_of_charge)
+            {
                 let slot = &mut self.robots[i];
-                if slot.charging && state.power_supply.state_of_charge >= policy.high {
-                    slot.charging = false;
-                    let id = format!("stop-charge-{}", slot.instant_header_id);
-                    send_instant(world, slot, "stopCharging", &id);
-                }
+                let id = format!("stop-charge-{}", slot.instant_header_id);
+                send_instant(world, slot, "stopCharging", &id);
             }
         }
         self.policy.after_releases(&Fleet {
@@ -726,18 +606,14 @@ impl<P: TrafficPolicy> Controller<P> {
                     &work.plan,
                     work.released_through,
                 );
-                match work.purpose {
-                    Purpose::Job => self.rejected.push(Rejected {
+                if work.purpose == Purpose::Job {
+                    self.rejected.push(Rejected {
                         job: work.job,
                         robot: slot.id.clone(),
                         reason,
-                    }),
-                    Purpose::Charge => self.charger_targets.retain(|_, r| *r != i),
-                    Purpose::Park => {
-                        self.parking_targets.retain(|_, r| *r != i);
-                        slot.park_refused = true;
-                    }
+                    });
                 }
+                self.dispatcher.given_up(i, work.purpose);
             }
             return;
         }
@@ -757,18 +633,14 @@ impl<P: TrafficPolicy> Controller<P> {
                     &work.plan,
                     work.released_through,
                 );
-                match work.purpose {
-                    Purpose::Job => self.rejected.push(Rejected {
+                if work.purpose == Purpose::Job {
+                    self.rejected.push(Rejected {
                         job: work.job,
                         robot: slot.id.clone(),
                         reason,
-                    }),
-                    Purpose::Charge => self.charger_targets.retain(|_, r| *r != i),
-                    Purpose::Park => {
-                        self.parking_targets.retain(|_, r| *r != i);
-                        slot.park_refused = true;
-                    }
+                    });
                 }
+                self.dispatcher.given_up(i, work.purpose);
                 return;
             } else {
                 return; // not answered yet
@@ -785,12 +657,11 @@ impl<P: TrafficPolicy> Controller<P> {
                 return;
             };
             self.policy.route_finished(i, &work.plan);
+            self.dispatcher.arrived(i, work.purpose);
             match work.purpose {
                 Purpose::Job => {}
                 Purpose::Charge => {
                     // arrived at the charger: start charging; no job was done
-                    self.charger_targets.retain(|_, r| *r != i);
-                    slot.charging = true;
                     send_instant(
                         world,
                         slot,
@@ -799,11 +670,8 @@ impl<P: TrafficPolicy> Controller<P> {
                     );
                     return;
                 }
-                Purpose::Park => {
-                    // the robot stands on its place now
-                    self.parking_targets.retain(|_, r| *r != i);
-                    return;
-                }
+                // the robot stands on its place now
+                Purpose::Park => return,
             }
             self.completed.push(Completed {
                 job: work.job,
@@ -1043,413 +911,117 @@ impl<P: TrafficPolicy> Controller<P> {
         }
     }
 
-    /// Give waiting jobs to free robots.
+    /// Let the dispatcher give out tasks: waiting jobs, and trips to chargers and
+    /// parking places. It acts through [`Orders`].
     fn dispatch(&mut self, world: &mut World, states: &[State], tick: u64, elapsed: f64) {
-        // free robots with the node they stand on
-        let mut free: Vec<(usize, NodeIdx)> = (0..self.robots.len())
-            .filter(|&i| self.robots[i].work.is_none())
-            .filter(|&i| !self.robots[i].charging)
-            .filter(|&i| self.zones_ready(&states[i]))
-            .filter_map(|i| Some((i, self.node_of(&states[i])?)))
+        let robots: Vec<botsim_dispatcher::Robot> = (0..self.robots.len())
+            .map(|i| self.dispatch_view(i, &states[i]))
             .collect();
-
-        // a free robot with a low battery goes to a charger instead of getting a job
-        // (the pair of a low robot and a free charger with the shortest route first, so
-        // that the nearest robot gets a charger, not the first in the list)
-        if let Some(policy) = self.charge_policy {
-            let mut skipped: Vec<usize> = Vec::new();
-            let mut dist: std::collections::HashMap<(usize, NodeIdx), Vec<f64>> =
-                std::collections::HashMap::new();
-            loop {
-                let mut best: Option<(f64, usize, NodeIdx)> = None; // (length, index in free, charger)
-                for (k, &(i, node)) in free.iter().enumerate() {
-                    if skipped.contains(&i) || states[i].power_supply.state_of_charge >= policy.low
-                    {
-                        continue;
-                    }
-                    if self.charger_nodes.contains(&node) {
-                        best = Some((-1.0, k, node)); // already on a charger
-                        break;
-                    }
-                    let t = self.robots[i].type_idx;
-                    for &c in &self.charger_nodes {
-                        // a charger is free if no robot holds it and none is on its way
-                        if self.policy.node_holder(c).is_some()
-                            || self.charger_targets.contains_key(&c)
-                        {
-                            continue;
-                        }
-                        let d = dist.entry((t, c)).or_insert_with(|| {
-                            distances_to(&self.graph, &self.types[t].into, &self.types[t].cost, c)
-                        })[node];
-                        if d.is_finite() && best.is_none_or(|(b, _, _)| d < b) {
-                            best = Some((d, k, c));
-                        }
-                    }
-                }
-                let Some((_, k, charger)) = best else {
-                    break;
-                };
-                let (i, node) = free[k];
-                if self.start_charge(world, states, i, node, charger, tick) {
-                    free.remove(k);
-                } else {
-                    skipped.push(i);
-                }
-            }
-            // robots still free and below the low limit wait for a charger; below the
-            // critical limit they take no more jobs
-            for &(i, _) in &free {
-                if states[i].power_supply.state_of_charge < policy.low {
-                    self.charge_wait_seconds += elapsed;
-                }
-            }
-            free.retain(|&(i, _)| states[i].power_supply.state_of_charge >= policy.critical);
-        }
-
-        // jobs go to the free robots and to those on their way to a parking place
-        let mut candidates: Vec<Candidate> = free
-            .iter()
-            .map(|&(robot, from)| Candidate {
-                robot,
-                from,
-                ahead: 0.0,
-                parking: false,
-            })
-            .collect();
-        candidates
-            .extend((0..self.robots.len()).filter_map(|i| self.parking_candidate(i, &states[i])));
-
-        let mut waiting = VecDeque::new();
-        while let Some(job) = self.pending.pop_front() {
-            if candidates.is_empty() {
-                waiting.push_back(job); // nobody to give it to: no search needed
-                continue;
-            }
-            // The nearest candidate that can do the job. One search backwards
-            // from the pickup gives the route length from every node (S52), so
-            // a job costs one search per robot type, not one per free robot. A
-            // type may drive only some of the edges (S55), so its lengths differ.
-            let mut dist: Vec<Option<Vec<f64>>> = vec![None; self.types.len()];
-            let mut order: Vec<(i64, usize, usize)> = Vec::new();
-            for (k, c) in candidates.iter().enumerate() {
-                let i = c.robot;
-                let t = self.robots[i].type_idx;
-                // an order update does not run the actions of its first node
-                if c.parking && c.from == job.pickup {
-                    continue;
-                }
-                // A job whose drop cannot be reached from its pickup cannot be done
-                // by any robot of the type; the layout does not change, so ask only
-                // once (S52: it was retried against every free robot every cycle).
-                if self.unserviceable.contains(&(job.id, t)) {
-                    continue;
-                }
-                if dist[t].is_none() {
-                    // (however the robot arrives at the pickup: the most it can do)
-                    if route_through_waiting(
-                        &self.graph,
-                        &self.types[t].mover(),
-                        self.lifts.waiting_nodes(),
-                        Arrival::Free,
-                        job.pickup,
-                        job.drop,
-                    )
-                    .is_none()
-                    {
-                        self.unserviceable.insert((job.id, t));
-                        continue;
-                    }
-                    dist[t] = Some(distances_to(
-                        &self.graph,
-                        &self.types[t].into,
-                        &self.types[t].cost,
-                        job.pickup,
-                    ));
-                }
-                let Some(dist_t) = dist[t].as_ref() else {
-                    continue; // (computed just above)
-                };
-                let d = dist_t[c.from] + c.ahead;
-                if d.is_finite() {
-                    // smallest distance (to a nanometre); equal → the robot added first
-                    order.push(((d * 1e9).round() as i64, i, k));
-                }
-            }
-            order.sort_unstable();
-            // the first robot in that order that has a plan for the job
-            let chosen = order.iter().find_map(|&(_, i, k)| {
-                let c = candidates[k];
-                let t = self.robots[i].type_idx;
-                let loaded = self.loaded_cost(t, i);
-                let mover = match &loaded {
-                    Some(c) => self.types[t].mover_with(c),
-                    None => self.types[t].mover(),
-                };
-                // the trip to a parking place that the job continues, if any
-                let trip = self.robots[i].work.as_ref().filter(|_| c.parking);
-                // the robot's heading matters if it cannot turn on the spot (S73):
-                // on a trip, the way it will arrive at the last released node
-                let arrival = match trip {
-                    Some(w) if w.released_through > 0 => {
-                        Arrival::Edge(w.plan.edges[w.released_through - 1])
-                    }
-                    _ => states[i]
-                        .mobile_robot_position
-                        .as_ref()
-                        .map_or(Arrival::Free, |p| Arrival::Heading(p.theta)),
-                };
-                let plan = Plan::for_job_with(&self.graph, c.from, arrival, &job, |a, arr, b| {
-                    let rides = self.lifts.waiting_nodes();
-                    route_through_waiting(&self.graph, &mover, rides, arr, a, b)
-                })?;
-                let plan = match trip {
-                    Some(w) => w.plan.continued(w.released_through, plan),
-                    None => plan,
-                };
-                Some((k, plan))
-            });
-            let Some((k, plan)) = chosen else {
-                waiting.push_back(job);
-                continue;
-            };
-            let c = candidates.remove(k);
-            if c.parking {
-                self.extend_trip(world, c.robot, job, plan);
-            } else {
-                self.assign(world, &states[c.robot], c.robot, job, plan, Purpose::Job);
-            }
-        }
-        self.pending = waiting;
-        // the free robots that got nothing go to a parking place (U13)
-        let idle: Vec<(usize, NodeIdx)> = candidates
-            .iter()
-            .filter(|c| !c.parking)
-            .map(|c| (c.robot, c.from))
-            .collect();
-        self.park(world, states, &idle, tick);
+        let site = Site {
+            graph: &self.graph,
+            types: &self.types,
+            rides: &self.rides,
+        };
+        let mut orders = Orders {
+            graph: &self.graph,
+            types: &self.types,
+            node_grid: &self.node_grid,
+            weights: (self.load_weight, self.wait_weight, &self.node_wait),
+            robots: &mut self.robots,
+            policy: &mut self.policy,
+            lifts: &mut self.lifts,
+            doors: &mut self.doors,
+            rejected: &mut self.rejected,
+            world,
+            states,
+        };
+        self.dispatcher
+            .dispatch(&site, &robots, Cycle { tick, elapsed }, &mut orders);
     }
 
-    /// Robot `i` as a candidate for a job while it is on its way to a parking place
-    /// (S144); `None` if it is not, or cannot take one now: its order is not yet
-    /// answered or is being cancelled, it owns a lift or a door (those claims depend
-    /// on the route), or its battery is below the low limit (it goes to a charger
-    /// once it is free).
-    fn parking_candidate(&self, i: usize, state: &State) -> Option<Candidate> {
+    /// Robot `i` as the dispatcher sees it.
+    fn dispatch_view(&self, i: usize, state: &State) -> botsim_dispatcher::Robot {
         let slot = &self.robots[i];
-        let work = slot.work.as_ref()?;
-        let low = self.charge_policy.map_or(0.0, |p| p.low);
-        if work.purpose != Purpose::Park
-            || work.cancelling.is_some()
-            || work.awaiting_ack
-            || state.order_id != work.order_id
-            || self.lifts.owns(i)
-            || self.doors.owns(i)
-            || !self.zones_ready(state)
-            || state.power_supply.state_of_charge < low
-        {
-            return None;
-        }
-        let at = (state.last_node_sequence_id / 2) as usize;
-        let released = work.plan.edges.get(at..work.released_through);
-        let cost = &self.types[slot.type_idx].cost;
-        Some(Candidate {
-            robot: i,
-            from: work.plan.nodes[work.released_through],
-            ahead: released.unwrap_or_default().iter().map(|&e| cost[e]).sum(),
-            parking: true,
-        })
-    }
-
-    /// Give `job` to robot `i` on its way to a parking place: an update of its order
-    /// from the last released node, with `plan` (the released part as before, then
-    /// the job). Nothing more is released here; that happens in the next cycle.
-    fn extend_trip(&mut self, world: &mut World, i: usize, job: Job, plan: Plan) {
-        let slot = &mut self.robots[i];
-        let Some(work) = slot.work.as_mut() else {
-            return;
-        };
-        self.parking_targets.retain(|_, r| *r != i);
-        work.job = job;
-        work.purpose = Purpose::Job;
-        work.assigned_tick = world.tick();
-        work.waiting_seconds = 0.0;
-        work.update_id += 1;
-        slot.park_refused = false;
-        let header = OrderHeader {
-            robot: &slot.id,
-            header_id: slot.header_id,
-            timestamp: &world.timestamp(),
-            order_id: &work.order_id,
-            order_update_id: work.update_id,
-        };
-        let orient = self.types[slot.type_idx]
-            .omnidirectional
-            .then_some((slot.id.manufacturer.as_str(), slot.series.as_str()));
-        let from = work.released_through;
-        let msg = build_order_with(&self.graph, &header, &plan, from, from, orient);
-        slot.header_id += 1;
-        match deliver(world, msg) {
-            Ok(_) => {
-                work.plan = plan;
-                self.policy.route_changed(i, &work.plan);
-            }
-            // the robot refuses the route: cancel the order and give the job up, as
-            // for any refused update (S70)
-            Err(reason) => cancel_order(world, slot, reason),
-        }
-    }
-
-    /// Send the robots of `idle` (without a job, with the node they stand on) that
-    /// are not on a parking place to free ones, the pair with the shortest route
-    /// first. A place is free if no robot stands on it or holds it and none is on
-    /// its way there. A robot that gets none stays where it is and is counted.
-    fn park(&mut self, world: &mut World, states: &[State], idle: &[(usize, NodeIdx)], tick: u64) {
-        if self.parking_nodes.is_empty() {
-            return;
-        }
-        let mut waiting: Vec<(usize, NodeIdx)> = idle
-            .iter()
-            .filter(|&&(i, node)| {
-                !self.parking_nodes.contains(&node) && !self.robots[i].park_refused
-            })
-            .copied()
-            .collect();
-        if waiting.is_empty() {
-            return;
-        }
-        let occupied: std::collections::HashSet<NodeIdx> =
-            states.iter().filter_map(|s| self.node_of(s)).collect();
-        let mut dist: std::collections::HashMap<(usize, NodeIdx), Vec<f64>> =
-            std::collections::HashMap::new();
-        // (robot, place) pairs for which no route was found
-        let mut no_route: Vec<(usize, NodeIdx)> = Vec::new();
-        loop {
-            let mut best: Option<(f64, usize, NodeIdx)> = None; // (length, index, place)
-            for (k, &(i, node)) in waiting.iter().enumerate() {
-                let t = self.robots[i].type_idx;
-                for &p in &self.parking_nodes {
-                    if occupied.contains(&p)
-                        || self.policy.node_holder(p).is_some()
-                        || self.parking_targets.contains_key(&p)
-                        || no_route.contains(&(i, p))
-                    {
-                        continue;
-                    }
-                    let d = dist.entry((t, p)).or_insert_with(|| {
-                        distances_to(&self.graph, &self.types[t].into, &self.types[t].cost, p)
-                    })[node];
-                    if d.is_finite() && best.is_none_or(|(b, _, _)| d < b) {
-                        best = Some((d, k, p));
-                    }
+        let work = match &slot.work {
+            None => botsim_dispatcher::Work::None,
+            Some(w) if takes_extension(w, i, state, &self.lifts, &self.doors) => {
+                let at = (state.last_node_sequence_id / 2) as usize;
+                let rt = w.released_through;
+                botsim_dispatcher::Work::Parking {
+                    from: w.plan.nodes[rt],
+                    ahead: w.plan.edges.get(at..rt).unwrap_or_default().to_vec(),
+                    arrival: (rt > 0).then(|| w.plan.edges[rt - 1]),
                 }
             }
-            let Some((_, k, place)) = best else {
-                break;
-            };
-            let (i, node) = waiting[k];
-            let t = self.robots[i].type_idx;
-            let loaded = self.loaded_cost(t, i);
-            let mover = match &loaded {
-                Some(c) => self.types[t].mover_with(c),
-                None => self.types[t].mover(),
-            };
-            let arrival = states[i]
-                .mobile_robot_position
-                .as_ref()
-                .map_or(Arrival::Free, |p| Arrival::Heading(p.theta));
-            let rides = self.lifts.waiting_nodes();
-            let Some(edges) =
-                route_through_waiting(&self.graph, &mover, rides, arrival, node, place)
-            else {
-                no_route.push((i, place));
-                continue;
-            };
-            let plan = Plan::new(&self.graph, node, edges);
-            let job = Job {
-                id: self.park_trips as u64,
-                pickup: node,
-                drop: place,
-                created_tick: tick,
-            };
-            self.park_trips += 1;
-            self.parking_targets.insert(place, i);
-            waiting.remove(k);
-            self.assign(world, &states[i], i, job, plan, Purpose::Park);
-        }
-        for (i, _) in waiting {
-            if !self.robots[i].unparked {
-                self.robots[i].unparked = true;
-                self.no_free_parking += 1;
-            }
+            Some(_) => botsim_dispatcher::Work::Busy,
+        };
+        botsim_dispatcher::Robot {
+            type_idx: slot.type_idx,
+            node: self.node_of(state),
+            heading: state.mobile_robot_position.as_ref().map(|p| p.theta),
+            charge: state.power_supply.state_of_charge,
+            ready: self.zones_ready(state),
+            work,
         }
     }
 
-    /// Send the free robot `i`, standing on `node`, to `charger` and start charging
-    /// there; `false` if it cannot be reached.
-    fn start_charge(
-        &mut self,
-        world: &mut World,
-        states: &[State],
-        i: usize,
-        node: NodeIdx,
-        charger: NodeIdx,
-        tick: u64,
-    ) -> bool {
-        // already on the charger: just start
-        if node == charger {
-            let slot = &mut self.robots[i];
-            slot.charging = true;
-            let id = format!("charge-here-{}", self.charge_trips);
-            self.charge_trips += 1;
-            send_instant(world, slot, "startCharging", &id);
-            return true;
-        }
-        let t = self.robots[i].type_idx;
-        let loaded = self.loaded_cost(t, i);
-        let mover = match &loaded {
-            Some(c) => self.types[t].mover_with(c),
-            None => self.types[t].mover(),
-        };
-        let arrival = states[i]
-            .mobile_robot_position
-            .as_ref()
-            .map_or(Arrival::Free, |p| Arrival::Heading(p.theta));
-        let rides = self.lifts.waiting_nodes();
-        let Some(edges) = route_through_waiting(&self.graph, &mover, rides, arrival, node, charger)
-        else {
-            return false;
-        };
-        let plan = Plan::new(&self.graph, node, edges);
-        let job = Job {
-            id: self.charge_trips as u64,
-            pickup: node,
-            drop: charger,
-            created_tick: tick,
-        };
-        self.charge_trips += 1;
-        self.charger_targets.insert(charger, i);
-        self.assign(world, &states[i], i, job, plan, Purpose::Charge);
-        true
+    /// The layout node a robot stands on, from its reported position.
+    fn node_of(&self, state: &State) -> Option<NodeIdx> {
+        node_of(&self.graph, &self.node_grid, state)
+    }
+}
+
+/// What the controller does for the dispatcher during one dispatch: it answers its
+/// questions and carries out its tasks (see [`Control`]).
+struct Orders<'a, P: TrafficPolicy> {
+    graph: &'a Graph,
+    types: &'a [TypeRouting],
+    node_grid: &'a NodeGrid,
+    /// (`load_weight`, `wait_weight`, `node_wait`), see [`loaded_cost`].
+    weights: (f64, f64, &'a [f64]),
+    robots: &'a mut [Slot],
+    policy: &'a mut P,
+    lifts: &'a mut LiftDesk,
+    doors: &'a mut DoorDesk,
+    rejected: &'a mut Vec<Rejected>,
+    world: &'a mut World,
+    states: &'a [State],
+}
+
+impl<P: TrafficPolicy> Orders<'_, P> {
+    /// Does the route of `task` start at `from` and connect edge by edge, with the
+    /// pickup of a job on it?
+    fn connects(&self, from: NodeIdx, task: &Task) -> bool {
+        let mut here = from;
+        task.from == from
+            && (task.purpose != Purpose::Job || task.pickup_at <= task.edges.len())
+            && task.edges.iter().all(|&e| match self.graph.edges.get(e) {
+                Some(edge) if edge.start == here => {
+                    here = edge.end;
+                    true
+                }
+                _ => false,
+            })
     }
 
-    fn assign(
-        &mut self,
-        world: &mut World,
-        state: &State,
-        i: usize,
-        job: Job,
-        mut plan: Plan,
-        purpose: Purpose,
-    ) {
-        let tick = world.tick();
-        let order_id = format!("{}-{}", purpose.order_prefix(), job.id);
+    /// The route of `task` with its actions.
+    fn plan(&self, task: Task) -> Option<Plan> {
+        match task.purpose {
+            Purpose::Job => Plan::for_edges(self.graph, task.from, task.edges, task.pickup_at),
+            Purpose::Charge | Purpose::Park => Some(Plan::new(self.graph, task.from, task.edges)),
+        }
+    }
+
+    /// Place the route of a free robot with the traffic rules and send the order.
+    fn assign(&mut self, i: usize, job: Job, mut plan: Plan, purpose: Purpose) -> Answer {
+        let tick = self.world.tick();
+        let order_id = format!("{}-{}", order_prefix(purpose), job.id);
         let wanted = plan.released_through(0, self.policy.window());
         let wanted = self.lifts.window(i, &plan, 0, 0, wanted);
         let wanted = self.doors.window(i, &plan, 0, 0, wanted);
         let answer = self.policy.place(&Ask {
             robot: i,
-            state,
+            state: &self.states[i],
             route: &plan,
             at: 0,
             released_through: 0,
@@ -1459,17 +1031,17 @@ impl<P: TrafficPolicy> Controller<P> {
         let released_through = answer.through.min(wanted);
         self.doors.settle(i, released_through);
         if let Some(wish) = answer.reroute {
-            let t = self.robots[i].type_idx;
-            let loaded = self.loaded_cost(t, i);
+            let kind = &self.types[self.robots[i].type_idx];
+            let loaded = self.route_cost(i);
             let mover = match &loaded {
-                Some(c) => self.types[t].mover_with(c),
-                None => self.types[t].mover(),
+                Some(c) => kind.mover_with(c),
+                None => kind.mover(),
             };
             if let Some(other) = reroute(
-                &self.graph,
+                self.graph,
                 &wish.avoid,
-                &self.lifts,
-                &self.doors,
+                self.lifts,
+                self.doors,
                 &mover,
                 i,
                 &plan,
@@ -1483,21 +1055,17 @@ impl<P: TrafficPolicy> Controller<P> {
         let header = OrderHeader {
             robot: &slot.id,
             header_id: slot.header_id,
-            timestamp: &world.timestamp(),
+            timestamp: &self.world.timestamp(),
             order_id: &order_id,
             order_update_id: 0,
         };
         let orient = self.types[slot.type_idx]
             .omnidirectional
             .then_some((slot.id.manufacturer.as_str(), slot.series.as_str()));
-        let msg = build_order_with(&self.graph, &header, &plan, 0, released_through, orient);
+        let msg = build_order_with(self.graph, &header, &plan, 0, released_through, orient);
         slot.header_id += 1;
-        match deliver(world, msg) {
+        match deliver(self.world, msg) {
             Ok(reception) => {
-                slot.unparked = false;
-                if purpose == Purpose::Job {
-                    slot.park_refused = false;
-                }
                 slot.work = Some(Work {
                     job,
                     plan,
@@ -1510,38 +1078,150 @@ impl<P: TrafficPolicy> Controller<P> {
                     awaiting_ack: reception == Reception::InTransit,
                     cancelling: None,
                 });
+                Answer::Taken
             }
             Err(reason) => {
                 give_back(
-                    &mut self.policy,
-                    &mut self.lifts,
-                    &mut self.doors,
+                    self.policy,
+                    self.lifts,
+                    self.doors,
                     i,
                     &plan,
                     released_through,
                 );
-                match purpose {
-                    Purpose::Job => self.rejected.push(Rejected {
+                if purpose == Purpose::Job {
+                    self.rejected.push(Rejected {
                         job,
                         robot: slot.id.clone(),
                         reason,
-                    }),
-                    Purpose::Charge => self.charger_targets.retain(|_, r| *r != i),
-                    Purpose::Park => {
-                        self.parking_targets.retain(|_, r| *r != i);
-                        slot.park_refused = true;
-                    }
+                    });
                 }
+                Answer::Refused
+            }
+        }
+    }
+}
+
+impl<P: TrafficPolicy> Control for Orders<'_, P> {
+    fn node_holder(&self, node: NodeIdx) -> Option<usize> {
+        if node >= self.graph.nodes.len() {
+            return None;
+        }
+        self.policy.node_holder(node)
+    }
+
+    fn route_cost(&self, robot: usize) -> Option<Vec<f64>> {
+        let kind = &self.types[self.robots.get(robot)?.type_idx];
+        loaded_cost(&kind.cost, self.graph, &*self.policy, self.weights, robot)
+    }
+
+    fn give(&mut self, i: usize, task: Task) -> Answer {
+        let (Some(slot), Some(state)) = (self.robots.get(i), self.states.get(i)) else {
+            return Answer::Invalid;
+        };
+        let here = node_of(self.graph, self.node_grid, state);
+        if slot.work.is_some() || !here.is_some_and(|n| self.connects(n, &task)) {
+            return Answer::Invalid;
+        }
+        let (job, purpose) = (task.job, task.purpose);
+        match self.plan(task) {
+            Some(plan) => self.assign(i, job, plan, purpose),
+            None => Answer::Invalid,
+        }
+    }
+
+    /// An update of the trip's order from the last released node: the released part
+    /// as before, then the job. Nothing more is released here; that happens in the
+    /// next cycle.
+    fn extend(&mut self, i: usize, task: Task) -> Answer {
+        let (Some(slot), Some(state)) = (self.robots.get(i), self.states.get(i)) else {
+            return Answer::Invalid;
+        };
+        let from = slot
+            .work
+            .as_ref()
+            .filter(|w| takes_extension(w, i, state, self.lifts, self.doors))
+            .and_then(|w| w.plan.nodes.get(w.released_through));
+        if task.purpose != Purpose::Job || !from.is_some_and(|&n| self.connects(n, &task)) {
+            return Answer::Invalid;
+        }
+        let job = task.job;
+        let Some(then) = self.plan(task) else {
+            return Answer::Invalid;
+        };
+        let slot = &mut self.robots[i];
+        let Some(work) = slot.work.as_mut() else {
+            return Answer::Invalid;
+        };
+        let plan = work.plan.continued(work.released_through, then);
+        work.job = job;
+        work.purpose = Purpose::Job;
+        work.assigned_tick = self.world.tick();
+        work.waiting_seconds = 0.0;
+        work.update_id += 1;
+        let header = OrderHeader {
+            robot: &slot.id,
+            header_id: slot.header_id,
+            timestamp: &self.world.timestamp(),
+            order_id: &work.order_id,
+            order_update_id: work.update_id,
+        };
+        let orient = self.types[slot.type_idx]
+            .omnidirectional
+            .then_some((slot.id.manufacturer.as_str(), slot.series.as_str()));
+        let from = work.released_through;
+        let msg = build_order_with(self.graph, &header, &plan, from, from, orient);
+        slot.header_id += 1;
+        match deliver(self.world, msg) {
+            Ok(_) => {
+                work.plan = plan;
+                self.policy.route_changed(i, &work.plan);
+                Answer::Taken
+            }
+            // the robot refuses the route: cancel the order and give the job up, as
+            // for any refused update (S70)
+            Err(reason) => {
+                cancel_order(self.world, slot, reason);
+                Answer::Refused
             }
         }
     }
 
-    /// The layout node a robot stands on, from its reported position.
-    fn node_of(&self, state: &State) -> Option<NodeIdx> {
-        let p = state.mobile_robot_position.as_ref()?;
-        let map = self.graph.map_idx(&p.map_id)?;
-        self.node_grid.node_near(map, p.x, p.y, NODE_TOLERANCE)
+    fn charge_here(&mut self, i: usize, trip: usize) {
+        if let Some(slot) = self.robots.get_mut(i).filter(|s| s.work.is_none()) {
+            send_instant(
+                self.world,
+                slot,
+                "startCharging",
+                &format!("charge-here-{trip}"),
+            );
+        }
     }
+}
+
+/// The layout node a robot stands on, from its reported position.
+fn node_of(graph: &Graph, grid: &NodeGrid, state: &State) -> Option<NodeIdx> {
+    let p = state.mobile_robot_position.as_ref()?;
+    let map = graph.map_idx(&p.map_id)?;
+    grid.node_near(map, p.x, p.y, NODE_TOLERANCE)
+}
+
+/// Can the trip to a parking place that robot `i` is on take a job now (S144)? Its
+/// order is answered and shown by the robot, it is not being cancelled, and the
+/// robot owns no lift or door (those claims depend on the route).
+fn takes_extension(
+    work: &Work,
+    i: usize,
+    state: &State,
+    lifts: &LiftDesk,
+    doors: &DoorDesk,
+) -> bool {
+    work.purpose == Purpose::Park
+        && work.cancelling.is_none()
+        && !work.awaiting_ack
+        && state.order_id == work.order_id
+        && !lifts.owns(i)
+        && !doors.owns(i)
 }
 
 /// The order of a job was refused: give back any lift or door it was given, and tell
@@ -1557,24 +1237,6 @@ fn give_back<P: TrafficPolicy>(
     lifts.forget(robot);
     doors.forget(robot);
     policy.route_dropped(robot, plan, released_through);
-}
-
-/// The interaction nodes of the stations of the layout whose type is `kind` (any
-/// case), sorted, each once.
-fn station_nodes(graph: &Graph, kind: &str) -> Vec<NodeIdx> {
-    let mut nodes: Vec<NodeIdx> = graph
-        .stations
-        .iter()
-        .filter(|s| {
-            s.station_type
-                .as_deref()
-                .is_some_and(|t| t.eq_ignore_ascii_case(kind))
-        })
-        .flat_map(|s| s.interaction_nodes.iter().copied())
-        .collect();
-    nodes.sort_unstable();
-    nodes.dedup();
-    nodes
 }
 
 /// The routes as the policy sees them, one entry per robot.

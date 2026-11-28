@@ -5,8 +5,8 @@
 use botsim_baseline::conflicts::ConflictInput;
 use botsim_baseline::controller::Controller;
 use botsim_core::actions::ActionTimes;
-use botsim_core::jobs::Job;
 use botsim_core::world::World;
+use botsim_model::job::Job;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
 use vda5050::factsheet::Factsheet;

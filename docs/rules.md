@@ -672,14 +672,17 @@ how the controller uses them. Not enforced by the simulator yet.)
 
 The bundled controller talks to the robots only with VDA 5050 messages.
 
-**Dispatcher and traffic policy (U9).** The controller has two parts. The
-**dispatcher** (`botsim_baseline::controller`) gives jobs, plans and re-plans whole
-routes, sends charging trips, runs lifts and doors and builds and sends the messages.
+**Controller, dispatcher and traffic policy (U9).** The **controller**
+(`botsim_baseline::controller`) carries out tasks: it re-plans routes when asked,
+runs lifts and doors, builds and sends the messages and keeps track of each robot's
+work. **Who gets which task** is a `Dispatcher` (`botsim_dispatcher`; the
+baseline's is `BaselineDispatcher`): jobs, charging and parking trips, and the
+routes they start with.
 **Who may go now** is a `TrafficPolicy` (`botsim_baseline::policy`): how far each
 route is released (robot by robot, in the order of the robots, after a `cycle_start`
 with all of them), the wish for another route (with nodes to avoid), what happens
 after the releases (go-first), idle robots, RELEASE zone answers, and who holds a node
-or edge. The dispatcher never releases less than before nor past the window, a lift or
+or edge. The controller never releases less than before nor past the window, a lift or
 a door, whatever the policy answers. The rules of this section about reservations,
 swept areas, go-first, the wait timeout and zone answers are the baseline's policy,
 `BaselinePolicy`. **They are frozen (U10):** only bug fixes (wrong behaviour against

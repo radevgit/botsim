@@ -1,10 +1,11 @@
 //! The baseline sends a free robot with a low battery to a free charger and starts
 //! the charging there (charging brief, step 2, first part).
 
-use botsim_baseline::controller::{ChargePolicy, Controller};
+use botsim_baseline::controller::Controller;
 use botsim_core::actions::ActionTimes;
 use botsim_core::battery::{Battery, BatterySpec};
 use botsim_core::world::World;
+use botsim_dispatcher::ChargePolicy;
 use botsim_model::graph::GraphStation;
 use botsim_model::robot::RobotId;
 use botsim_model::spec::RobotSpec;
@@ -92,7 +93,7 @@ fn a_free_robot_below_the_low_limit_drives_to_the_charger_and_charges() {
 
 #[test]
 fn at_the_upper_limit_charging_stops_and_the_robot_takes_jobs_again() {
-    use botsim_core::jobs::Job;
+    use botsim_model::job::Job;
     let (mut w, mut ctl) = setup(&[10.0], None);
     // 1 % per second: 80 % after 70 s
     run(&mut w, &mut ctl, 60.0);
@@ -119,7 +120,7 @@ fn at_the_upper_limit_charging_stops_and_the_robot_takes_jobs_again() {
 /// R2 occupies the only charger (it starts on it); R1 on A needs a charger and gets
 /// a job A → B at once.
 fn job_with_the_charger_taken(r1_percent: f64) -> (World, Controller) {
-    use botsim_core::jobs::Job;
+    use botsim_model::job::Job;
     let (mut w, mut ctl) = setup(&[r1_percent, 10.0], Some("C"));
     let (a, b) = (
         w.graph().node_idx("A").unwrap(),

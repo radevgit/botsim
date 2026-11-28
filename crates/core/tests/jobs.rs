@@ -1,4 +1,5 @@
-use botsim_core::jobs::{Job, JobError, JobGenerator, Rng};
+use botsim_core::jobs::{JobError, JobGenerator, Rng};
+use botsim_model::job::Job;
 
 const DT: f64 = 0.05;
 const HOUR_TICKS: u64 = 72_000; // one hour at 50 ms

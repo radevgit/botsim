@@ -13,6 +13,7 @@
 use std::fmt;
 
 use botsim_model::graph::NodeIdx;
+use botsim_model::job::Job;
 
 /// SplitMix64: tiny, fast, good enough for scenario randomness.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,15 +54,6 @@ impl Rng {
     pub fn below(&mut self, n: usize) -> usize {
         ((u128::from(self.next_u64()) * n as u128) >> 64) as usize
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Job {
-    pub id: u64,
-    pub pickup: NodeIdx,
-    pub drop: NodeIdx,
-    /// The tick the job appeared.
-    pub created_tick: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]

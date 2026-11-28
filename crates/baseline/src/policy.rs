@@ -1,10 +1,11 @@
 //! The traffic policy: every "who may go now" decision of the controller.
 //!
-//! The controller is split in two (brief `traffic_policy_slot.md`). The
-//! **dispatcher** gives jobs to robots, plans and re-plans their whole routes, sends
-//! charging trips, runs lifts and doors, and builds and sends the VDA 5050 messages.
-//! The **policy**, behind [`TrafficPolicy`], says how far each route is released and
-//! answers RELEASE zone requests. It never plans paths and never talks to a robot.
+//! A [dispatcher](botsim_dispatcher) gives tasks to robots, with their first
+//! routes. The **controller** carries them out: it re-plans routes, runs lifts and
+//! doors, and builds and sends the VDA 5050 messages. The **policy**, behind
+//! [`TrafficPolicy`] (brief `traffic_policy_slot.md`), says how far each route is
+//! released and answers RELEASE zone requests. It never plans paths and never talks
+//! to a robot.
 //!
 //! Robots are numbered as in the controller (the order of the world's robots); every
 //! list of robots is in that order.
@@ -109,8 +110,8 @@ pub struct Release {
     /// Index of the last node to release: from [`Ask::released_through`] (nothing new)
     /// to [`Ask::limit`].
     pub through: usize,
-    /// Ask the dispatcher for another route ("cannot place this route", or the robot
-    /// is stuck). The dispatcher changes the route only beyond the released part, and
+    /// Ask the controller for another route ("cannot place this route", or the robot
+    /// is stuck). The controller changes the route only beyond the released part, and
     /// keeps it if there is no other one.
     pub reroute: Option<Reroute>,
 }
@@ -151,7 +152,8 @@ pub trait TrafficPolicy: Debug {
     /// A robot with a route has reported its progress.
     fn release(&mut self, ask: &Ask) -> Release;
 
-    /// The dispatcher changed the unreleased part of a route.
+    /// The controller changed the unreleased part of a route (another route, or a
+    /// job added to a parking trip).
     fn route_changed(&mut self, _robot: usize, _route: &Plan) {}
 
     /// The robot has done its route and stands on the last node.
@@ -170,12 +172,13 @@ pub trait TrafficPolicy: Debug {
     /// Answers to the RELEASE zone requests the states carry.
     fn zone_answers(&mut self, fleet: &Fleet) -> Vec<Answer>;
 
-    /// The robot that holds a node, for the dispatcher (route load, free chargers).
+    /// The robot that holds a node, for route load and for the dispatcher (free
+    /// chargers and parking places).
     fn node_holder(&self, _node: NodeIdx) -> Option<usize> {
         None
     }
 
-    /// The robot that holds an edge, for the dispatcher (route load).
+    /// The robot that holds an edge, for route load.
     fn edge_holder(&self, _edge: EdgeIdx) -> Option<usize> {
         None
     }

@@ -10,7 +10,7 @@
 //!   it stands on.
 //! - **Re-routing** (S53): a robot that has stood at the end of its released
 //!   route for [`REROUTE_AFTER_SECONDS`] because another robot holds the way asks
-//!   the dispatcher for a new route around the nodes others hold.
+//!   the controller for a new route around the nodes others hold.
 //! - **Swept-area reservation** (see [`crate::conflicts`]): a robot is not released
 //!   onto an edge, or to a node, whose swept area meets what another robot holds.
 //! - **Go first** (S77), see `go_first`.

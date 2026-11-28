@@ -1,0 +1,17 @@
+[package]
+name = "botsim-dispatcher"
+description = "Gives transport jobs to the robots of a fleet and sends them to charge and park"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors = ["radevgit"]
+
+[dependencies]
+botsim-model = { path = "../model" }
+botsim-router = { path = "../router" }
+
+[dev-dependencies]
+serde_json = "1.0.154"
+vdma-lif = "0.1.0"

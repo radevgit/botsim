@@ -18,11 +18,17 @@ lists of the layout (`set_conflicts`, then `set_node_conflicts` and
 `set_node_node_conflicts`), which the [runner](../runner/README.md) makes with
 [botsim-space](../space/README.md).
 
-## Two parts
+## Parts
 
-- The **dispatcher** (`controller`) assigns jobs, plans routes (found with
-  [botsim-router](../router/README.md)), sends charging and parking trips, runs
-  lifts and doors, and builds the messages.
+- The **controller** (`controller`) carries out the tasks: it builds the
+  messages, releases routes, finds another route when asked (with
+  [botsim-router](../router/README.md)), runs lifts and doors and keeps track of
+  each robot's work.
+- The **dispatcher** says which robot gets which job, and which one drives to a
+  charger or a parking place. It is the trait `Dispatcher` of
+  [botsim-dispatcher](../dispatcher/README.md), which also holds the baseline's.
+  Another one can replace it:
+  `Controller::with_dispatcher(&world, policy, dispatcher)`.
 - The **traffic policy** says who may go now: how far each route is released,
   and the answers to zone requests. It is the trait `policy::TrafficPolicy`.
   Another policy can replace the baseline's:
